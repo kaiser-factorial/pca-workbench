@@ -1,10 +1,10 @@
 "use client";
 import { useEffect, useState, useRef, useMemo } from "react";
-import { UploadCloud, FileSpreadsheet, Play, Square, Download, Pin, Layers, Monitor, X, Trash2 } from "lucide-react";
+import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2 } from "lucide-react";
 import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
-import { CyberStackGroup, CyberContainer, CyberPanel, CyberInput, CyberTextArea } from "ccru/components";
+import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { readTable } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans } from "@/lib/cluster";
@@ -67,7 +67,7 @@ const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme:
         const colVals: any[] = view.data?.data?.[view.colorBy] ?? [];
         const kind = getColorFieldKind(colVals);
         if (kind === "categorical") {
-            return { kind, values: Array.from(new Set(colVals.map((v: any) => v ?? "N/A"))) };
+            return { kind, values: sortCategories(Array.from(new Set(colVals.map((v: any) => v ?? "N/A")))) };
         }
         if (kind === "continuous") {
             let min = Infinity, max = -Infinity;
@@ -107,7 +107,7 @@ const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme:
                     >
                         <div
                             className={`flex-shrink-0 rounded-full transition-transform duration-150 group-hover:scale-125 ${theme === 'primary' ? 'w-3 h-3 border-[2px]' : 'w-2.5 h-2.5 border'} ${state === 'hidden' ? 'border-dashed border-[#bbbbbb]' : state === 'muted' ? 'border-[#999999]' : (theme === 'primary' ? 'border-[var(--foreground)]' : 'border-transparent')}`}
-                            style={{ backgroundColor: state ? 'transparent' : colors[i % colors.length] }}
+                            style={{ backgroundColor: state ? 'transparent' : (String(val) === 'Noise' ? '#8a8a8a' : colors[i % colors.length]) }}
                         />
                         <span className={`truncate ${textClass} ${state === 'hidden' ? 'opacity-25 line-through' : state === 'muted' ? 'opacity-40' : ''}`} title={String(val)}>{String(val)}</span>
                     </button>
@@ -239,7 +239,16 @@ const getColorFieldKind = (values: any[]): "categorical" | "continuous" | "too-m
 type MuteState = 'muted' | 'hidden';
 type MuteMap = Record<string, MuteState>;
 
-const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}) => {
+// Categories sort numerically-aware with Noise last, in BOTH traces and legend,
+// so palette index i lines up between them and stays stable across re-runs
+const sortCategories = (vals: any[]) => [...vals].sort((a, b) => {
+    const A = String(a), B = String(b);
+    if (A === 'Noise') return 1;
+    if (B === 'Noise') return -1;
+    return A.localeCompare(B, undefined, { numeric: true });
+});
+
+const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false) => {
     if (!table || table.nRows === 0) return [];
     const n = table.nRows;
     const px = table.data[axes.x] ?? [];
@@ -264,7 +273,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
             grouped[val].y.push(py[i]);
             grouped[val].z.push(pz[i]);
         }
-        Object.keys(grouped).forEach((key, i) => {
+        sortCategories(Object.keys(grouped)).forEach((key, i) => {
             // Muted/hidden categories keep their trace slot so colors don't shift:
             // 'muted' renders hollow with a thin grey outline, 'hidden' is invisible
             const state = muted[key];
@@ -278,7 +287,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
                 name: String(key),
                 marker: state === 'muted'
                     ? { size: mode === "3D" ? 4 : 6, color: 'rgba(0,0,0,0)', opacity: 0.5, line: { color: '#999999', width: 1 } }
-                    : { size: mode === "3D" ? 4 : 6, color: colors[i % colors.length], opacity: 0.7 },
+                    : { size: mode === "3D" ? 4 : 6, color: key === 'Noise' ? '#8a8a8a' : colors[i % colors.length], opacity: key === 'Noise' ? 0.35 : 0.7 },
                 hovertemplate
             });
         });
@@ -334,13 +343,16 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         const z_span = z_max - z_min;
         const z_floor = z_min - (z_span > 0 ? z_span * 0.08 : 0.5);
 
+        // The shadow floor must contrast with the canvas: near-black on light
+        // themes, pale gray on the terminal theme's black background
+        const shadowColor = dark ? '#d8d8d8' : '#111111';
         traces.push({
             x: shadow_x,
             y: shadow_y,
             z: new Array(shadow_x.length).fill(z_floor),
             mode: 'markers',
             type: 'scatter3d',
-            marker: { size: 2, color: '#111111', opacity: 0.1 },
+            marker: { size: 2, color: shadowColor, opacity: 0.1 },
             showlegend: false,
             hoverinfo: 'skip'
         });
@@ -350,7 +362,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
             y: [y_min, y_min, y_max, y_max],
             z: [z_floor, z_floor, z_floor, z_floor],
             type: 'mesh3d',
-            color: '#111111',
+            color: shadowColor,
             opacity: 0.05,
             showlegend: false,
             hoverinfo: 'skip'
@@ -808,9 +820,10 @@ const SidebarGroup = ({ children, theme }: { children: React.ReactNode, theme: s
 };
 
 const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRelayout: (e: any) => void }) => {
+    const { theme } = useTheme();
     const traces = useMemo(
-        () => buildTraces(view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted ?? {}),
-        [view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted]
+        () => buildTraces(view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted ?? {}, theme === 'terminal'),
+        [view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted, theme]
     );
     return (
         <Plot
@@ -840,7 +853,6 @@ export default function Home() {
   const [colorBy, setColorBy] = useState<string>("");
   const activeDataset = datasets.find(d => d.id === activeId) ?? null;
   const processedData = activeDataset?.table ?? null;
-  const availableColumns = processedData?.columns ?? [];
   
   // Plot state
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
@@ -1207,22 +1219,30 @@ export default function Home() {
   };
 
   const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false) => {
+      const dark = theme === 'terminal';
       const baseLayout: any = {
           autosize: true,
-          margin: { l: mode === "2D" ? 40 : 0, r: 20, b: mode === "2D" ? 40 : 0, t: 40 },
+          // Terminal panes carry their own label — a Plotly title would duplicate it
+          margin: { l: mode === "2D" ? 40 : 0, r: 20, b: mode === "2D" ? 40 : 0, t: dark ? 10 : 40 },
           template: 'plotly_white',
-          title: { text: title, font: { color: 'var(--foreground)', family: 'var(--font-sans)' } },
+          ...(dark ? {} : { title: { text: title, font: { color: 'var(--foreground)', family: 'var(--font-sans)' } } }),
           paper_bgcolor: 'transparent',
           plot_bgcolor: 'transparent',
           showlegend: false,
           legend: { title: { text: colorBy, font: { color: 'var(--foreground)' } }, font: { color: 'var(--foreground)' } }
       };
 
+      // Grid/tick colors must read against each theme's canvas
+      const gridC = dark ? '#3a3a3a' : '#bbbbbb';
+      const gridC2d = dark ? '#333333' : '#cccccc';
+      const tickC = dark ? '#9a9a9a' : '#888888';
+      const zeroC = dark ? '#555555' : '#888888';
+
       if (mode === "3D") {
           const axis3d = (label: string) => ({
               showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
-              gridcolor: '#bbbbbb', zerolinecolor: '#888888',
-              tickfont: { size: 10, color: '#888888' },
+              gridcolor: gridC, zerolinecolor: zeroC,
+              tickfont: { size: 10, color: tickC },
               title: { text: label, font: { color: 'var(--foreground)' } }
           });
           baseLayout.scene = {
@@ -1235,8 +1255,8 @@ export default function Home() {
       } else {
           const axis2d = (label: string) => ({
               showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
-              gridcolor: '#cccccc', zerolinecolor: '#888888',
-              tickfont: { color: '#888888' },
+              gridcolor: gridC2d, zerolinecolor: zeroC,
+              tickfont: { color: tickC },
               title: { text: label, font: { color: 'var(--foreground)' } }
           });
           baseLayout.xaxis = axis2d(customAxisNames.x);
