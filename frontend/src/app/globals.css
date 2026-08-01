@@ -17,14 +17,16 @@
   --foreground: #111111;
   --card: #FFFFFF;
   --border: #111111;
-  
+  --input: #FFFFFF;
+
   --p-red: #EB1A26;
   --p-blue: #0045AD;
   --p-yellow: #FFD600;
   --p-black: #111111;
-  
-  --font-sans: 'Courier Prime', 'Courier New', monospace;
-  --font-mono: 'Courier Prime', 'Courier New', monospace;
+  --p-white: #FFFFFF;
+
+  --font-sans: var(--font-courier-prime), 'Courier New', monospace;
+  --font-mono: var(--font-courier-prime), 'Courier New', monospace;
 }
 
 [data-theme='terminal'] {
@@ -33,14 +35,14 @@
   --card: oklch(0.1 0 0);
   --border: oklch(0.2 0 0);
   --input: oklch(0.12 0 0);
-  
+
   --primary: #E63946;
   --mauk: #03A6A1;
   --abaci: #FF9D23;
   --system-green: #10ff50;
-  
-  --font-sans: 'JetBrains Mono', 'Geist Mono', 'Courier New', monospace;
-  --font-mono: 'JetBrains Mono', 'Geist Mono', 'Courier New', monospace;
+
+  --font-sans: var(--font-jetbrains), 'Courier New', monospace;
+  --font-mono: var(--font-jetbrains), 'Courier New', monospace;
 }
 
 body {
@@ -49,8 +51,30 @@ body {
   font-family: var(--font-sans);
 }
 
-/* 
- * Cyber Theme - Scanlines and Glows 
+/* Keyboard focus is always visible, themed per side of the app */
+:focus-visible {
+  outline: 2px solid var(--p-blue, var(--system-green, #0045AD));
+  outline-offset: 1px;
+}
+
+/* Sliders and checkboxes pick up each theme's accent */
+[data-theme='primary'] input[type="range"],
+[data-theme='primary'] input[type="checkbox"] {
+  accent-color: var(--p-blue);
+}
+[data-theme='terminal'] input[type="range"],
+[data-theme='terminal'] input[type="checkbox"] {
+  accent-color: var(--system-green);
+}
+
+/* Thin themed scrollbars — the sidebar and breakdown lists scroll constantly */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/*
+ * Cyber Theme - Scanlines and Glows
  */
 .mauk-glow { text-shadow: 0 0 0px var(--mauk), 0 0 12px var(--mauk); }
 .abaci-glow { text-shadow: 0 0 0px var(--abaci), 0 0 12px var(--abaci); }
@@ -91,45 +115,74 @@ body {
   opacity: 0.5;
 }
 
-/* 
- * Primary Theme - Bauhaus Grid Styles 
+@media (prefers-reduced-motion: reduce) {
+  .moving-scanlines::before,
+  .vertical-neon-line,
+  .horizontal-neon-line {
+    animation: none;
+  }
+}
+
+/*
+ * Primary Theme - Bauhaus Grid Styles
+ *
+ * @layer components so Tailwind utilities (layered after components) can
+ * override individual properties — e.g. `bauhaus-btn bg-[var(--p-yellow)]`.
+ * Unlayered, these rules silently beat every utility and all buttons go blue.
  */
-.bauhaus-panel {
-  background-color: var(--card);
-  border: 3px solid var(--border);
-  box-shadow: 6px 6px 0px var(--border);
-  margin: 8px;
-}
+@layer components {
+  .bauhaus-panel {
+    background-color: var(--card);
+    border: 3px solid var(--border);
+    box-shadow: 6px 6px 0px var(--border);
+    margin: 8px;
+  }
 
-.bauhaus-resize-handle {
-  width: 8px;
-  background-color: var(--background);
-  transition: background-color 0.1s;
-}
+  .bauhaus-resize-handle {
+    width: 8px;
+    background-color: var(--background);
+    transition: background-color 0.1s;
+  }
 
-.bauhaus-resize-handle:hover, .bauhaus-resize-handle[data-resize-handle-active] {
-  background-color: var(--p-red);
-}
+  .bauhaus-resize-handle:hover, .bauhaus-resize-handle[data-resize-handle-active] {
+    background-color: var(--p-red);
+  }
 
-.bauhaus-resize-handle-horizontal {
-  height: 8px;
-  background-color: var(--background);
-  transition: background-color 0.1s;
-}
+  .bauhaus-resize-handle-horizontal {
+    height: 8px;
+    background-color: var(--background);
+    transition: background-color 0.1s;
+  }
 
-.bauhaus-resize-handle-horizontal:hover, .bauhaus-resize-handle-horizontal[data-resize-handle-active] {
-  background-color: var(--p-yellow);
-}
+  .bauhaus-resize-handle-horizontal:hover, .bauhaus-resize-handle-horizontal[data-resize-handle-active] {
+    background-color: var(--p-yellow);
+  }
 
-.bauhaus-btn {
-  background-color: var(--p-blue);
-  color: var(--p-white);
-  border: 3px solid var(--p-black);
-  box-shadow: 4px 4px 0px var(--p-black);
-  transition: transform 0.1s, box-shadow 0.1s;
-}
+  /* Shape only — every use supplies its own bg-* / text-* utilities
+     (Tailwind v4 unwraps @layer blocks here, so color declared in this
+     class would override utilities) */
+  .bauhaus-btn {
+    border: 3px solid var(--p-black);
+    box-shadow: 4px 4px 0px var(--p-black);
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
 
-.bauhaus-btn:active {
-  transform: translate(4px, 4px);
-  box-shadow: 0px 0px 0px var(--p-black);
+  .bauhaus-btn:active:not(:disabled) {
+    transform: translate(4px, 4px);
+    box-shadow: 0px 0px 0px var(--p-black);
+  }
+
+  /* Numbered section marker: a small primary-colored square with the step number */
+  .bauhaus-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--p-black);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--p-white);
+    flex-shrink: 0;
+  }
 }

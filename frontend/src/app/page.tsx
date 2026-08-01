@@ -9,6 +9,9 @@ import { CyberStackGroup, CyberContainer, CyberPanel, CyberInput, CyberTextArea 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
 
+// Working title — referenced everywhere the app names itself
+const APP_NAME = "Scatter Lab";
+
 const PrimaryCollapsible = ({ title, mode = 'top', defaultOpen = true, width, buttonPosition = 'right', children }: any) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
@@ -112,7 +115,7 @@ const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme:
     if (theme === 'terminal') {
         return (
             <div className="absolute top-1/4 right-0 z-30">
-                <CyberPanel id="legend-panel" title="Legend" width={200} collapseDirection="side" positionMode="relative" position={{x:0, y:0}}>
+                <CyberPanel id="legend-panel" title="Legend" width={200} collapseDirection="side" positionMode="relative" position={{x:0, y:0}} onDragStart={() => {}}>
                     <div className="p-3 w-full">
                         <div className="text-[10px] font-bold mb-2 uppercase tracking-widest text-[#10ff50]/70">{view.colorBy}</div>
                         {innerContent}
@@ -146,7 +149,7 @@ const ThemedNotes = ({ notes, setNotes, theme }: { notes: string, setNotes: any,
     if (theme === 'terminal') {
         return (
             <div className="absolute top-1/4 left-0 z-30 [&>div>div>.flex]:flex-row-reverse [&>div>div>.flex]:gap-2">
-                <CyberPanel id="notes-panel" title="Notes" width={280} collapseDirection="side" positionMode="relative" position={{x:0, y:0}}>
+                <CyberPanel id="notes-panel" title="Notes" width={280} collapseDirection="side" positionMode="relative" position={{x:0, y:0}} defaultOpen={false} onDragStart={() => {}}>
                     <div className="p-3 w-full h-64">
                         {innerContent}
                     </div>
@@ -157,7 +160,7 @@ const ThemedNotes = ({ notes, setNotes, theme }: { notes: string, setNotes: any,
     
     return (
         <div className="absolute top-1/4 left-0 z-30">
-            <PrimaryCollapsible title="Notes" mode="side" width={280} buttonPosition="left">
+            <PrimaryCollapsible title="Notes" mode="side" width={280} buttonPosition="left" defaultOpen={false}>
                 <div className="w-full h-64">
                     {innerContent}
                 </div>
@@ -351,6 +354,214 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
     }
 
     return traces;
+};
+
+const CHART_COLORS = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#38A6A5', '#0F8554', '#73AF48', '#EDAD08', '#E17C05'];
+
+// Inline distribution sparkline for a numeric column
+const MiniHistogram = ({ values, color }: { values: any[], color: string }) => {
+    const bars = useMemo(() => {
+        const nums = values.filter(v => typeof v === 'number' && !Number.isNaN(v));
+        if (nums.length < 2) return null;
+        let min = Infinity, max = -Infinity;
+        for (const v of nums) { if (v < min) min = v; if (v > max) max = v; }
+        if (min === max) return null;
+        const N = 14;
+        const counts = new Array(N).fill(0);
+        for (const v of nums) counts[Math.min(N - 1, Math.floor(((v - min) / (max - min)) * N))]++;
+        const peak = Math.max(...counts);
+        return counts.map(c => c / peak);
+    }, [values]);
+    if (!bars) return null;
+    return (
+        <svg width="56" height="16" className="flex-shrink-0 opacity-80" aria-hidden="true">
+            {bars.map((h, i) => (
+                <rect key={i} x={i * 4} y={16 - Math.max(1, h * 16)} width="3" height={Math.max(1, h * 16)} fill={color} />
+            ))}
+        </svg>
+    );
+};
+
+// Proportion bar of the top categories for a categorical column
+const MiniCatBar = ({ values }: { values: any[] }) => {
+    const segs = useMemo(() => {
+        const counts = new Map<string, number>();
+        let total = 0;
+        for (const v of values) {
+            if (v == null) continue;
+            const k = String(v);
+            counts.set(k, (counts.get(k) ?? 0) + 1);
+            total++;
+        }
+        if (!total) return null;
+        return Array.from(counts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 6)
+            .map(([k, c]) => ({ k, frac: c / total }));
+    }, [values]);
+    if (!segs) return null;
+    let acc = 0;
+    return (
+        <svg width="56" height="16" className="flex-shrink-0 opacity-80" aria-hidden="true">
+            {segs.map((s, i) => {
+                const x = acc * 56;
+                acc += s.frac;
+                return <rect key={s.k} x={x} y={4} width={Math.max(1, s.frac * 56 - 1)} height={8} fill={CHART_COLORS[i % CHART_COLORS.length]} />;
+            })}
+        </svg>
+    );
+};
+
+// One row per column: profile (kind, range, missing, sparkline) plus one-click
+// plot assignment — X/Y/Z axis for numeric columns, C (color) for any column.
+// This is the app's data inspector and its variable picker in one surface.
+const VariablesPanel = ({ dataset, viewMode, colorBy, theme, onAxis, onColor }: {
+    dataset: Dataset, viewMode: "3D" | "2D", colorBy: string, theme: string | undefined,
+    onAxis: (axis: 'x' | 'y' | 'z', col: string) => void, onColor: (col: string) => void,
+}) => {
+    const table = dataset.table;
+    const axes = viewMode === "2D" ? { ...dataset.axes2d, z: null as string | null } : dataset.axes;
+    const profiles = useMemo(() => table.columns.map(col => {
+        const vals = table.data[col] ?? [];
+        let missing = 0, isNumeric = false, min = Infinity, max = -Infinity;
+        const distinct = new Set<any>();
+        for (const v of vals) {
+            if (v == null) { missing++; continue; }
+            if (typeof v === 'number') { isNumeric = true; if (v < min) min = v; if (v > max) max = v; }
+            distinct.add(v);
+        }
+        return { col, vals, missing, isNumeric, min, max, nUnique: distinct.size };
+    }), [table]);
+
+    const fmt = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2).replace(/\.?0+$/, '');
+    // Assignment buttons carry the Bauhaus triad in primary; terminal goes green
+    const AXIS_STYLE: Record<string, string> = { x: 'var(--p-red)', y: 'var(--p-blue)', z: 'var(--p-yellow)', c: 'var(--p-black)' };
+    const activeStyle = (slot: string) => theme === 'primary'
+        ? { backgroundColor: AXIS_STYLE[slot], color: slot === 'z' ? '#111111' : '#FFFFFF', borderColor: '#111111' }
+        : { backgroundColor: 'var(--system-green)', color: '#000000', borderColor: 'var(--system-green)' };
+
+    const slotBtn = (slot: 'x' | 'y' | 'z' | 'c', p: { col: string }, active: boolean, disabled = false) => (
+        <button
+            key={slot}
+            disabled={disabled}
+            onClick={() => slot === 'c' ? onColor(p.col) : onAxis(slot, p.col)}
+            title={slot === 'c' ? `Color by ${p.col}` : `Plot ${p.col} on the ${slot.toUpperCase()} axis`}
+            className="w-5 h-5 text-[9px] font-bold uppercase border flex items-center justify-center transition-colors disabled:opacity-20 cursor-pointer"
+            style={active ? activeStyle(slot) : { borderColor: 'var(--border)', opacity: 0.45 }}
+        >
+            {slot}
+        </button>
+    );
+
+    return (
+        <div className="space-y-0.5 max-h-[380px] overflow-y-auto pr-1 -mr-1">
+            {profiles.map(p => {
+                const kind = p.isNumeric ? null : getColorFieldKind(p.vals);
+                return (
+                    <div key={p.col} className="flex items-center gap-2 py-1.5 border-b border-[var(--border)]/15">
+                        <div className="flex-1 min-w-0">
+                            <div className="text-xs font-bold truncate" title={p.col}>{p.col}</div>
+                            <div className="text-[10px] opacity-50 truncate">
+                                {p.isNumeric
+                                    ? `${fmt(p.min)} – ${fmt(p.max)}`
+                                    : `${p.nUnique} categories`}
+                                {p.missing > 0 && ` · ${p.missing} NA`}
+                            </div>
+                        </div>
+                        {p.isNumeric
+                            ? <MiniHistogram values={p.vals} color={theme === 'primary' ? '#0045AD' : '#10ff50'} />
+                            : <MiniCatBar values={p.vals} />}
+                        <div className="flex gap-0.5 flex-shrink-0">
+                            {p.isNumeric && slotBtn('x', p, axes.x === p.col)}
+                            {p.isNumeric && slotBtn('y', p, axes.y === p.col)}
+                            {p.isNumeric && viewMode === "3D" && slotBtn('z', p, axes.z === p.col)}
+                            {kind !== 'too-many' && slotBtn('c', p, colorBy === p.col)}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
+// First-run landing: an abstract scatter built from the Bauhaus glyphs, three
+// steps, and a zero-friction demo loader. Occupies the otherwise-blank canvas.
+const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, onLoadDemo: () => void, busy: boolean }) => {
+    const steps = [
+        "Add a dataset — CSV, XLSX, or Parquet",
+        "Assign variables to X · Y · Z and color",
+        "Cluster, pin comparisons, export",
+    ];
+
+    if (theme === 'terminal') {
+        return (
+            <div className="w-full h-full flex items-center justify-center">
+                <div className="max-w-md w-full mx-6 border border-[var(--system-green)]/40 bg-black/60 p-8 space-y-5">
+                    <div className="text-[var(--system-green)] text-lg font-bold tracking-widest uppercase mauk-glow">Awaiting data_</div>
+                    <div className="space-y-2">
+                        {steps.map((s, i) => (
+                            <div key={i} className="flex gap-3 text-sm text-[var(--foreground)]">
+                                <span className="text-[var(--system-green)] flex-shrink-0">[{i + 1}]</span>
+                                <span>{s}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <button
+                        onClick={onLoadDemo}
+                        disabled={busy}
+                        className="w-full py-2 text-sm font-bold border border-[var(--system-green)] text-[var(--system-green)] hover:bg-[var(--system-green)]/10 disabled:opacity-40 cursor-pointer"
+                    >
+                        {busy ? "Loading…" : "> load demo data"}
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="w-full h-full flex items-center justify-center">
+            <div className="max-w-md w-full mx-6 bg-white border-[3px] border-[#111111] shadow-[8px_8px_0px_#111111] p-8 space-y-6">
+                <svg viewBox="0 0 336 120" className="w-full" aria-hidden="true">
+                    {/* faint grid */}
+                    {Array.from({ length: 7 }, (_, i) => (
+                        <line key={`v${i}`} x1={i * 56} y1="0" x2={i * 56} y2="120" stroke="#111111" strokeOpacity="0.08" />
+                    ))}
+                    {Array.from({ length: 4 }, (_, i) => (
+                        <line key={`h${i}`} x1="0" y1={i * 40} x2="336" y2={i * 40} stroke="#111111" strokeOpacity="0.08" />
+                    ))}
+                    {/* three loose clusters of the three glyphs */}
+                    {[[38, 84], [62, 96], [50, 70], [82, 88], [70, 108]].map(([x, y], i) => (
+                        <rect key={`sq${i}`} x={x - 6} y={y - 6} width="12" height="12" fill="#0045AD" stroke="#111111" strokeWidth="2" />
+                    ))}
+                    {[[168, 34], [192, 22], [180, 50], [210, 40], [156, 54]].map(([x, y], i) => (
+                        <circle key={`ci${i}`} cx={x} cy={y} r="7" fill="#EB1A26" stroke="#111111" strokeWidth="2" />
+                    ))}
+                    {[[272, 78], [296, 92], [284, 62], [310, 72], [264, 100]].map(([x, y], i) => (
+                        <path key={`tr${i}`} d={`M ${x - 8} ${y + 6} L ${x} ${y - 8} L ${x + 8} ${y + 6} Z`} fill="#FFD600" stroke="#111111" strokeWidth="2" />
+                    ))}
+                </svg>
+                <div>
+                    <h2 className="text-lg font-bold leading-tight">See the shape of your data.</h2>
+                    <p className="text-xs opacity-60 mt-1">Plot any variables in 2D or 3D, color by anything, find the clusters.</p>
+                </div>
+                <div className="space-y-2.5">
+                    {steps.map((s, i) => (
+                        <div key={i} className="flex items-center gap-3 text-sm">
+                            <span className="bauhaus-step" style={{ backgroundColor: STEP_COLORS[i].bg, color: STEP_COLORS[i].fg }}>{i + 1}</span>
+                            <span>{s}</span>
+                        </div>
+                    ))}
+                </div>
+                <button
+                    onClick={onLoadDemo}
+                    disabled={busy}
+                    className="bauhaus-btn w-full py-2.5 text-sm font-bold bg-[var(--p-yellow)] text-[#111111] disabled:opacity-40 cursor-pointer"
+                >
+                    {busy ? "Loading…" : "Load demo data"}
+                </button>
+            </div>
+        </div>
+    );
 };
 
 // Cluster × attribute cross-tab: per cluster, what share each attribute value
@@ -558,17 +769,28 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
 // Module-level (not inside Home): inline component definitions get a fresh
 // identity per render, so React remounts their whole subtree on every state
 // change — losing input focus and recreating plot divs.
-const SidebarSection = ({ title, children, hasBorder = false, theme }: { title: string, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined }) => {
+// Steps cycle through the Bauhaus triad; yellow flips to black text for contrast
+const STEP_COLORS = [
+    { bg: 'var(--p-red)', fg: '#FFFFFF' },
+    { bg: 'var(--p-blue)', fg: '#FFFFFF' },
+    { bg: 'var(--p-yellow)', fg: '#111111' },
+];
+
+const SidebarSection = ({ title, step, children, hasBorder = false, theme }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined }) => {
     if (theme === 'terminal') {
         return (
-            <CyberContainer title={title} collapsible defaultOpen width="100%">
+            <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any}>
                 {children}
             </CyberContainer>
         );
     }
+    const c = step != null ? STEP_COLORS[(step - 1) % STEP_COLORS.length] : null;
     return (
         <div className={`space-y-3 ${hasBorder ? 'border-t border-[var(--border)] pt-6' : ''}`}>
-            <h2 className="text-xs font-bold uppercase tracking-wider opacity-60">{title}</h2>
+            <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider">
+                {c && <span className="bauhaus-step" style={{ backgroundColor: c.bg, color: c.fg }}>{step}</span>}
+                <span className="opacity-60">{title}</span>
+            </h2>
             {children}
         </div>
     );
@@ -668,6 +890,10 @@ export default function Home() {
   const dsInputRef = useRef<HTMLInputElement>(null);
   const compInputRef = useRef<HTMLInputElement>(null);
   const gifButtonRef = useRef<HTMLButtonElement>(null);
+  // Which dropzone a file is currently being dragged over
+  const [dragOver, setDragOver] = useState<'ds' | 'comp' | null>(null);
+  // Components projection is the exception now, not the rule — hidden until asked for
+  const [showComponents, setShowComponents] = useState(false);
 
 
 
@@ -699,14 +925,13 @@ export default function Home() {
     return () => { if (reqRef.current) cancelAnimationFrame(reqRef.current); }
   }, [isRotating, viewMode]);
 
-  const handleUpload = async () => {
-    if (!datasetFile) return;
+  const uploadFiles = async (dsFile: File, compFile: File | null) => {
     setIsUploading(true);
     setUploadStatus("Uploading...");
 
     const formData = new FormData();
-    formData.append("dataset", datasetFile);
-    if (componentsFile) formData.append("components", componentsFile);
+    formData.append("dataset", dsFile);
+    if (compFile) formData.append("components", compFile);
 
     try {
       const res = await fetch("http://localhost:8000/api/upload", {
@@ -723,7 +948,7 @@ export default function Home() {
         const axes = pickAxes(table);
         const dataset: Dataset = {
           id,
-          name: datasetFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
+          name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
           table,
           summary: data.summary,
           axes,
@@ -744,6 +969,28 @@ export default function Home() {
     } catch (err) {
       setUploadStatus("Upload failed. Ensure backend is running.");
     } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleUpload = () => { if (datasetFile) uploadFiles(datasetFile, componentsFile); };
+
+  // Demo data ships with the app (public/demo) so the empty state can offer a
+  // zero-friction first run: synthetic survey + components, nothing sensitive
+  const loadDemo = async () => {
+    setIsUploading(true);
+    setUploadStatus("Loading demo data…");
+    try {
+      const [ds, comp] = await Promise.all([
+        fetch('/demo/demo_dataset.csv').then(r => r.blob()),
+        fetch('/demo/demo_components.csv').then(r => r.blob()),
+      ]);
+      await uploadFiles(
+        new File([ds], 'demo_dataset.csv', { type: 'text/csv' }),
+        new File([comp], 'demo_components.csv', { type: 'text/csv' }),
+      );
+    } catch {
+      setUploadStatus("Demo data failed to load.");
       setIsUploading(false);
     }
   };
@@ -1237,7 +1484,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
   const pinCurrentView = () => {
       if (pinnedViews.length >= 3) {
-          alert("Maximum of 3 pinned views allowed to preserve layout.");
+          setUploadStatus("Pin limit reached — the grid holds the live view plus 3 pins. Remove one to pin another.");
           return;
       }
       setPinnedViews([
@@ -1294,18 +1541,29 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       
       {/* Sidebar Controls */}
       <aside className="w-[320px] h-full bg-[var(--card)] border-r border-[var(--border)] flex flex-col p-6 overflow-y-auto relative z-10 flex-shrink-0">
-        <div className="flex justify-between items-center mb-6">
-            <h1 className={`text-xl font-bold tracking-tight ${theme === 'terminal' ? 'text-[var(--mauk)] mauk-glow' : ''}`}>PCA Workbench</h1>
-            <button 
+        <div className="flex justify-between items-center mb-2">
+            <h1 className={`flex items-center gap-2 text-xl font-bold tracking-tight ${theme === 'terminal' ? 'text-[var(--mauk)] mauk-glow' : ''}`}>
+                {theme === 'primary' && (
+                    <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" className="flex-shrink-0">
+                        <rect x="3" y="14" width="13" height="13" fill="var(--p-blue)" stroke="#111111" strokeWidth="2" />
+                        <circle cx="21" cy="11" r="7.5" fill="var(--p-red)" stroke="#111111" strokeWidth="2" />
+                        <path d="M 16 28 L 22.5 17 L 29 28 Z" fill="var(--p-yellow)" stroke="#111111" strokeWidth="2" />
+                    </svg>
+                )}
+                {APP_NAME}
+            </h1>
+            <button
                 onClick={() => setTheme(theme === 'dark' || theme === 'terminal' ? 'primary' : 'terminal')}
-                className={`p-2 border ${theme === 'primary' ? 'bauhaus-btn' : 'border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)] rounded'}`}
+                title={theme === 'terminal' ? 'Switch to Bauhaus theme' : 'Switch to Terminal theme'}
+                className={`p-2 border ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)] rounded'}`}
             >
                 <Monitor className="w-4 h-4" />
             </button>
         </div>
-        
-        <div className={`text-xs font-semibold px-2 py-1 inline-block mb-6 border ${healthStatus === "Backend Connected" ? (theme === 'primary' ? 'bg-green-100 text-green-700 border-green-800 border-2' : 'border-[var(--system-green)] text-[var(--system-green)]') : 'border-red-500 text-red-500'}`}>
-          {healthStatus}
+
+        <div className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70">
+          <span className={`inline-block w-2 h-2 rounded-full ${healthStatus === "Backend Connected" ? 'bg-green-500' : 'bg-red-500'}`} />
+          {healthStatus === "Backend Connected" ? "Engine ready" : healthStatus}
         </div>
 
         <SidebarGroup theme={theme}>
@@ -1323,7 +1581,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               <button
                 onClick={saveWorkspace}
                 disabled={!workspaceName.trim() || !!workspaceBusy || datasets.length === 0}
-                className={`px-3 text-xs font-bold disabled:opacity-40 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}
+                className={`px-3 text-xs font-bold disabled:opacity-40 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}
               >
                 Save
               </button>
@@ -1347,25 +1605,50 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           </SidebarSection>
 
           {/* Section 1: Ingestion */}
-          <SidebarSection title="1. Data Ingestion" theme={theme}>
+          <SidebarSection title="Data" step={1} theme={theme}>
             {!processedData && (
               <div className="flex justify-center opacity-40 mb-2">
                 <UploadCloud className="w-10 h-10" />
               </div>
             )}
-            <div onClick={() => dsInputRef.current?.click()} className={`border-2 border-dashed border-[var(--border)] p-3 flex flex-col items-center cursor-pointer hover:bg-[var(--foreground)]/5 ${theme==='primary'?'border-[3px] bg-white':''}`}>
-              <input type="file" className="hidden" accept=".csv,.xlsx,.parquet" ref={dsInputRef} onChange={(e) => e.target.files && setDatasetFile(e.target.files[0])} />
-              {datasetFile ? <span className="text-xs font-medium text-center">{datasetFile.name}</span> : <span className="text-xs font-medium opacity-50">Upload Dataset</span>}
-            </div>
-            <div onClick={() => compInputRef.current?.click()} className={`border-2 border-dashed border-[var(--border)] p-3 flex flex-col items-center cursor-pointer hover:bg-[var(--foreground)]/5 ${theme==='primary'?'border-[3px] bg-white':''}`}>
-              <input type="file" className="hidden" accept=".csv,.xlsx,.parquet" ref={compInputRef} onChange={(e) => e.target.files && setComponentsFile(e.target.files[0])} />
-              {componentsFile ? <span className="text-xs font-medium text-center">{componentsFile.name}</span> : <span className="text-xs font-medium opacity-50">Components (optional if dataset has PC cols)</span>}
-            </div>
-            <button onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+            {([
+              { key: 'ds' as const, ref: dsInputRef, file: datasetFile, set: setDatasetFile, empty: 'Drop dataset here or click to browse' },
+              ...(showComponents || componentsFile
+                ? [{ key: 'comp' as const, ref: compInputRef, file: componentsFile, set: setComponentsFile, empty: 'Drop PCA components file' }]
+                : []),
+            ]).map(zone => (
+              <div
+                key={zone.key}
+                onClick={() => zone.ref.current?.click()}
+                onDragOver={e => { e.preventDefault(); setDragOver(zone.key); }}
+                onDragLeave={() => setDragOver(null)}
+                onDrop={e => {
+                  e.preventDefault();
+                  setDragOver(null);
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) zone.set(f);
+                }}
+                className={`border-2 border-dashed p-3 flex flex-col items-center cursor-pointer transition-colors ${theme === 'primary' ? 'border-[3px] bg-white' : ''} ${dragOver === zone.key
+                  ? (theme === 'primary' ? 'border-[var(--p-blue)] bg-blue-50' : 'border-[var(--system-green)] bg-[var(--system-green)]/10')
+                  : 'border-[var(--border)] hover:bg-[var(--foreground)]/5'}`}
+              >
+                <input type="file" className="hidden" accept=".csv,.xlsx,.parquet" ref={zone.ref} onChange={(e) => e.target.files && zone.set(e.target.files[0])} />
+                {zone.file
+                  ? <span className="text-xs font-medium text-center break-all">{zone.file.name}</span>
+                  : <span className="text-xs font-medium opacity-50 text-center">{zone.empty}</span>}
+              </div>
+            ))}
+            <button
+              onClick={() => { if (showComponents) setComponentsFile(null); setShowComponents(!showComponents); }}
+              className="text-[11px] underline-offset-2 hover:underline opacity-60 hover:opacity-100 text-left cursor-pointer"
+            >
+              {showComponents || componentsFile ? '− Remove components file' : '+ Project through a PCA components file'}
+            </button>
+            <button onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
               {isUploading ? "Processing..." : "Add Dataset"}
             </button>
             {datasetFile && !datasetFile.name.endsWith('.parquet') && (
-              <button onClick={handleConvertToParquet} disabled={isConverting} className={`w-full flex items-center justify-center gap-2 text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-yellow)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+              <button onClick={handleConvertToParquet} disabled={isConverting} className={`w-full flex items-center justify-center gap-2 text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                 <Download className="w-4 h-4" /> {isConverting ? "Converting..." : "Save as Parquet"}
               </button>
             )}
@@ -1377,74 +1660,63 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             {uploadStatus && (
               <p className="text-[11px] leading-snug opacity-70 break-words">{uploadStatus}</p>
             )}
+            {datasets.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                {datasets.map(d => (
+                  <div key={d.id} onClick={() => selectDataset(d.id)}
+                    className={`flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer border text-xs ${d.id === activeId
+                      ? (theme === 'primary' ? 'border-[3px] border-[var(--border)] bg-[var(--p-yellow)] font-bold' : 'border-[var(--primary)] text-[var(--primary)] bg-[var(--border)]')
+                      : 'border-[var(--border)] bg-[var(--input)] opacity-70 hover:opacity-100'}`}>
+                    <span className="truncate" title={d.name}>{d.name}</span>
+                    <span className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className="opacity-60">{d.table.nRows} rows</span>
+                      <button onClick={(e) => { e.stopPropagation(); removeDataset(d.id); }} className="hover:opacity-50" title="Remove dataset">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {datasets.length >= 2 && (
+              <ColumnTransfer datasets={datasets} activeId={activeId} onTransfer={handleTransfer} />
+            )}
           </SidebarSection>
 
           {processedData && (
             <>
-              <SidebarSection title="2. Datasets" hasBorder theme={theme}>
-                <div className="space-y-1.5">
-                  {datasets.map(d => (
-                    <div key={d.id} onClick={() => selectDataset(d.id)}
-                      className={`flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer border text-xs ${d.id === activeId
-                        ? (theme === 'primary' ? 'border-[3px] border-[var(--border)] bg-[var(--p-yellow)] font-bold' : 'border-[var(--primary)] text-[var(--primary)] bg-[var(--border)]')
-                        : 'border-[var(--border)] bg-[var(--input)] opacity-70 hover:opacity-100'}`}>
-                      <span className="truncate" title={d.name}>{d.name}</span>
-                      <span className="flex items-center gap-1.5 flex-shrink-0">
-                        <span className="opacity-60">{d.table.nRows}</span>
-                        <button onClick={(e) => { e.stopPropagation(); removeDataset(d.id); }} className="hover:opacity-50" title="Remove dataset">
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    </div>
-                  ))}
+              <SidebarSection title="Variables" step={2} hasBorder theme={theme}>
+                <div className="text-[11px] opacity-60 -mt-1">
+                  {processedData.nRows} rows × {processedData.columns.length} columns — click X · Y · Z to plot, C to color
                 </div>
-                {datasets.length >= 2 && (
-                  <ColumnTransfer datasets={datasets} activeId={activeId} onTransfer={handleTransfer} />
-                )}
-              </SidebarSection>
-
-              <SidebarSection title="3. Dataset Info" hasBorder theme={theme}>
-                {activeDataset?.summary && (
-                  <div className="space-y-2 text-xs">
-                    <div className="font-bold">{activeDataset.summary.n_rows} rows × {activeDataset.summary.n_cols} vars</div>
-                    {activeDataset.summary.top_contributors && (
-                      <div className="space-y-1">
-                        <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">Top PC Contributors</div>
-                        {Object.entries(activeDataset.summary.top_contributors).map(([pc, vars]: [string, any]) => (
-                          <div key={pc} className="leading-snug">
-                            <span className="font-bold">{pc}:</span>{' '}
-                            {vars.slice(0, 4).map((v: any, i: number) => (
-                              <span key={v.var}>{i > 0 && ', '}{v.var} <span className="opacity-60">{v.loading > 0 ? '+' : ''}{v.loading}</span></span>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1 border-t border-[var(--border)] pt-2">
-                      {activeDataset.summary.columns.map((c: any) => (
-                        <div key={c.name} className="leading-snug">
-                          <div className="flex justify-between gap-2">
-                            <span className="font-bold truncate" title={c.name}>{c.name}</span>
-                            <span className="opacity-50 flex-shrink-0">{c.kind === 'numeric' ? 'num' : `${c.n_unique} cats`}{c.missing > 0 ? ` · ${c.missing} NA` : ''}</span>
-                          </div>
-                          {c.kind === 'numeric' ? (
-                            c.min !== undefined && <div className="opacity-70">{c.min} – {c.max} · μ {c.mean}</div>
-                          ) : (
-                            <div className="opacity-70">
-                              {c.values.slice(0, 5).map((v: any, i: number) => (
-                                <span key={v.value}>{i > 0 && ', '}{v.value}: {v.count}</span>
-                              ))}
-                              {c.n_unique > 5 && <span> … +{c.n_unique - 5} more</span>}
-                            </div>
-                          )}
+                {activeDataset?.summary?.top_contributors && (
+                  <details className="text-xs">
+                    <summary className="cursor-pointer font-bold uppercase tracking-wider opacity-60 text-[10px]">Top PC contributors</summary>
+                    <div className="pt-1 space-y-1">
+                      {Object.entries(activeDataset.summary.top_contributors).map(([pc, vars]: [string, any]) => (
+                        <div key={pc} className="leading-snug">
+                          <span className="font-bold">{pc}:</span>{' '}
+                          {vars.slice(0, 4).map((v: any, i: number) => (
+                            <span key={v.var}>{i > 0 && ', '}{v.var} <span className="opacity-60">{v.loading > 0 ? '+' : ''}{v.loading}</span></span>
+                          ))}
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </details>
+                )}
+                {activeDataset && (
+                  <VariablesPanel
+                    dataset={activeDataset}
+                    viewMode={viewMode}
+                    colorBy={colorBy}
+                    theme={theme}
+                    onAxis={(axis, col) => updateAxis(axis, col)}
+                    onColor={setColorBy}
+                  />
                 )}
               </SidebarSection>
 
-              <SidebarSection title="4. Visual Settings" hasBorder theme={theme}>
+              <SidebarSection title="View" step={3} hasBorder theme={theme}>
                 <div className="flex gap-2 mb-2">
                     <button onClick={() => setViewMode("2D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "2D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>2D</button>
                     <button onClick={() => setViewMode("3D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "3D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>3D</button>
@@ -1458,16 +1730,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 </button>
 
                 <div className="space-y-1">
-                    <label className="text-xs font-medium opacity-70">Color By</label>
-                    <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={colorBy} onChange={(e) => setColorBy(e.target.value)}>
-                        {availableColumns.map(col => <option key={col} value={col}>{col}</option>)}
-                    </select>
-                </div>
-                
-                <div className="space-y-1">
-                    <label className="text-xs font-medium opacity-70">
-                        {viewMode === "2D" ? "2D Plot Axes (column → label)" : "3D Plot Axes (column → label)"}
-                    </label>
+                    <label className="text-xs font-medium opacity-70">Axis labels</label>
                     {(viewMode === "2D" ? (['x', 'y'] as const) : (['x', 'y', 'z'] as const)).map((axis: 'x' | 'y' | 'z') => {
                         const is2D = viewMode === "2D";
                         const colValue = is2D
@@ -1479,33 +1742,26 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                         return (
                             <div key={axis} className="flex items-center gap-1.5">
                                 <span className="text-[10px] font-bold w-3 uppercase opacity-60">{axis}</span>
-                                <select
-                                    className="flex-1 min-w-0 bg-[var(--input)] border border-[var(--border)] p-1.5 text-xs outline-none"
-                                    value={colValue}
-                                    onChange={e => updateAxis(axis, e.target.value || null)}
-                                >
-                                    {!is2D && axis === 'z' && <option value="">— none (2D)</option>}
-                                    {processedData && numericColumns(processedData).map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
+                                <span className="w-24 truncate text-[11px] opacity-60" title={colValue}>{colValue || '—'}</span>
                                 <input
                                     type="text"
                                     value={labelValue}
                                     onChange={e => updateLabel(axis, e.target.value)}
-                                    className={`w-20 bg-[var(--input)] border border-[var(--border)] p-1.5 text-xs ${!is2D && axis === 'z' && !activeDataset?.axes.z ? 'opacity-30' : ''}`}
-                                    placeholder="label"
-                                    disabled={!is2D && axis === 'z' && !activeDataset?.axes.z}
+                                    className="flex-1 min-w-0 bg-[var(--input)] border border-[var(--border)] p-1.5 text-xs"
+                                    placeholder="display label"
+                                    disabled={!colValue}
                                 />
                             </div>
                         );
                     })}
                 </div>
-                
-                <button onClick={() => setIsRotating(!isRotating)} disabled={viewMode === '2D'} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold transition-colors disabled:opacity-30 ${isRotating ? (theme==='primary'?'bauhaus-btn bg-[var(--p-red)]':'bg-[var(--border)] text-[var(--primary)] border border-[var(--primary)]') : (theme==='primary'?'bauhaus-btn bg-[var(--p-black)]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)]')}`}>
+
+                <button onClick={() => setIsRotating(!isRotating)} disabled={viewMode === '2D'} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold transition-colors disabled:opacity-30 ${isRotating ? (theme==='primary'?'bauhaus-btn bg-[var(--p-red)] text-white':'bg-[var(--border)] text-[var(--primary)] border border-[var(--primary)]') : (theme==='primary'?'bauhaus-btn bg-[var(--p-black)] text-white':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)]')}`}>
                     {isRotating ? <><Square className="w-4 h-4" /> Stop Rotation</> : <><Play className="w-4 h-4" /> Start Rotation</>}
                 </button>
               </SidebarSection>
 
-              <SidebarSection title="5. Clustering" hasBorder theme={theme}>
+              <SidebarSection title="Cluster" step={4} hasBorder theme={theme}>
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
                     <option value="DBSCAN">DBSCAN</option>
@@ -1527,7 +1783,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                     </div>
                 )}
                 {clusterMethod !== "NONE" && (
-                    <button onClick={handleCluster} disabled={isClustering} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--abaci)]'}`}>
+                    <button onClick={handleCluster} disabled={isClustering} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--abaci)]'}`}>
                         {isClustering ? "Clustering..." : "Run Clustering"}
                     </button>
                 )}
@@ -1536,7 +1792,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
                   </SidebarSection>
 
-              <SidebarSection title="6. Export & Pin" hasBorder theme={theme}>
+              <SidebarSection title="Export & Pin" step={5} hasBorder theme={theme}>
                   <button onClick={pinCurrentView} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)]'}`}>
                       <Pin className="w-4 h-4" /> Pin View
                   </button>
@@ -1544,13 +1800,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                       <input type="checkbox" checked={includeExportInfo} onChange={e => setIncludeExportInfo(e.target.checked)} />
                       <span className="opacity-80">Add title & legend to exports</span>
                   </label>
-                  <button onClick={exportPNG} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-blue)]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                  <button onClick={exportPNG} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-blue)] text-white':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                       <Download className="w-4 h-4" /> Save PNG (active view)
                   </button>
                   <button onClick={exportHTML} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                       <Download className="w-4 h-4" /> {isExporting === "Building HTML…" ? isExporting : "Save Interactive HTML"}
                   </button>
-                  <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                  <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                       <Layers className="w-4 h-4" /> {(isExporting && isExporting.startsWith("Rendering")) ? isExporting : "Save Rotating GIF (3D)"}
                   </button>
               </SidebarSection>
@@ -1568,12 +1824,14 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
       {/* Main visualizer area */}
       <main className="flex-1 relative bg-[var(--background)] z-10 flex overflow-hidden">
-        {allViews.length > 0 && (
+        {allViews.length > 0 ? (
             <>
                 <TmuxGrid views={allViews} renderView={renderView} />
                 <ThemedNotes notes={notes} setNotes={setNotes} theme={theme} />
                 <ThemedLegend view={allViews[0]} theme={theme} muted={mutedMap} onToggle={toggleMuted} />
             </>
+        ) : (
+            <EmptyState theme={theme} onLoadDemo={loadDemo} busy={isUploading} />
         )}
       </main>
     </div>
