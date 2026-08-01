@@ -53,7 +53,17 @@ This phase covers building the foundational app, from data ingestion to the fina
 - `[x]` **Full client-side migration — the Python backend is gone.** Parsing (PapaParse / SheetJS / hyparquet), median imputation + z-scaling + components projection, DBSCAN + K-Means (k-means++, deterministic seeds, `frontend/src/lib/`), and workspace persistence (IndexedDB + file export/import) all run in the browser. Data never leaves the machine — which is the right privacy posture for participant data and makes the app deployable as a static Vercel site.
 - `[x]` **Variables panel:** merged Dataset Info + axis pickers into one surface — every column shows type, range/categories, missing count, and a live mini-histogram, with one-click X/Y/Z/C assignment.
 - `[x]` **UI polish:** designed empty state with demo-data loader, real drag-and-drop, components upload demoted to an optional toggle, Bauhaus button hierarchy restored (Tailwind v4 layer fix), real webfonts, favicon, numbered section markers, reduced-motion support.
-- `[ ]` **Deploy:** Vercel static deployment + GitHub push.
+- `[x]` **Deploy:** live at [scatter-lab.vercel.app](https://scatter-lab.vercel.app); GitHub pushes to `main` auto-deploy (Vercel project `scatter-lab`, root directory `frontend`).
+
+---
+
+## Phase 2: The AI Assistant (August 2026)
+
+- `[x]` **In-app assistant panel** (bottom-right, both themes): chat UI with streaming responses, driven by the user's own API key.
+- `[x]` **OpenRouter by default, any OpenAI-compatible endpoint supported** — one key works across Claude/GPT/Gemini; the endpoint field also accepts local runtimes (Ollama/LM Studio) for a fully offline assistant. Key lives in localStorage only, never in exported workspaces.
+- `[x]` **Tool-driven app control:** the model can read column profiles/app state, set axes & coloring & 2D/3D, run DBSCAN/K-Means, read cluster compositions, and pin views. No destructive tools.
+- `[x]` **Privacy contract:** requests carry column metadata and aggregate stats only — raw data rows are never sent; the panel states this under the input.
+- `[ ]` Explain-my-upload-error helper wired to validation failures (assistant can already answer when asked).
 
 ---
 

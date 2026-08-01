@@ -9,6 +9,8 @@ import { readTable } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
+import { AssistantPanel } from "@/components/AssistantPanel";
+import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
@@ -529,6 +531,9 @@ const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, on
                     >
                         {busy ? "Loading…" : "> load demo data"}
                     </button>
+                    <p className="text-[11px] text-[var(--foreground)]/60">
+                        New here? Open the <span className="text-[var(--system-green)]">Assistant</span> (bottom right) and ask for a tour.
+                    </p>
                 </div>
             </div>
         );
@@ -575,6 +580,9 @@ const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, on
                 >
                     {busy ? "Loading…" : "Load demo data"}
                 </button>
+                <p className="text-[11px] opacity-50 text-center -mt-2">
+                    New here? Open the <span className="font-bold">Assistant</span> (bottom right) and ask for a tour.
+                </p>
             </div>
         </div>
     );
@@ -937,7 +945,7 @@ export default function Home() {
 
   // Everything happens in the browser: parse → (optionally) project → plot.
   // No network round-trip, no server, data never leaves the machine.
-  const uploadFiles = async (dsFile: File, compFile: File | null) => {
+  const uploadFiles = async (dsFile: File, compFile: File | null): Promise<DataTable | null> => {
     setIsUploading(true);
     setUploadStatus("Processing…");
     try {
@@ -971,8 +979,10 @@ export default function Home() {
       setComponentsFile(null);
       if (dsInputRef.current) dsInputRef.current.value = "";
       if (compInputRef.current) compInputRef.current.value = "";
+      return table;
     } catch (err: any) {
       setUploadStatus(`Error: ${err?.message ?? err}`);
+      return null;
     } finally {
       setIsUploading(false);
     }
@@ -982,7 +992,7 @@ export default function Home() {
 
   // Demo data ships with the app (public/demo) so the empty state can offer a
   // zero-friction first run: synthetic survey + components, nothing sensitive
-  const loadDemo = async () => {
+  const loadDemo = async (): Promise<DataTable | null> => {
     setIsUploading(true);
     setUploadStatus("Loading demo data…");
     try {
@@ -990,13 +1000,14 @@ export default function Home() {
         fetch('/demo/demo_dataset.csv').then(r => r.blob()),
         fetch('/demo/demo_components.csv').then(r => r.blob()),
       ]);
-      await uploadFiles(
+      return await uploadFiles(
         new File([ds], 'demo_dataset.csv', { type: 'text/csv' }),
         new File([comp], 'demo_components.csv', { type: 'text/csv' }),
       );
     } catch {
       setUploadStatus("Demo data failed to load.");
       setIsUploading(false);
+      return null;
     }
   };
 
@@ -1499,6 +1510,148 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       setPinnedViews(pinnedViews.filter(v => v.id !== id));
   };
 
+  // --- Assistant bridge ------------------------------------------------------
+  // Tool calls in one model response run back-to-back, before React re-renders,
+  // so a clustering result must be readable by the next tool immediately:
+  // freshTableRef carries the just-computed table until the next render.
+  const freshTableRef = useRef<DataTable | null>(null);
+  useEffect(() => { freshTableRef.current = null; }, [processedData]);
+  const latestTable = (): DataTable | null => freshTableRef.current ?? processedData;
+
+  const columnProfiles = (): ColumnProfile[] => {
+      const t = latestTable();
+      if (!t) return [];
+      return t.columns.map(col => {
+          const vals = t.data[col] ?? [];
+          let missing = 0, isNumeric = false, min = Infinity, max = -Infinity;
+          const counts = new Map<string, number>();
+          for (const v of vals) {
+              if (v == null) { missing++; continue; }
+              if (typeof v === 'number') { isNumeric = true; if (v < min) min = v; if (v > max) max = v; }
+              else counts.set(String(v), (counts.get(String(v)) ?? 0) + 1);
+          }
+          if (isNumeric) return { name: col, kind: 'numeric' as const, min, max, missing };
+          return {
+              name: col, kind: 'categorical' as const, missing, nUnique: counts.size,
+              topCategories: Array.from(counts.entries())
+                  .sort((a, b) => b[1] - a[1]).slice(0, 8)
+                  .map(([value, count]) => ({ value, count })),
+          };
+      });
+  };
+
+  const bridgeRef = useRef<AppBridge>(null as any);
+  bridgeRef.current = {
+      getState: () => ({
+          datasets: datasets.map(d => ({ name: d.name, nRows: d.table.nRows, active: d.id === activeId })),
+          columns: columnProfiles(),
+          axes: activeDataset ? effectiveAxes(activeDataset, viewMode) : { x: '', y: '', z: null },
+          colorBy,
+          viewMode,
+          pinnedViews: pinnedViews.length,
+          clusterSettings: { method: clusterMethod, eps, minSamples, k },
+      }),
+
+      setPlot: (opts) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded — the user can load one (or the demo) first.';
+          const numeric = new Set(numericColumns(t));
+          const problems: string[] = [];
+          const targetMode = opts.view_mode ?? viewMode;
+          for (const [axis, col] of [['x', opts.x], ['y', opts.y], ['z', opts.z]] as const) {
+              if (col && !numeric.has(col)) problems.push(`"${col}" is not a numeric column (${axis} axis).`);
+          }
+          if (opts.color_by && !t.columns.includes(opts.color_by)) problems.push(`"${opts.color_by}" is not a column.`);
+          if (problems.length) return `Not applied. ${problems.join(' ')} Numeric columns: ${numericColumns(t).join(', ')}.`;
+
+          if (opts.view_mode) setViewMode(opts.view_mode);
+          if (opts.x || opts.y || opts.z) {
+              setDatasets(prev => prev.map(d => {
+                  if (d.id !== activeId) return d;
+                  if (targetMode === '2D') {
+                      const axes2d = { x: opts.x ?? d.axes2d.x, y: opts.y ?? d.axes2d.y };
+                      return { ...d, axes2d, labels2d: { x: opts.x ?? d.labels2d.x, y: opts.y ?? d.labels2d.y } };
+                  }
+                  const axes = { x: opts.x ?? d.axes.x, y: opts.y ?? d.axes.y, z: opts.z ?? d.axes.z };
+                  return { ...d, axes, labels: { x: axes.x, y: axes.y, z: axes.z ?? 'Z' } };
+              }));
+          }
+          if (opts.color_by) setColorBy(opts.color_by);
+          const parts = [
+              opts.view_mode && `view=${opts.view_mode}`,
+              opts.x && `x=${opts.x}`, opts.y && `y=${opts.y}`, opts.z && `z=${opts.z}`,
+              opts.color_by && `color=${opts.color_by}`,
+          ].filter(Boolean);
+          return `Applied: ${parts.join(', ')}.`;
+      },
+
+      runClustering: (method, opts) => {
+          const t = latestTable();
+          if (!t || !activeDataset) return 'No dataset loaded.';
+          const ax = effectiveAxes(activeDataset, viewMode);
+          const cols = [t.data[ax.x], t.data[ax.y]];
+          if (ax.z) cols.push(t.data[ax.z]);
+          const useEps = opts.eps ?? eps, useMin = opts.min_samples ?? minSamples, useK = opts.k ?? k;
+          const labels = method === 'DBSCAN' ? dbscan(cols, useEps, useMin) : kmeans(cols, useK);
+          const newTable: DataTable = {
+              columns: t.columns.includes('Cluster') ? t.columns : [...t.columns, 'Cluster'],
+              data: { ...t.data, Cluster: labels },
+              nRows: t.nRows,
+          };
+          freshTableRef.current = newTable;
+          setDatasets(prev => prev.map(d => d.id === activeId ? { ...d, table: newTable } : d));
+          setClusterMethod(method);
+          if (opts.eps != null) setEps(opts.eps);
+          if (opts.min_samples != null) setMinSamples(opts.min_samples);
+          if (opts.k != null) setK(opts.k);
+          if (colorBy !== 'Cluster') setBreakdownBy(colorBy);
+          setColorBy('Cluster');
+          const sizes = new Map<string, number>();
+          for (const l of labels) sizes.set(l, (sizes.get(l) ?? 0) + 1);
+          const summary = sortCategories(Array.from(sizes.keys())).map(l => `${l}: ${sizes.get(l)}`).join(', ');
+          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}. Points are now colored by cluster.`;
+      },
+
+      getClusterBreakdown: (attribute) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded.';
+          const clusterCol = t.data['Cluster'];
+          if (!clusterCol) return 'No clustering has been run yet — call run_clustering first.';
+          if (!attribute || !t.columns.includes(attribute)) {
+              const cats = t.columns.filter(c => c !== 'Cluster' && getColorFieldKind(t.data[c] ?? []) === 'categorical');
+              return `"${attribute}" is not a column. Categorical columns: ${cats.join(', ')}.`;
+          }
+          const attrVals = t.data[attribute];
+          const byCluster: Record<string, { total: number, counts: Record<string, number> }> = {};
+          for (let i = 0; i < t.nRows; i++) {
+              const c = String(clusterCol[i] ?? 'N/A');
+              const a = String(attrVals[i] ?? 'N/A');
+              if (!byCluster[c]) byCluster[c] = { total: 0, counts: {} };
+              byCluster[c].total++;
+              byCluster[c].counts[a] = (byCluster[c].counts[a] || 0) + 1;
+          }
+          return sortCategories(Object.keys(byCluster)).map(ck => {
+              const { total, counts } = byCluster[ck];
+              const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6)
+                  .map(([v, n]) => `${v} ${Math.round((n / total) * 100)}% (${n})`).join(', ');
+              return `${ck} (n=${total}): ${rows}`;
+          }).join('\n');
+      },
+
+      pinView: () => {
+          if (pinnedViews.length >= 3) return 'Pin limit reached (3). Ask the user to remove a pin first.';
+          pinCurrentView();
+          return `Pinned the current view. ${pinnedViews.length + 1}/3 pins used.`;
+      },
+
+      loadDemoData: async () => {
+          const table = await loadDemo();
+          if (!table) return 'Demo data failed to load.';
+          freshTableRef.current = table;
+          return `Demo dataset loaded: ${table.nRows} rows, columns: ${table.columns.join(', ')}. It is now the active dataset, plotted on PC1/PC2/PC3.`;
+      },
+  };
+
   const renderView = (view: any, index: number) => {
       // view object is either the active state or a pinned state
       const isPinned = view.id !== 'active';
@@ -1843,6 +1996,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
         ) : (
             <EmptyState theme={theme} onLoadDemo={loadDemo} busy={isUploading} />
         )}
+        <AssistantPanel bridgeRef={bridgeRef} theme={theme} />
       </main>
     </div>
   );
