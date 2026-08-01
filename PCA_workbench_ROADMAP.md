@@ -5,41 +5,45 @@
 This phase covers building the foundational app, from data ingestion to the final 3D visualizations and HTML exports. 
 
 ### Stage 1: Project Scaffolding & Setup
-- `[/]` **Ticket 1.1:** Initialize Next.js project (`pca-workbench/frontend`) with Tailwind CSS for rapid UI styling.
-- `[/]` **Ticket 1.2:** Initialize FastAPI project (`pca-workbench/backend`) with standard dependencies (`pandas`, `scikit-learn`, `uvicorn`).
-- `[ ]` **Ticket 1.3:** Setup CORS and create a basic health-check API route to verify the frontend and backend can communicate.
+- `[x]` **Ticket 1.1:** Initialize Next.js project (`pca-workbench/frontend`) with Tailwind CSS for rapid UI styling.
+- `[x]` **Ticket 1.2:** Initialize FastAPI project (`pca-workbench/backend`) with standard dependencies (`pandas`, `scikit-learn`, `uvicorn`).
+- `[x]` **Ticket 1.3:** Setup CORS and create a basic health-check API route to verify the frontend and backend can communicate.
   - *Verification:* The frontend successfully displays a "Backend Connected" message on load.
 
 ### Stage 2: UI Layout & File Upload
-- `[ ]` **Ticket 2.1:** Build the core UI shell: a control sidebar on the left, and a main visualizer area on the right.
-- `[ ]` **Ticket 2.2:** Build Drag-and-Drop file upload components for both the **Dataset** and the **PCA Components** files.
-- `[ ]` **Ticket 2.3:** Wire the upload components to send the files to a backend POST endpoint.
+- `[x]` **Ticket 2.1:** Build the core UI shell: a control sidebar on the left, and a main visualizer area on the right.
+- `[x]` **Ticket 2.2:** Build Drag-and-Drop file upload components for both the **Dataset** and the **PCA Components** files.
+- `[x]` **Ticket 2.3:** Wire the upload components to send the files to a backend POST endpoint.
   - *Verification:* Uploading dummy CSVs results in the backend logging their successful receipt.
 
 ### Stage 3: Data Processing Engine (Backend)
-- `[ ]` **Ticket 3.1:** Implement backend logic to parse uploaded files into Pandas DataFrames, handling missing values gracefully.
-- `[ ]` **Ticket 3.2:** Implement matrix multiplication logic to generate coordinates (PC1, PC2, PC3) by multiplying the Dataset subset by the PCA Components.
-- `[ ]` **Ticket 3.3:** Stitch the new coordinates back onto the full dataset and return the master payload (plus a list of column names for the attribute dropdowns) to the frontend.
+- `[x]` **Ticket 3.1:** Implement backend logic to parse uploaded files into Pandas DataFrames, handling missing values gracefully.
+- `[x]` **Ticket 3.2:** Implement matrix multiplication logic to generate coordinates (PC1, PC2, PC3) by multiplying the Dataset subset by the PCA Components.
+- `[x]` **Ticket 3.3:** Stitch the new coordinates back onto the full dataset and return the master payload (plus a list of column names for the attribute dropdowns) to the frontend.
   - *Verification:* The frontend receives a JSON payload containing the full dataset with new PC1/PC2/PC3 columns.
 
 ### Stage 4: Visualization Engine (Frontend)
-- `[ ]` **Ticket 4.1:** Integrate `react-plotly.js` and render the initial 3D Scatter plot using the coordinates.
-- `[ ]` **Ticket 4.2:** Port the OG Dashboard aesthetic (Z-floor shadows, custom camera angle, `plotly_white` template, transparent background).
-- `[ ]` **Ticket 4.3:** Implement the "Color By" (Attribute Encoding) dropdown, allowing Plotly to color points dynamically based on the selected dataset column.
-- `[ ]` **Ticket 4.4:** Implement the auto-rotation toggle button, manipulating the Plotly camera state on an animation frame loop.
+- `[x]` **Ticket 4.1:** Integrate `react-plotly.js` and render the initial 3D Scatter plot using the coordinates.
+- `[x]` **Ticket 4.2:** Port the OG Dashboard aesthetic (Z-floor shadows, custom camera angle, `plotly_white` template, transparent background).
+- `[x]` **Ticket 4.3:** Implement the "Color By" (Attribute Encoding) dropdown, allowing Plotly to color points dynamically based on the selected dataset column.
+- `[x]` **Ticket 4.4:** Implement the auto-rotation toggle button, manipulating the Plotly camera state on an animation frame loop.
   - *Verification:* The visualizer displays a beautiful, rotating 3D plot with shadows, and changing the "Color By" dropdown instantly recolors the points.
 
 ### Stage 5: Interactive Clustering & Features
-- `[ ]` **Ticket 5.1:** Create backend endpoints for DBSCAN and kNN clustering.
-- `[ ]` **Ticket 5.2:** Add UI sliders for clustering parameters (`eps`, `min_samples`, `k`) that trigger instant backend recalculations and Plotly updates.
-- `[ ]` **Ticket 5.3:** Implement the "Side-by-Side" lock feature, saving the current Plotly state into a secondary pinned view.
-- `[ ]` **Ticket 5.4:** Add contextual note-taking areas and axis renaming inputs.
+- `[x]` **Ticket 5.1:** Create backend endpoints for DBSCAN and kNN clustering.
+- `[x]` **Ticket 5.2:** Add UI sliders for clustering parameters (`eps`, `min_samples`, `k`) that trigger instant backend recalculations and Plotly updates.
+- `[x]` **Ticket 5.3:** Implement the "Side-by-Side" lock feature, saving the current Plotly state into a secondary pinned view.
+- `[x]` **Ticket 5.4:** Add contextual note-taking areas and axis renaming inputs.
   - *Verification:* Adjusting a slider changes the clustering live. Pinning a view locks it in place alongside the active view.
 
 ### Stage 6: Exporting & Polish
-- `[ ]` **Ticket 6.1:** Implement "Export as Image" (PNG).
-- `[ ]` **Ticket 6.2:** Implement "Export as Interactive HTML" by constructing a standalone HTML string with the current data and injecting the OG rotation script.
-  - *Verification:* Clicking the export button downloads a `.html` file that can be opened and auto-rotates in any browser without needing the app.
+- `[x]` **Ticket 6.1:** Implement "Export as Image" (PNG) — plus rotating-GIF export for 3D views (client-side, 36 frames via gifenc).
+- `[x]` **Ticket 6.2:** Implement "Export as Interactive HTML" — standalone file with the Plotly bundle inlined (offline-safe), current traces/layout embedded, and a rotation script + pause button for 3D. Vendor bundle copied to `public/vendor/` via `predev`/`prebuild`.
+  - *Verification:* Downloaded `.html` renders and rotates in any browser with no app/server (rAF correctly pauses when the tab is backgrounded).
+
+### Stage 7: Persistence (added)
+- `[x]` **Workspace save/load:** File-based via backend (`workspaces/` dir, 4 REST endpoints). Save names a snapshot of all datasets, pins, mute states, cluster params, notes, camera; load restores the app exactly. Table registry dedupes shared/snapshotted tables. Seam for a future real backend = those 4 endpoints.
+- `[x]` **Cross-dataset column transfer:** Copy a column (e.g. `Cluster`) from one loaded dataset into another so you can color romance-space points by sex-space clusters (or any two datasets sharing respondents). Two alignment modes — by row order (with an automatic sanity check against a stable shared column, deliberately excluding PC/axis scores which differ per dataset) and match by a shared key column (e.g. ParticipantID) for when row order isn't guaranteed. Guards against mismatched row counts and non-unique keys.
 
 ---
 
@@ -50,3 +54,21 @@ Once Phase 1 is fully functional and you are actively using it for analysis, we 
 - **Data Validation:** If a user uploads a malformed file (e.g., mismatched matrix dimensions, unexpected string characters in numeric columns), the app won't just throw a generic red error. The AI agent will intercept the error, analyze the file headers and structure, and explain to the user *exactly* how to fix their Excel file before re-uploading.
 - **Site Navigation:** The agent will be given access to the site's state, meaning it can answer questions like "How do I color by Orientation?" or "Why isn't DBSCAN finding any clusters?" and potentially even adjust the sliders for the user via function calling.
 - **Implementation:** This will involve hooking up an OpenAI or Gemini API key to a specialized backend route and giving the model a system prompt detailing the app's internal logic.
+
+---
+
+## Development Log & Architecture Notes
+
+### Technical Implementation (Phase 1)
+- **Frontend Stack:** Next.js (React), Tailwind CSS, React-Plotly.js.
+- **Backend Stack:** FastAPI (Python), Pandas, scikit-learn (KMeans, DBSCAN).
+- **Theming & UI Component Architecture:** 
+  - Dual-theme system (`primary` Bauhaus vs `terminal` Cyber).
+  - Adopted `ccru/components` (`CyberPanel`, `CyberContainer`, `CyberGridGroup`) for the Terminal theme aesthetic.
+  - Built custom bespoke components (`PrimaryCollapsible`) to replicate identical UI behaviors (collapsibility, snapping) using Bauhaus styling (hard shadows, sharp borders).
+- **Tmux-Style Pinning Layout:**
+  - Originally considered `react-resizable-panels`, but opted for a custom raw Flexbox implementation to avoid ESM compiler issues and precisely guarantee the 1-to-4 layout scaling rule.
+  - Follows strict Tmux pane splitting logic: [1 View] -> [Split Vertically] -> [Split Right Pane Horizontally] -> [Split Left Pane Horizontally].
+- **Absolute Overlays:** 
+  - To solve container overflow issues, the Legend and Notes components were decoupled from the Tmux grid. They now float globally over the entire visualization viewport (anchored to `left-0` and `right-0`). 
+  - These panels collapse inwards towards the screen edges automatically using `collapseDirection="side"` logic.

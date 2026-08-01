@@ -1,0 +1,13 @@
+workspaces/
+backend/venv/
+.DS_Store
+frontend/public/vendor/
+node_modules/
+.next/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+next-env.d.ts
+
+# Real participant-derived view data — keep out of version control
+LS_pca_workbench_views copy/
