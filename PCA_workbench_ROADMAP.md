@@ -47,6 +47,16 @@ This phase covers building the foundational app, from data ingestion to the fina
 
 ---
 
+## Phase 1.5: Scatter Lab — client-side migration & UI overhaul (August 2026)
+
+- `[x]` **Rebrand:** PCA Workbench → **Scatter Lab** (working title, single `APP_NAME` constant). The tool outgrew PCA — any variables can be plotted, projected, clustered.
+- `[x]` **Full client-side migration — the Python backend is gone.** Parsing (PapaParse / SheetJS / hyparquet), median imputation + z-scaling + components projection, DBSCAN + K-Means (k-means++, deterministic seeds, `frontend/src/lib/`), and workspace persistence (IndexedDB + file export/import) all run in the browser. Data never leaves the machine — which is the right privacy posture for participant data and makes the app deployable as a static Vercel site.
+- `[x]` **Variables panel:** merged Dataset Info + axis pickers into one surface — every column shows type, range/categories, missing count, and a live mini-histogram, with one-click X/Y/Z/C assignment.
+- `[x]` **UI polish:** designed empty state with demo-data loader, real drag-and-drop, components upload demoted to an optional toggle, Bauhaus button hierarchy restored (Tailwind v4 layer fix), real webfonts, favicon, numbered section markers, reduced-motion support.
+- `[ ]` **Deploy:** Vercel static deployment + GitHub push.
+
+---
+
 ## Phase 2: The AI Assistant (Future)
 
 Once Phase 1 is fully functional and you are actively using it for analysis, we will begin Phase 2. 

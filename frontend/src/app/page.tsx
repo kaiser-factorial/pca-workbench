@@ -5,6 +5,10 @@ import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel, CyberInput, CyberTextArea } from "ccru/components";
+import { readTable } from "@/lib/parse";
+import { processUpload } from "@/lib/engine";
+import { dbscan, kmeans } from "@/lib/cluster";
+import * as wsStore from "@/lib/workspaces";
 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
@@ -823,12 +827,10 @@ const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRela
 export default function Home() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  const [healthStatus, setHealthStatus] = useState<string>("Checking backend connection...");
   const [datasetFile, setDatasetFile] = useState<File | null>(null);
   const [componentsFile, setComponentsFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string>("");
   const [isUploading, setIsUploading] = useState(false);
-  const [isConverting, setIsConverting] = useState(false);
   const [isExporting, setIsExporting] = useState("");
   const [includeExportInfo, setIncludeExportInfo] = useState(true);
   
@@ -899,10 +901,6 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true);
-    fetch("http://localhost:8000/api/health")
-      .then((res) => res.json())
-      .then((data) => setHealthStatus(data.message))
-      .catch(() => setHealthStatus("Backend Disconnected / Error"));
   }, []);
 
   useEffect(() => {
@@ -925,49 +923,44 @@ export default function Home() {
     return () => { if (reqRef.current) cancelAnimationFrame(reqRef.current); }
   }, [isRotating, viewMode]);
 
+  // Everything happens in the browser: parse → (optionally) project → plot.
+  // No network round-trip, no server, data never leaves the machine.
   const uploadFiles = async (dsFile: File, compFile: File | null) => {
     setIsUploading(true);
-    setUploadStatus("Uploading...");
-
-    const formData = new FormData();
-    formData.append("dataset", dsFile);
-    if (compFile) formData.append("components", compFile);
-
+    setUploadStatus("Processing…");
     try {
-      const res = await fetch("http://localhost:8000/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await res.json();
-      if (data.error) {
-        setUploadStatus(`Error: ${data.error}`);
-      } else {
-        setUploadStatus(data.message);
-        const id = Date.now();
-        const table: DataTable = { columns: data.columns, data: data.data, nRows: data.n_rows };
-        const axes = pickAxes(table);
-        const dataset: Dataset = {
-          id,
-          name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
-          table,
-          summary: data.summary,
-          axes,
-          labels: defaultLabels(axes),
-          axes2d: { x: axes.x, y: axes.y },
-          labels2d: { x: axes.x, y: axes.y },
-        };
-        setDatasets(prev => [...prev, dataset]);
-        setActiveId(id);
-        setColorBy(pickColorBy(data.columns, colorBy));
-        if (!axes.z) setViewMode("2D");
-        // Consume the file selections so the slots are free for the next dataset
-        setDatasetFile(null);
-        setComponentsFile(null);
-        if (dsInputRef.current) dsInputRef.current.value = "";
-        if (compInputRef.current) compInputRef.current.value = "";
-      }
-    } catch (err) {
-      setUploadStatus("Upload failed. Ensure backend is running.");
+      // Yield a frame so the busy state paints before heavy parsing starts
+      await new Promise(r => setTimeout(r, 30));
+      const [dsTable, compTable] = await Promise.all([
+        readTable(dsFile),
+        compFile ? readTable(compFile) : Promise.resolve(null),
+      ]);
+      const result = processUpload(dsTable, compTable);
+      setUploadStatus(result.message);
+      const id = Date.now();
+      const table = result.table;
+      const axes = pickAxes(table);
+      const dataset: Dataset = {
+        id,
+        name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
+        table,
+        summary: result.topContributors ? { top_contributors: result.topContributors } : null,
+        axes,
+        labels: defaultLabels(axes),
+        axes2d: { x: axes.x, y: axes.y },
+        labels2d: { x: axes.x, y: axes.y },
+      };
+      setDatasets(prev => [...prev, dataset]);
+      setActiveId(id);
+      setColorBy(pickColorBy(table.columns, colorBy));
+      if (!axes.z) setViewMode("2D");
+      // Consume the file selections so the slots are free for the next dataset
+      setDatasetFile(null);
+      setComponentsFile(null);
+      if (dsInputRef.current) dsInputRef.current.value = "";
+      if (compInputRef.current) compInputRef.current.value = "";
+    } catch (err: any) {
+      setUploadStatus(`Error: ${err?.message ?? err}`);
     } finally {
       setIsUploading(false);
     }
@@ -1004,22 +997,17 @@ export default function Home() {
       }
   };
 
-  // --- Workspace persistence -------------------------------------------------
+  // --- Workspace persistence (IndexedDB — fully local) -----------------------
   const refreshWorkspaces = async () => {
       try {
-          const res = await fetch("http://localhost:8000/api/workspaces");
-          const data = await res.json();
-          if (data.workspaces) setWorkspaces(data.workspaces);
-      } catch { /* backend down — list stays empty */ }
+          setWorkspaces(await wsStore.listWorkspaces());
+      } catch { /* IndexedDB unavailable — list stays empty */ }
   };
   useEffect(() => { refreshWorkspaces(); }, []);
 
-  const saveWorkspace = async () => {
-      const name = workspaceName.trim();
-      if (!name) return;
-      setWorkspaceBusy("Saving…");
-      // Dedupe tables by object identity: datasets and pins that share a table
-      // (or a pin's snapshot) are stored once and referenced by id
+  // Dedupe tables by object identity: datasets and pins that share a table
+  // (or a pin's snapshot) are stored once and referenced by id
+  const buildWorkspacePayload = () => {
       const registry = new Map<DataTable, string>();
       const regTable = (t: DataTable | null) => {
           if (!t) return null;
@@ -1030,35 +1018,62 @@ export default function Home() {
       const pinsOut = pinnedViews.map(v => ({ ...v, data: regTable(v.data) }));
       const tables: Record<string, DataTable> = {};
       registry.forEach((id, tbl) => { tables[id] = tbl; });
-      const payload = {
+      return {
           version: 1,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
           activeId, colorBy, viewMode, showAxes, camera,
           notes, mutedMap,
           clusterMethod, eps, minSamples, k, breakdownBy, includeExportInfo,
       };
+  };
+
+  const saveWorkspace = async () => {
+      const name = workspaceName.trim();
+      if (!name) return;
+      setWorkspaceBusy("Saving…");
       try {
-          const res = await fetch(`http://localhost:8000/api/workspaces/${encodeURIComponent(name)}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-          });
-          const data = await res.json();
-          if (!res.ok) { setWorkspaceBusy(""); setUploadStatus(`Save failed: ${data.error ?? res.status}`); return; }
+          await wsStore.saveWorkspace(name, buildWorkspacePayload());
           setWorkspaceBusy("");
           await refreshWorkspaces();
-      } catch {
+      } catch (err: any) {
           setWorkspaceBusy("");
-          setUploadStatus("Save failed — is the backend running?");
+          setUploadStatus(`Save failed: ${err?.message ?? err}`);
+      }
+  };
+
+  const exportWorkspace = () => {
+      const name = workspaceName.trim() || activeDataset?.name || 'workspace';
+      wsStore.exportWorkspaceFile(name, buildWorkspacePayload());
+  };
+
+  const importWorkspace = async (file: File) => {
+      setWorkspaceBusy("Importing…");
+      try {
+          const { name, payload } = await wsStore.importWorkspaceFile(file);
+          await wsStore.saveWorkspace(name, payload);
+          await refreshWorkspaces();
+          applyWorkspace(name, payload);
+          setWorkspaceBusy("");
+      } catch (err: any) {
+          setWorkspaceBusy("");
+          setUploadStatus(`Import failed: ${err?.message ?? err}`);
       }
   };
 
   const loadWorkspace = async (name: string) => {
       setWorkspaceBusy("Loading…");
       try {
-          const res = await fetch(`http://localhost:8000/api/workspaces/${encodeURIComponent(name)}`);
-          if (!res.ok) { setWorkspaceBusy(""); setUploadStatus(`Load failed: ${res.status}`); return; }
-          const ws = await res.json();
+          const ws = await wsStore.loadWorkspace(name);
+          if (!ws) { setWorkspaceBusy(""); setUploadStatus("Workspace not found."); return; }
+          applyWorkspace(name, ws);
+          setWorkspaceBusy("");
+      } catch (err: any) {
+          setWorkspaceBusy("");
+          setUploadStatus(`Load failed: ${err?.message ?? err}`);
+      }
+  };
+
+  const applyWorkspace = (name: string, ws: any) => {
           const tables: Record<string, DataTable> = ws.tables ?? {};
           const rehydrate = (ref: any) => (typeof ref === 'string' ? tables[ref] : ref);
           // Restore muted state deliberately — suppress the reset that colorBy/activeId would trigger
@@ -1081,11 +1096,6 @@ export default function Home() {
           setIncludeExportInfo(ws.includeExportInfo ?? true);
           setWorkspaceName(name);
           setUploadStatus(`Loaded workspace "${name}".`);
-          setWorkspaceBusy("");
-      } catch {
-          setWorkspaceBusy("");
-          setUploadStatus("Load failed — is the backend running?");
-      }
   };
 
   const handleTransfer = ({ sourceId, sourceCol, mode, keyCol, name }: TransferSpec) => {
@@ -1115,7 +1125,7 @@ export default function Home() {
 
   const deleteWorkspace = async (name: string) => {
       try {
-          await fetch(`http://localhost:8000/api/workspaces/${encodeURIComponent(name)}`, { method: "DELETE" });
+          await wsStore.deleteWorkspace(name);
           await refreshWorkspaces();
       } catch { /* ignore */ }
   };
@@ -1153,33 +1163,6 @@ export default function Home() {
       }
   };
 
-  const handleConvertToParquet = async () => {
-      if (!datasetFile) return;
-      setIsConverting(true);
-      const formData = new FormData();
-      formData.append("file", datasetFile);
-      try {
-          const res = await fetch("http://localhost:8000/api/convert", { method: "POST", body: formData });
-          if (!res.ok) {
-              const data = await res.json().catch(() => ({}));
-              setUploadStatus(`Error: ${data.error ?? "Conversion failed"}`);
-              return;
-          }
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = datasetFile.name.replace(/\.(csv|xlsx)$/i, '.parquet');
-          a.click();
-          URL.revokeObjectURL(url);
-          setUploadStatus(`Saved ${a.download} — upload it here next time for faster loads.`);
-      } catch {
-          setUploadStatus("Conversion failed. Ensure backend is running.");
-      } finally {
-          setIsConverting(false);
-      }
-  };
-
   const handleClearData = () => {
       setDatasets([]);
       setActiveId(null);
@@ -1198,32 +1181,26 @@ export default function Home() {
   const handleCluster = async () => {
       if (clusterMethod === "NONE" || !processedData) return;
       setIsClustering(true);
-
+      // Yield a frame so the busy state paints before the O(n²) work starts
+      await new Promise(r => setTimeout(r, 30));
       try {
-          const res = await fetch("http://localhost:8000/api/cluster", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                  x: processedData.data[effectiveAxes(activeDataset!, viewMode).x],
-                  y: processedData.data[effectiveAxes(activeDataset!, viewMode).y],
-                  z: effectiveAxes(activeDataset!, viewMode).z ? processedData.data[effectiveAxes(activeDataset!, viewMode).z!] : undefined,
-                  method: clusterMethod, eps, min_samples: minSamples, k
-              })
-          });
-          const data = await res.json();
-          if (data.labels) {
-              const newTable: DataTable = {
-                  columns: processedData.columns.includes("Cluster") ? processedData.columns : [...processedData.columns, "Cluster"],
-                  data: { ...processedData.data, Cluster: data.labels },
-                  nRows: processedData.nRows
-              };
-              setDatasets(prev => prev.map(d => d.id === activeId ? { ...d, table: newTable } : d));
-              // The pre-cluster coloring is the natural default for composition breakdowns
-              if (colorBy !== "Cluster") setBreakdownBy(colorBy);
-              setColorBy("Cluster");
-          }
-      } catch (err) {
-          console.error(err);
+          const ax = effectiveAxes(activeDataset!, viewMode);
+          const cols = [processedData.data[ax.x], processedData.data[ax.y]];
+          if (ax.z) cols.push(processedData.data[ax.z]);
+          const labels = clusterMethod === "DBSCAN"
+              ? dbscan(cols, eps, minSamples)
+              : kmeans(cols, k);
+          const newTable: DataTable = {
+              columns: processedData.columns.includes("Cluster") ? processedData.columns : [...processedData.columns, "Cluster"],
+              data: { ...processedData.data, Cluster: labels },
+              nRows: processedData.nRows
+          };
+          setDatasets(prev => prev.map(d => d.id === activeId ? { ...d, table: newTable } : d));
+          // The pre-cluster coloring is the natural default for composition breakdowns
+          if (colorBy !== "Cluster") setBreakdownBy(colorBy);
+          setColorBy("Cluster");
+      } catch (err: any) {
+          setUploadStatus(`Clustering failed: ${err?.message ?? err}`);
       } finally {
           setIsClustering(false);
       }
@@ -1561,9 +1538,9 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             </button>
         </div>
 
-        <div className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70">
-          <span className={`inline-block w-2 h-2 rounded-full ${healthStatus === "Backend Connected" ? 'bg-green-500' : 'bg-red-500'}`} />
-          {healthStatus === "Backend Connected" ? "Engine ready" : healthStatus}
+        <div className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70" title="All parsing, projection, and clustering run in your browser. Nothing is uploaded anywhere.">
+          <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+          All local — data never leaves your browser
         </div>
 
         <SidebarGroup theme={theme}>
@@ -1599,6 +1576,24 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+            {(datasets.length > 0 || workspaces.length > 0) && (
+              <div className="flex gap-2 text-[11px]">
+                {datasets.length > 0 && (
+                  <button onClick={exportWorkspace} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
+                    Export as file
+                  </button>
+                )}
+                <label className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
+                  Import file
+                  <input
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) importWorkspace(f); e.target.value = ""; }}
+                  />
+                </label>
               </div>
             )}
             {workspaceBusy && <p className="text-[11px] opacity-70">{workspaceBusy}</p>}
@@ -1647,11 +1642,6 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             <button onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
               {isUploading ? "Processing..." : "Add Dataset"}
             </button>
-            {datasetFile && !datasetFile.name.endsWith('.parquet') && (
-              <button onClick={handleConvertToParquet} disabled={isConverting} className={`w-full flex items-center justify-center gap-2 text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                <Download className="w-4 h-4" /> {isConverting ? "Converting..." : "Save as Parquet"}
-              </button>
-            )}
             {(datasetFile || componentsFile || processedData) && (
               <button onClick={handleClearData} className={`w-full flex items-center justify-center gap-2 text-sm font-bold py-2 ${theme === 'primary' ? 'bauhaus-btn bg-white text-[var(--p-red)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-red-400'}`}>
                 <Trash2 className="w-4 h-4" /> Clear All Data
