@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { Sparkles, Settings2, X, CornerDownLeft } from 'lucide-react';
 import {
-  AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL,
+  AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS,
   runAssistantTurn, fetchModels, describeApiError,
 } from '@/lib/assistant';
 
@@ -16,9 +16,10 @@ const LS = {
   baseURL: 'scatterlab.assistant.baseurl',
 };
 
-export const AssistantPanel = ({ bridgeRef, theme }: {
+export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   bridgeRef: React.MutableRefObject<AppBridge>,
   theme: string | undefined,
+  askRef?: React.MutableRefObject<((q: string) => void) | null>,
 }) => {
   const [open, setOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -31,6 +32,8 @@ export const AssistantPanel = ({ bridgeRef, theme }: {
   const [busy, setBusy] = useState(false);
   const historyRef = useRef<ChatCompletionMessageParam[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Undo: view-state snapshot taken before the last mutating turn
+  const [undoSnap, setUndoSnap] = useState<unknown>(null);
 
   useEffect(() => {
     setApiKey(localStorage.getItem(LS.key) ?? '');
@@ -66,6 +69,8 @@ export const AssistantPanel = ({ bridgeRef, theme }: {
     setInput('');
     setChat(prev => [...prev, { kind: 'user', text }, { kind: 'assistant', text: '' }]);
     setBusy(true);
+    const snapBefore = bridgeRef.current.snapshot();
+    let mutated = false;
     try {
       historyRef.current = await runAssistantTurn(
         apiKey, baseURL, model, historyRef.current, text, bridgeRef.current,
@@ -77,10 +82,14 @@ export const AssistantPanel = ({ bridgeRef, theme }: {
             next[next.length - 1] = { kind: 'assistant', text: next[next.length - 1].text + delta };
             return next;
           }),
-          onToolUse: name => setChat(prev => {
-            const next = prev.filter((e, i) => !(i === prev.length - 1 && e.kind === 'assistant' && e.text === ''));
-            return [...next, { kind: 'tool', text: name.replaceAll('_', ' ') }];
-          }),
+          onToolUse: (name, argsSummary) => {
+            if (MUTATING_TOOLS.has(name)) mutated = true;
+            setChat(prev => {
+              const next = prev.filter((e, i) => !(i === prev.length - 1 && e.kind === 'assistant' && e.text === ''));
+              const label = argsSummary ? `${name.replaceAll('_', ' ')} · ${argsSummary}` : name.replaceAll('_', ' ');
+              return [...next, { kind: 'tool', text: label }];
+            });
+          },
         },
       );
     } catch (err) {
@@ -88,9 +97,20 @@ export const AssistantPanel = ({ bridgeRef, theme }: {
     } finally {
       // drop an empty trailing assistant bubble if the turn ended on a tool/error
       setChat(prev => prev.filter((e, i) => !(i === prev.length - 1 && e.kind === 'assistant' && e.text === '')));
+      setUndoSnap(mutated ? snapBefore : null);
       setBusy(false);
     }
   };
+
+  const undo = () => {
+    if (!undoSnap) return;
+    bridgeRef.current.restore(undoSnap);
+    setUndoSnap(null);
+    setChat(prev => [...prev, { kind: 'tool', text: 'reverted the assistant’s changes' }]);
+  };
+
+  // Allow the rest of the app to open the panel with a prefilled question
+  if (askRef) askRef.current = (q: string) => { setOpen(true); setShowSettings(false); send(q); };
 
   const primary = theme === 'primary';
   const panelCls = primary
@@ -183,6 +203,16 @@ export const AssistantPanel = ({ bridgeRef, theme }: {
             ))}
           </div>
           <div className="px-3 pb-2 pt-1 flex-shrink-0 space-y-1.5">
+            {undoSnap != null && !busy && (
+              <button
+                onClick={undo}
+                className={`w-full py-1 text-[10px] font-bold uppercase tracking-wider cursor-pointer ${primary
+                  ? 'border-2 border-[#111111] hover:bg-[var(--p-yellow)]'
+                  : 'border border-[var(--system-green)]/40 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
+              >
+                ↩ Undo assistant changes
+              </button>
+            )}
             <div className="flex gap-1.5">
               <input
                 type="text"

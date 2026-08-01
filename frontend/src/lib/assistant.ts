@@ -41,7 +41,27 @@ export type AppBridge = {
   getClusterBreakdown: (attribute: string) => string;
   pinView: () => string;
   loadDemoData: () => Promise<string>;
+  // analysis (aggregates only)
+  correlate: (colA: string, colB: string) => string;
+  compareGroups: (numericCol: string, groupCol: string) => string;
+  suggestK: (maxK: number) => string;
+  suggestEps: (minSamples: number) => string;
+  // app management
+  switchDataset: (name: string) => string;
+  setCategoryVisibility: (categories: string[], state: 'normal' | 'muted' | 'hidden') => string;
+  transferColumn: (opts: { source_dataset: string; column: string; mode?: 'order' | 'match'; key_column?: string; new_name?: string }) => string;
+  removePin: (index: number) => string;
+  saveWorkspaceAs: (name: string) => Promise<string>;
+  // undo support: snapshot/restore the whole view state
+  snapshot: () => unknown;
+  restore: (snap: unknown) => void;
 };
+
+// Tools that change what the user sees — a turn using any of these offers Undo
+export const MUTATING_TOOLS = new Set([
+  'set_plot', 'run_clustering', 'pin_view', 'load_demo_data',
+  'switch_dataset', 'set_category_visibility', 'transfer_column', 'remove_pin',
+]);
 
 // Curated tutorial chunks — the single source of truth the assistant teaches
 // from, so tour answers describe the UI as it actually is.
@@ -171,6 +191,147 @@ const TOOLS: ChatCompletionTool[] = [
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'correlate',
+      description:
+        'Correlation between two numeric columns: Pearson r, Spearman rho, and n (pairwise-complete). Use for "is X related to Y" questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          col_a: { type: 'string' },
+          col_b: { type: 'string' },
+        },
+        required: ['col_a', 'col_b'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'compare_groups',
+      description:
+        'Compare a numeric column across the levels of a categorical column: per-group n/mean/sd, overall stats, and eta-squared (share of variance explained by group). Use for "does X differ by Y" questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          numeric_col: { type: 'string' },
+          group_col: { type: 'string', description: 'Categorical column defining the groups' },
+        },
+        required: ['numeric_col', 'group_col'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_k',
+      description:
+        'K-Means diagnostics on the currently plotted axes: mean silhouette score for each k from 2 upward (higher = better-separated clusters). Use before run_clustering to recommend k.',
+      parameters: {
+        type: 'object',
+        properties: {
+          max_k: { type: 'integer', description: 'Highest k to evaluate (default 8, max 12)' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_eps',
+      description:
+        'DBSCAN diagnostics on the currently plotted axes: percentiles of the k-distance curve (distance to each point\'s min_samples-th neighbor). A good eps usually sits near the curve\'s knee, around the 90th-95th percentile. Use before run_clustering with DBSCAN.',
+      parameters: {
+        type: 'object',
+        properties: {
+          min_samples: { type: 'integer', description: 'min_samples the user intends to use (default: current setting)' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'switch_dataset',
+      description: 'Make a different loaded dataset the active one (the one being plotted).',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string', description: 'Dataset name as shown in the sidebar list' } },
+        required: ['name'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_category_visibility',
+      description:
+        'Mute (fade), hide, or restore categories of the current color-by column in the plot and legend.',
+      parameters: {
+        type: 'object',
+        properties: {
+          categories: { type: 'array', items: { type: 'string' }, description: 'Category values to change' },
+          state: { type: 'string', enum: ['normal', 'muted', 'hidden'] },
+        },
+        required: ['categories', 'state'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'transfer_column',
+      description:
+        'Copy a column (typically Cluster labels) from another loaded dataset into the active one, aligned by row order or by a shared key column. Reports how many rows matched — warn the user if alignment looks wrong.',
+      parameters: {
+        type: 'object',
+        properties: {
+          source_dataset: { type: 'string' },
+          column: { type: 'string' },
+          mode: { type: 'string', enum: ['order', 'match'], description: 'order = align by row position (default); match = join on key_column' },
+          key_column: { type: 'string', description: 'Shared key column, required for mode=match' },
+          new_name: { type: 'string', description: 'Name for the new column (default: column·source)' },
+        },
+        required: ['source_dataset', 'column'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remove_pin',
+      description: 'Remove a pinned view by its position (1 = oldest pin).',
+      parameters: {
+        type: 'object',
+        properties: { index: { type: 'integer', description: '1-based pin position' } },
+        required: ['index'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_workspace',
+      description:
+        'Save the whole session (datasets, pins, settings, notes) as a named workspace in the browser. This persists outside the view state and is NOT covered by undo.',
+      parameters: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 const fmtNum = (v: number | undefined) =>
@@ -191,7 +352,7 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
   return `You are the built-in assistant of Scatter Lab, a browser-based workbench where researchers explore tabular data as interactive 2D/3D scatter plots, project data through PCA components, run DBSCAN/K-Means clustering, and compare pinned views. The user is typically a survey researcher.
 
-You can drive the app with your tools: change plot axes and coloring, switch 2D/3D, run clustering, read cluster compositions, and pin views for comparison. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
+You can drive the app with your tools: change plot axes and coloring, switch 2D/3D or the active dataset, run clustering, read cluster compositions, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
 You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
 
@@ -210,7 +371,20 @@ ${cols}`}`;
 
 export type StreamHandlers = {
   onText: (delta: string) => void;
-  onToolUse: (name: string) => void;
+  onToolUse: (name: string, argsSummary?: string) => void;
+};
+
+// Compact "k=v" rendering of tool arguments for the chat's tool chips
+export const summarizeArgs = (argsJson: string): string => {
+  try {
+    const o = JSON.parse(argsJson || '{}');
+    const s = Object.entries(o)
+      .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join('|') : String(v)}`)
+      .join(' ');
+    return s.length > 70 ? s.slice(0, 67) + '…' : s;
+  } catch {
+    return '';
+  }
 };
 
 const makeClient = (apiKey: string, baseURL: string) =>
@@ -267,6 +441,24 @@ export const runAssistantTurn = async (
         }
         case 'load_demo_data':
           return await bridge.loadDemoData();
+        case 'correlate':
+          return bridge.correlate(input.col_a, input.col_b);
+        case 'compare_groups':
+          return bridge.compareGroups(input.numeric_col, input.group_col);
+        case 'suggest_k':
+          return bridge.suggestK(Math.min(input?.max_k ?? 8, 12));
+        case 'suggest_eps':
+          return bridge.suggestEps(input?.min_samples);
+        case 'switch_dataset':
+          return bridge.switchDataset(input.name);
+        case 'set_category_visibility':
+          return bridge.setCategoryVisibility(input.categories ?? [], input.state);
+        case 'transfer_column':
+          return bridge.transferColumn(input);
+        case 'remove_pin':
+          return bridge.removePin(input.index);
+        case 'save_workspace':
+          return await bridge.saveWorkspaceAs(input.name);
         default:
           return `Unknown tool: ${name}`;
       }
@@ -304,12 +496,15 @@ export const runAssistantTurn = async (
 
     for (const call of msg.tool_calls) {
       if (call.type !== 'function') continue;
-      handlers.onToolUse(call.function.name);
+      handlers.onToolUse(call.function.name, summarizeArgs(call.function.arguments));
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
         content: await executeTool(call.function.name, call.function.arguments),
       });
+      // Yield a macrotask so React commits state between sequential tool calls —
+      // otherwise a later call in the same response reads the pre-update bridge
+      await new Promise(r => setTimeout(r, 30));
     }
   }
   handlers.onText('\n[Stopped: too many tool calls in one turn.]');
@@ -325,7 +520,15 @@ export const fetchModels = async (baseURL: string, apiKey: string): Promise<stri
     });
     if (!res.ok) return [];
     const data = await res.json();
-    const ids = (data?.data ?? []).map((m: any) => m?.id).filter((id: any) => typeof id === 'string');
+    const list: any[] = data?.data ?? [];
+    // OpenRouter reports supported_parameters per model; only models that
+    // support tool calling can drive the app. Endpoints without capability
+    // info (e.g. local runtimes) are left unfiltered.
+    const hasCaps = list.some(m => Array.isArray(m?.supported_parameters));
+    const ids = list
+      .filter(m => !hasCaps || (Array.isArray(m?.supported_parameters) && m.supported_parameters.includes('tools')))
+      .map(m => m?.id)
+      .filter((id: any) => typeof id === 'string');
     return ids.sort();
   } catch {
     return [];

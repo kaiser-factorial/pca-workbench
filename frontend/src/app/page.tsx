@@ -11,6 +11,7 @@ import { dbscan, kmeans } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
+import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
@@ -1144,6 +1145,7 @@ export default function Home() {
       setColorBy(name);
       const filled = newCol.filter(v => v != null).length;
       setUploadStatus(`Transferred "${sourceCol}" from ${src.name} → "${name}" (${filled}/${tgt.table.nRows} rows filled).`);
+      return newTable;
   };
 
   const deleteWorkspace = async (name: string) => {
@@ -1541,6 +1543,8 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
   };
 
   const bridgeRef = useRef<AppBridge>(null as any);
+  // Lets the sidebar open the assistant with a prefilled question (upload errors)
+  const askAssistantRef = useRef<((q: string) => void) | null>(null);
   bridgeRef.current = {
       getState: () => ({
           datasets: datasets.map(d => ({ name: d.name, nRows: d.table.nRows, active: d.id === activeId })),
@@ -1650,7 +1654,150 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           freshTableRef.current = table;
           return `Demo dataset loaded: ${table.nRows} rows, columns: ${table.columns.join(', ')}. It is now the active dataset, plotted on PC1/PC2/PC3.`;
       },
+
+      correlate: (colA, colB) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded.';
+          const bad = [colA, colB].filter(c => !c || !numericColumns(t).includes(c));
+          if (bad.length) return `Not numeric columns: ${bad.join(', ')}. Numeric: ${numericColumns(t).join(', ')}.`;
+          const { n, pearson, spearman } = correlation(t.data[colA], t.data[colB]);
+          if (pearson == null) return `Not enough complete pairs (n=${n}) to correlate ${colA} and ${colB}.`;
+          return `${colA} × ${colB}: Pearson r=${pearson.toFixed(3)}, Spearman rho=${spearman?.toFixed(3) ?? 'n/a'}, n=${n} (pairwise complete).`;
+      },
+
+      compareGroups: (numericCol, groupCol) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded.';
+          if (!numericColumns(t).includes(numericCol)) return `"${numericCol}" is not a numeric column. Numeric: ${numericColumns(t).join(', ')}.`;
+          if (!t.columns.includes(groupCol)) return `"${groupCol}" is not a column.`;
+          const res = statsCompareGroups(t.data[numericCol], t.data[groupCol]);
+          if (!res.groups.length) return 'No complete observations to compare.';
+          const lines = res.groups.map(g => `${g.group}: mean=${g.mean.toFixed(2)}, sd=${g.sd.toFixed(2)}, n=${g.n}`);
+          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd.toFixed(2)}, n=${res.overall.n}):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group).`;
+      },
+
+      suggestK: (maxK) => {
+          const t = latestTable();
+          if (!t || !activeDataset) return 'No dataset loaded.';
+          const ax = effectiveAxes(activeDataset, viewMode);
+          const cols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
+          const rows = silhouetteByK(cols, kmeans, maxK);
+          if (!rows.length) return 'Too few complete rows on the current axes to evaluate.';
+          const best = rows.reduce((a, b) => (b.silhouette > a.silhouette ? b : a));
+          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}):\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
+      },
+
+      suggestEps: (minSamplesArg) => {
+          const t = latestTable();
+          if (!t || !activeDataset) return 'No dataset loaded.';
+          const ms = minSamplesArg ?? minSamples;
+          const ax = effectiveAxes(activeDataset, viewMode);
+          const cols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
+          const res = kDistancePercentiles(cols, ms);
+          if (!res) return 'Too few complete rows on the current axes.';
+          const p = res.percentiles;
+          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}), n=${res.n}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise.`;
+      },
+
+      switchDataset: (name) => {
+          const ds = datasets.find(d => d.name === name) ?? datasets.find(d => d.name.toLowerCase() === String(name).toLowerCase());
+          if (!ds) return `No dataset named "${name}". Loaded: ${datasets.map(d => d.name).join(', ') || 'none'}.`;
+          if (ds.id === activeId) return `"${ds.name}" is already active.`;
+          selectDataset(ds.id);
+          freshTableRef.current = ds.table;
+          return `Switched active dataset to "${ds.name}" (${ds.table.nRows} rows).`;
+      },
+
+      setCategoryVisibility: (categories, state) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded.';
+          const vals = new Set((t.data[colorBy] ?? []).map(v => String(v ?? 'N/A')));
+          const unknown = categories.filter(c => !vals.has(String(c)));
+          if (unknown.length) return `Not categories of "${colorBy}": ${unknown.join(', ')}. Available: ${Array.from(vals).slice(0, 20).join(', ')}.`;
+          setMutedMap(prev => {
+              const next = { ...prev };
+              for (const c of categories) {
+                  if (state === 'normal') delete next[String(c)];
+                  else next[String(c)] = state;
+              }
+              return next;
+          });
+          return `${state === 'normal' ? 'Restored' : state === 'muted' ? 'Muted' : 'Hid'} ${categories.length} categor${categories.length === 1 ? 'y' : 'ies'} of ${colorBy}.`;
+      },
+
+      transferColumn: ({ source_dataset, column, mode = 'order', key_column, new_name }) => {
+          const tgt = activeDataset;
+          if (!tgt) return 'No dataset loaded.';
+          const src = datasets.find(d => d.name === source_dataset) ?? datasets.find(d => d.name.toLowerCase() === String(source_dataset).toLowerCase());
+          if (!src) return `No dataset named "${source_dataset}". Loaded: ${datasets.map(d => d.name).join(', ')}.`;
+          if (src.id === tgt.id) return 'Source and target are the same dataset.';
+          if (!src.table.columns.includes(column)) return `"${column}" is not a column of ${src.name}. Its columns: ${src.table.columns.join(', ')}.`;
+          if (mode === 'order' && src.table.nRows !== tgt.table.nRows) {
+              return `Row counts differ (${src.table.nRows} vs ${tgt.table.nRows}) — order alignment would mis-join. Use mode=match with a shared key column. Shared columns: ${src.table.columns.filter(c => tgt.table.columns.includes(c)).join(', ') || 'none'}.`;
+          }
+          if (mode === 'match' && (!key_column || !src.table.columns.includes(key_column) || !tgt.table.columns.includes(key_column))) {
+              return `mode=match needs a key_column present in both datasets. Shared columns: ${src.table.columns.filter(c => tgt.table.columns.includes(c)).join(', ') || 'none'}.`;
+          }
+          const name = (new_name?.trim() || `${column}·${src.name}`);
+          const nt = handleTransfer({ sourceId: src.id, sourceCol: column, mode, keyCol: key_column ?? '', name });
+          if (nt) freshTableRef.current = nt;
+          const srcColArr = src.table.data[column];
+          let filled = tgt.table.nRows;
+          if (mode === 'match' && key_column) {
+              const keys = new Set(src.table.data[key_column].map(String));
+              filled = tgt.table.data[key_column].filter(v => keys.has(String(v))).length;
+          }
+          return `Transferred "${column}" from ${src.name} into the active dataset as "${name}" (${mode} mode, ~${filled}/${tgt.table.nRows} rows filled). Points are now colored by it.`;
+      },
+
+      removePin: (index) => {
+          if (!pinnedViews.length) return 'There are no pinned views.';
+          const i = Math.floor(index) - 1;
+          if (i < 0 || i >= pinnedViews.length) return `Pin index out of range — there ${pinnedViews.length === 1 ? 'is 1 pin' : `are ${pinnedViews.length} pins`} (1-based). Pins: ${pinnedViews.map((v: any, j: number) => `${j + 1}: ${v.label}`).join('; ')}.`;
+          const removed = pinnedViews[i];
+          setPinnedViews(pinnedViews.filter((_: any, j: number) => j !== i));
+          return `Removed pin ${index} (“${removed.label}”).`;
+      },
+
+      saveWorkspaceAs: async (name) => {
+          const trimmed = String(name ?? '').trim();
+          if (!trimmed) return 'Workspace name required.';
+          if (datasets.length === 0) return 'Nothing to save — no dataset loaded.';
+          try {
+              await wsStore.saveWorkspace(trimmed, buildWorkspacePayload());
+              await refreshWorkspaces();
+              setWorkspaceName(trimmed);
+              return `Workspace "${trimmed}" saved locally (IndexedDB). Note: this persists outside the view state and is not covered by undo.`;
+          } catch (err: any) {
+              return `Save failed: ${err?.message ?? err}`;
+          }
+      },
+
+      snapshot: () => ({
+          datasets, activeId, colorBy, viewMode, showAxes, pinnedViews,
+          clusterMethod, eps, minSamples, k, breakdownBy, mutedMap,
+      }),
+
+      restore: (snap: any) => {
+          if (!snap) return;
+          skipMuteReset.current = true;
+          setDatasets(snap.datasets);
+          setActiveId(snap.activeId);
+          setColorBy(snap.colorBy);
+          setViewMode(snap.viewMode);
+          setShowAxes(snap.showAxes);
+          setPinnedViews(snap.pinnedViews);
+          setClusterMethod(snap.clusterMethod);
+          setEps(snap.eps);
+          setMinSamples(snap.minSamples);
+          setK(snap.k);
+          setBreakdownBy(snap.breakdownBy);
+          setMutedMap(snap.mutedMap);
+          freshTableRef.current = null;
+      },
   };
+  // Console/testing access to the assistant bridge (local state only)
+  if (typeof window !== 'undefined') (window as any).__scatterlabBridge = bridgeRef;
 
   const renderView = (view: any, index: number) => {
       // view object is either the active state or a pinned state
@@ -1822,6 +1969,14 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             )}
             {uploadStatus && (
               <p className="text-[11px] leading-snug opacity-70 break-words">{uploadStatus}</p>
+            )}
+            {/^Error|failed/i.test(uploadStatus) && (
+              <button
+                onClick={() => askAssistantRef.current?.(`My upload failed with this message: "${uploadStatus}". Explain what's wrong with my file and how to fix it.`)}
+                className="text-[11px] underline-offset-2 hover:underline opacity-60 hover:opacity-100 text-left cursor-pointer"
+              >
+                ✳ Ask the assistant about this error
+              </button>
             )}
             {datasets.length > 0 && (
               <div className="space-y-1.5 pt-1">
@@ -1996,7 +2151,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
         ) : (
             <EmptyState theme={theme} onLoadDemo={loadDemo} busy={isUploading} />
         )}
-        <AssistantPanel bridgeRef={bridgeRef} theme={theme} />
+        <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} />
       </main>
     </div>
   );
