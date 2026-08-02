@@ -12,6 +12,7 @@ import * as wsStore from "@/lib/workspaces";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
+import { runPCA } from "@/lib/pca";
 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
@@ -589,6 +590,84 @@ const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, on
     );
 };
 
+// In-app PCA: pick variables, pick k, run — scores land as PC columns and the
+// scree bars show what each component buys you.
+const PCASection = ({ table, theme, lastRun, onRun }: {
+    table: DataTable,
+    theme: string | undefined,
+    lastRun: { varianceExplained: number[]; cumulative: number[] } | null,
+    onRun: (vars: string[], k: number, standardize: boolean) => void,
+}) => {
+    const numericVars = useMemo(
+        () => numericColumns(table).filter(c => !/^PC\d+$/.test(c) && c !== 'Cluster'),
+        [table]
+    );
+    const [selected, setSelected] = useState<Set<string>>(() => new Set(numericVars));
+    const [k, setK] = useState(3);
+    const [standardize, setStandardize] = useState(true);
+    // new dataset → new default selection
+    useEffect(() => { setSelected(new Set(numericVars)); }, [numericVars]);
+
+    const toggle = (c: string) => setSelected(prev => {
+        const next = new Set(prev);
+        if (next.has(c)) next.delete(c); else next.add(c);
+        return next;
+    });
+    const maxK = Math.max(2, Math.min(10, selected.size));
+
+    return (
+        <div className="space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+                <span className="opacity-60">{selected.size}/{numericVars.length} variables</span>
+                <span className="flex gap-2">
+                    <button onClick={() => setSelected(new Set(numericVars))} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">all</button>
+                    <button onClick={() => setSelected(new Set())} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">none</button>
+                </span>
+            </div>
+            <div className="max-h-36 overflow-y-auto space-y-0.5 pr-1 border border-[var(--border)]/30 p-1.5">
+                {numericVars.map(c => (
+                    <label key={c} className="flex items-center gap-2 cursor-pointer hover:opacity-80">
+                        <input type="checkbox" checked={selected.has(c)} onChange={() => toggle(c)} />
+                        <span className="truncate" title={c}>{c}</span>
+                    </label>
+                ))}
+                {numericVars.length === 0 && <div className="opacity-50 p-1">No numeric variables available.</div>}
+            </div>
+            <label className="flex justify-between items-center">
+                <span className="opacity-70">Components: <b>{Math.min(k, maxK)}</b></span>
+                <input type="range" min={2} max={maxK} step={1} value={Math.min(k, maxK)} onChange={e => setK(parseInt(e.target.value))} className="w-32" />
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer select-none" title="On: correlation-based PCA (each variable weighted equally — right when scales differ). Off: covariance-based (high-variance variables dominate).">
+                <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
+                <span className="opacity-80">Standardize variables (correlation PCA)</span>
+            </label>
+            <button
+                onClick={() => onRun(Array.from(selected), Math.min(k, maxK), standardize)}
+                disabled={selected.size < 2}
+                className={`w-full text-sm font-bold py-2 disabled:opacity-40 cursor-pointer ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--mauk)]'}`}
+            >
+                Run PCA
+            </button>
+            {lastRun && (
+                <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
+                    <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">Variance explained</div>
+                    <div className="flex items-end gap-1 h-14">
+                        {lastRun.varianceExplained.map((v, i) => (
+                            <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`PC${i + 1}: ${(v * 100).toFixed(1)}% (cumulative ${(lastRun.cumulative[i] * 100).toFixed(1)}%)`}>
+                                <div className="w-full" style={{ height: `${Math.max(2, v * 100 * 1.4)}px`, backgroundColor: theme === 'primary' ? 'var(--p-blue)' : 'var(--system-green)', opacity: 0.85 }} />
+                                <span className="text-[9px] opacity-60">{i + 1}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="text-[10px] opacity-70">
+                        {lastRun.varianceExplained.map((v, i) => `PC${i + 1} ${(v * 100).toFixed(0)}%`).join(' · ')} — cumulative {(lastRun.cumulative[lastRun.cumulative.length - 1] * 100).toFixed(0)}%
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 // Cluster × attribute cross-tab: per cluster, what share each attribute value
 // holds. Pure client-side compute over the columnar table.
 const ClusterBreakdown = ({ table, attr, onAttrChange }: { table: DataTable, attr: string, onAttrChange: (v: string) => void }) => {
@@ -896,6 +975,10 @@ export default function Home() {
       setMutedMap({});
   }, [colorBy, activeId]);
 
+
+  // PCA state: scree info from the most recent in-app run (per active dataset)
+  const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[] } | null>(null);
+  useEffect(() => { setPcaInfo(null); }, [activeId]);
 
   // Clustering state
   const [clusterMethod, setClusterMethod] = useState("NONE");
@@ -1512,6 +1595,39 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       setPinnedViews(pinnedViews.filter(v => v.id !== id));
   };
 
+  const handleRunPCA = (vars: string[], k: number, standardize: boolean): string => {
+      const t = freshTableRef.current ?? processedData;
+      if (!t || !activeDataset) return 'No dataset loaded.';
+      try {
+          const res = runPCA(t, vars, { k, standardize });
+          freshTableRef.current = res.table;
+          const topContributors = Object.fromEntries(
+              Object.entries(res.loadings).map(([pc, rows]) => [pc, rows.slice(0, 5)])
+          );
+          setDatasets(prev => prev.map(d => d.id === activeId
+              ? {
+                  ...d,
+                  table: res.table,
+                  summary: { ...(d.summary ?? {}), top_contributors: topContributors },
+                  axes: { x: 'PC1', y: 'PC2', z: res.k >= 3 ? 'PC3' : null },
+                  labels: { x: 'PC1', y: 'PC2', z: res.k >= 3 ? 'PC3' : 'Z' },
+                  axes2d: { x: 'PC1', y: 'PC2' },
+                  labels2d: { x: 'PC1', y: 'PC2' },
+                }
+              : d));
+          if (res.k < 3) setViewMode('2D');
+          setPcaInfo({ varianceExplained: res.varianceExplained, cumulative: res.cumulative });
+          const pct = res.varianceExplained.map((v, i) => `PC${i + 1} ${(v * 100).toFixed(0)}%`).join(', ');
+          const msg = `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%). Scores added as PC columns and plotted.`;
+          setUploadStatus(msg);
+          return msg;
+      } catch (err: any) {
+          const msg = `PCA failed: ${err?.message ?? err}`;
+          setUploadStatus(msg);
+          return msg;
+      }
+  };
+
   // --- Assistant bridge ------------------------------------------------------
   // Tool calls in one model response run back-to-back, before React re-renders,
   // so a clustering result must be readable by the next tool immediately:
@@ -1653,6 +1769,16 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (!table) return 'Demo data failed to load.';
           freshTableRef.current = table;
           return `Demo dataset loaded: ${table.nRows} rows, columns: ${table.columns.join(', ')}. It is now the active dataset, plotted on PC1/PC2/PC3.`;
+      },
+
+      runPCA: (opts) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded.';
+          const numeric = numericColumns(t).filter(c => !/^PC\d+$/.test(c) && c !== 'Cluster');
+          const vars = (opts.variables?.length ? opts.variables : numeric);
+          const bad = vars.filter(v => !numeric.includes(v));
+          if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;
+          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 2), 10), opts.standardize ?? true);
       },
 
       correlate: (colA, colB) => {
@@ -2034,7 +2160,18 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
               </SidebarSection>
 
-              <SidebarSection title="View" step={3} hasBorder theme={theme}>
+              <SidebarSection title="PCA" step={3} hasBorder theme={theme}>
+                {processedData && (
+                  <PCASection
+                    table={processedData}
+                    theme={theme}
+                    lastRun={pcaInfo}
+                    onRun={handleRunPCA}
+                  />
+                )}
+              </SidebarSection>
+
+              <SidebarSection title="View" step={4} hasBorder theme={theme}>
                 <div className="flex gap-2 mb-2">
                     <button onClick={() => setViewMode("2D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "2D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>2D</button>
                     <button onClick={() => setViewMode("3D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "3D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>3D</button>
@@ -2079,7 +2216,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 </button>
               </SidebarSection>
 
-              <SidebarSection title="Cluster" step={4} hasBorder theme={theme}>
+              <SidebarSection title="Cluster" step={5} hasBorder theme={theme}>
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
                     <option value="DBSCAN">DBSCAN</option>
@@ -2110,7 +2247,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
                   </SidebarSection>
 
-              <SidebarSection title="Export & Pin" step={5} hasBorder theme={theme}>
+              <SidebarSection title="Export & Pin" step={6} hasBorder theme={theme}>
                   <button onClick={pinCurrentView} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)]'}`}>
                       <Pin className="w-4 h-4" /> Pin View
                   </button>

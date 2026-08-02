@@ -42,6 +42,7 @@ export type AppBridge = {
   pinView: () => string;
   loadDemoData: () => Promise<string>;
   // analysis (aggregates only)
+  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean }) => string;
   correlate: (colA: string, colB: string) => string;
   compareGroups: (numericCol: string, groupCol: string) => string;
   suggestK: (maxK: number) => string;
@@ -61,6 +62,7 @@ export type AppBridge = {
 export const MUTATING_TOOLS = new Set([
   'set_plot', 'run_clustering', 'pin_view', 'load_demo_data',
   'switch_dataset', 'set_category_visibility', 'transfer_column', 'remove_pin',
+  'run_pca',
 ]);
 
 // Curated tutorial chunks — the single source of truth the assistant teaches
@@ -74,6 +76,8 @@ export const TUTORIAL: Record<string, string> = {
     'The Variables panel ("2. Variables") is both data profile and plot control. Every column shows its type, range or category count, missing values, and a mini-histogram. The small buttons on each row do the plotting: X, Y, Z put a numeric column on that axis; C colors the points by that column. If a components file was used, "Top PC contributors" shows which variables load on each PC.',
   plotting:
     'The View section ("3. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
+  pca:
+    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. Scores are added as PC1…PCk columns and plotted immediately; the scree bars show variance explained per component, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
     'In "4. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
   compare_pin:
@@ -189,6 +193,23 @@ const TOOLS: ChatCompletionTool[] = [
       description:
         'Load the built-in demo dataset (synthetic survey, 300 rows, with PCA components). Useful during a tour or when the user has no data loaded and wants to see the app in action.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_pca',
+      description:
+        'Run a principal component analysis on numeric variables of the active dataset, entirely in the browser. Adds PC1..PCk score columns, reports variance explained and top loadings, and plots the first components. Defaults: all numeric non-PC variables, 3 components, standardized (correlation PCA).',
+      parameters: {
+        type: 'object',
+        properties: {
+          variables: { type: 'array', items: { type: 'string' }, description: 'Numeric columns to include (default: all numeric non-PC columns)' },
+          n_components: { type: 'integer', description: '2-10, default 3' },
+          standardize: { type: 'boolean', description: 'Default true (correlation-based PCA)' },
+        },
+        additionalProperties: false,
+      },
     },
   },
   {
@@ -352,7 +373,7 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
   return `You are the built-in assistant of Scatter Lab, a browser-based workbench where researchers explore tabular data as interactive 2D/3D scatter plots, project data through PCA components, run DBSCAN/K-Means clustering, and compare pinned views. The user is typically a survey researcher.
 
-You can drive the app with your tools: change plot axes and coloring, switch 2D/3D or the active dataset, run clustering, read cluster compositions, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
+You can drive the app with your tools: change plot axes and coloring, switch 2D/3D or the active dataset, run clustering, read cluster compositions, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
 You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
 
@@ -441,6 +462,8 @@ export const runAssistantTurn = async (
         }
         case 'load_demo_data':
           return await bridge.loadDemoData();
+        case 'run_pca':
+          return bridge.runPCA(input ?? {});
         case 'correlate':
           return bridge.correlate(input.col_a, input.col_b);
         case 'compare_groups':
