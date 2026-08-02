@@ -152,7 +152,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
     let mutated = false;
     try {
       historyRef.current = await runAssistantTurn(
-        apiKey, baseURL, model, historyRef.current, text, bridgeRef.current,
+        apiKey, baseURL, model, historyRef.current, text, bridgeRef,
         {
           onText: delta => setChat(prev => {
             const next = [...prev];

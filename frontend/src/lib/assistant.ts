@@ -491,13 +491,17 @@ export const runAssistantTurn = async (
   model: string,
   history: ChatCompletionMessageParam[],
   userText: string,
-  bridge: AppBridge,
+  // The REF, not the bridge object: React reassigns .current with fresh
+  // closures on every commit, so each tool call sees post-commit state.
+  // (Passing the object froze the whole turn at send-time state.)
+  bridgeRef: { current: AppBridge },
   handlers: StreamHandlers,
 ): Promise<ChatCompletionMessageParam[]> => {
   const client = makeClient(apiKey, baseURL);
   const messages: ChatCompletionMessageParam[] = [...history, { role: 'user', content: userText }];
 
   const executeTool = async (name: string, argsJson: string): Promise<string> => {
+    const bridge = bridgeRef.current; // fresh closures as of the latest commit
     let input: any = {};
     try {
       input = argsJson ? JSON.parse(argsJson) : {};
@@ -568,7 +572,7 @@ export const runAssistantTurn = async (
       model,
       max_tokens: 4096,
       messages: [
-        { role: 'system', content: buildSystemPrompt(bridge) },
+        { role: 'system', content: buildSystemPrompt(bridgeRef.current) },
         ...messages,
       ],
       tools: TOOLS,
