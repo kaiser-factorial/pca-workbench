@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { Sparkles, Settings2, X, CornerDownLeft } from 'lucide-react';
+import { Sparkles, Settings2, Minus, CornerDownLeft, Info } from 'lucide-react';
 import {
   AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
   runAssistantTurn, fetchModels, suggestModels, describeApiError,
@@ -15,7 +15,14 @@ const LS = {
   key: 'scatterlab.assistant.key',
   model: 'scatterlab.assistant.model',
   baseURL: 'scatterlab.assistant.baseurl',
+  layout: 'scatterlab.assistant.layout',
 };
+
+// Panel geometry: bottom-anchored, slidable along the bottom edge, resizable
+// from the left/top edges. `right` is the distance from the container's right.
+type Layout = { w: number; h: number; right: number };
+const DEFAULT_LAYOUT: Layout = { w: 360, h: 560, right: 16 };
+const MIN_W = 300, MAX_W = 760, MIN_H = 280;
 
 export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   bridgeRef: React.MutableRefObject<AppBridge>,
@@ -33,6 +40,9 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   const [busy, setBusy] = useState(false);
   const historyRef = useRef<ChatCompletionMessageParam[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<Layout>(DEFAULT_LAYOUT);
   // Undo: view-state snapshot taken before the last mutating turn
   const [undoSnap, setUndoSnap] = useState<unknown>(null);
   // OAuth failure to surface inside the settings view (chat may be hidden there)
@@ -42,6 +52,10 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
     setApiKey(localStorage.getItem(LS.key) ?? '');
     setModel(localStorage.getItem(LS.model) ?? DEFAULT_MODEL);
     setBaseURL(localStorage.getItem(LS.baseURL) ?? DEFAULT_BASE_URL);
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS.layout) ?? 'null');
+      if (saved && typeof saved.w === 'number') setLayout(saved);
+    } catch { /* keep defaults */ }
     // Returning from OpenRouter's OAuth approval? Exchange the code for a key.
     completeOpenRouterOAuth()
       .then(key => {
@@ -70,6 +84,39 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [chat]);
 
+  // --- drag & resize ---------------------------------------------------------
+  const beginDrag = (mode: 'move' | 'w' | 'h' | 'wh') => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY;
+    const start = layout;
+    const container = panelRef.current?.parentElement;
+    const cw = container?.clientWidth ?? window.innerWidth;
+    const ch = container?.clientHeight ?? window.innerHeight;
+    let latest = start;
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      const next = { ...start };
+      if (mode === 'move') {
+        next.right = Math.min(Math.max(start.right - dx, 8), Math.max(8, cw - start.w - 8));
+      }
+      if (mode === 'w' || mode === 'wh') {
+        next.w = Math.min(Math.max(start.w - dx, MIN_W), Math.min(MAX_W, cw - start.right - 8));
+      }
+      if (mode === 'h' || mode === 'wh') {
+        next.h = Math.min(Math.max(start.h - dy, MIN_H), ch - 24);
+      }
+      latest = next;
+      setLayout(next);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      localStorage.setItem(LS.layout, JSON.stringify(latest));
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
   const saveSettings = (key: string, mdl: string, url: string) => {
     localStorage.setItem(LS.key, key);
     localStorage.setItem(LS.model, mdl);
@@ -88,6 +135,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
     const text = (preset ?? input).trim();
     if (!text || busy || !apiKey) return;
     setInput('');
+    if (composerRef.current) composerRef.current.style.height = 'auto';
     setChat(prev => [...prev, { kind: 'user', text }, { kind: 'assistant', text: '' }]);
     setBusy(true);
     const snapBefore = bridgeRef.current.snapshot();
@@ -149,28 +197,49 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
       <button
         onClick={() => setOpen(true)}
         title="Open the assistant"
-        className={`absolute bottom-4 right-4 z-40 flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider cursor-pointer ${primary
+        className={`absolute bottom-4 z-40 flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider cursor-pointer ${primary
           ? 'bauhaus-btn bg-[var(--p-red)] text-white'
           : 'bg-black/80 border border-[var(--system-green)]/60 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
+        style={{ right: layout.right }}
       >
         <Sparkles className="w-4 h-4" /> Assistant
       </button>
     );
   }
 
+  const chatMode = !!apiKey && !showSettings;
+
   return (
-    <div className={`absolute bottom-4 right-4 z-40 w-[360px] flex flex-col ${panelCls}`} style={{ maxHeight: 'min(560px, calc(100% - 2rem))' }}>
-      {/* header */}
-      <div className={`flex items-center justify-between px-3 py-2 flex-shrink-0 ${headerCls}`}>
+    <div
+      ref={panelRef}
+      className={`absolute bottom-4 z-40 flex flex-col ${panelCls}`}
+      style={{
+        width: layout.w,
+        right: layout.right,
+        ...(chatMode ? { height: layout.h } : {}),
+        maxHeight: 'calc(100% - 2rem)',
+      }}
+    >
+      {/* resize handles: left edge, top edge, top-left corner */}
+      <div onPointerDown={beginDrag('w')} className="absolute -left-1 top-0 bottom-0 w-2 cursor-ew-resize z-20" title="Drag to resize" />
+      <div onPointerDown={beginDrag('h')} className="absolute top-[-4px] left-0 right-0 h-2 cursor-ns-resize z-20" title="Drag to resize" />
+      <div onPointerDown={beginDrag('wh')} className="absolute -left-1.5 top-[-6px] w-5 h-5 cursor-nwse-resize z-30" title="Drag to resize" />
+
+      {/* header — drag to slide the panel along the bottom */}
+      <div
+        onPointerDown={beginDrag('move')}
+        className={`flex items-center justify-between px-3 py-2 flex-shrink-0 cursor-grab active:cursor-grabbing select-none ${headerCls}`}
+        title="Drag to move"
+      >
         <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest">
           <Sparkles className="w-3.5 h-3.5" /> Assistant
         </span>
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
           <button onClick={() => setShowSettings(s => !s)} title="Assistant settings" className="p-1 hover:opacity-60 cursor-pointer">
             <Settings2 className="w-4 h-4" />
           </button>
-          <button onClick={() => setOpen(false)} title="Close assistant" className="p-1 hover:opacity-60 cursor-pointer">
-            <X className="w-4 h-4" />
+          <button onClick={() => setOpen(false)} title="Minimize — your conversation is kept" className="p-1 hover:opacity-60 cursor-pointer">
+            <Minus className="w-4 h-4" />
           </button>
         </span>
       </div>
@@ -236,22 +305,30 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
                 ↩ Undo assistant changes
               </button>
             )}
-            <div className="flex gap-1.5">
-              <input
-                type="text"
+            <div className="flex gap-1.5 items-end">
+              <textarea
+                ref={composerRef}
+                rows={1}
                 value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') send(); }}
+                onChange={e => {
+                  setInput(e.target.value);
+                  // auto-grow up to ~5 lines, then scroll
+                  e.target.style.height = 'auto';
+                  e.target.style.height = Math.min(e.target.scrollHeight, 110) + 'px';
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+                }}
                 aria-label="Message the assistant"
-                placeholder={busy ? 'Working…' : 'Ask or instruct…'}
+                placeholder={busy ? 'Working…' : 'Ask or instruct… (Shift+Enter for a new line)'}
                 disabled={busy}
-                className={`flex-1 min-w-0 px-2 py-1.5 text-xs outline-none ${inputCls}`}
+                className={`flex-1 min-w-0 px-2 py-1.5 text-xs outline-none resize-none leading-snug overflow-y-auto ${inputCls}`}
               />
               <button
                 onClick={() => send()}
                 disabled={busy || !input.trim()}
                 title="Send"
-                className={`px-2.5 disabled:opacity-30 cursor-pointer ${primary ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'border border-[var(--system-green)]/60 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
+                className={`px-2.5 py-1.5 disabled:opacity-30 cursor-pointer ${primary ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'border border-[var(--system-green)]/60 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
               >
                 <CornerDownLeft className="w-3.5 h-3.5" />
               </button>
@@ -265,6 +342,13 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
     </div>
   );
 };
+
+// Small ⓘ with the long-form explanation as a native tooltip
+const InfoTip = ({ text }: { text: string }) => (
+  <span title={text} className="inline-flex align-middle ml-1 opacity-50 hover:opacity-100 cursor-help">
+    <Info className="w-3 h-3" />
+  </span>
+);
 
 const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authError, onConnect, onSave, onClearKey }: {
   primary: boolean, inputCls: string,
@@ -298,10 +382,9 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authE
   return (
     <div className="px-3 py-3 space-y-2.5 overflow-y-auto">
       {!apiKey && (
-        <p className="text-[11px] leading-snug opacity-70">
-          The assistant runs on your own OpenRouter account — one account covers Claude, GPT,
-          Gemini, and more. Your key is stored only in this browser and never included in
-          exported workspaces.
+        <p className="text-[11px] leading-snug opacity-80">
+          <strong>Your key, stored only in this browser.</strong>
+          <InfoTip text="One OpenRouter account covers Claude, GPT, Gemini, and more. The key never appears in exported workspaces and is only ever sent to the API endpoint you configure below." />
         </p>
       )}
       {authError && <p className="text-[11px] leading-snug text-red-500">{authError}</p>}
@@ -313,9 +396,8 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authE
       >
         {apiKey ? 'Reconnect OpenRouter' : 'Connect OpenRouter'}
       </button>
-      <p className="text-[10px] opacity-40 leading-snug">
-        One click: approve on openrouter.ai and a scoped key is issued to this app automatically.
-        Or paste a key manually below (any OpenAI-compatible endpoint works).
+      <p className="text-[10px] opacity-50 leading-snug">
+        <strong>One click</strong> — approve on openrouter.ai, done. Or paste a key below.
       </p>
       <div className="space-y-1">
         <div className={labelCls}>API key</div>
@@ -323,7 +405,10 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authE
           placeholder="sk-or-…" className={`w-full px-2 py-1.5 text-xs outline-none ${inputCls}`} />
       </div>
       <div className="space-y-1">
-        <div className={labelCls}>Model</div>
+        <div className={labelCls}>
+          Model
+          <InfoTip text="Suggestions are the newest full-strength model per family. Only models that support tool calling are allowed — others can't drive the app." />
+        </div>
         {suggested.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {suggested.map(id => (
@@ -347,15 +432,14 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authE
           {ids.map(id => <option key={id} value={id} />)}
         </datalist>
         {modelError && <p className="text-[10px] leading-snug text-red-500">{modelError}</p>}
-        {ids.length > 0 && <p className="text-[9px] opacity-40">Only tool-capable models are listed ({ids.length} available) — others can't drive the app.</p>}
       </div>
       <div className="space-y-1">
-        <div className={labelCls}>Endpoint (OpenAI-compatible)</div>
+        <div className={labelCls}>
+          Endpoint
+          <InfoTip text="Any OpenAI-compatible endpoint works. Default is OpenRouter; point it at a local runtime (e.g. Ollama) for a fully offline assistant." />
+        </div>
         <input type="text" value={url} onChange={e => setUrl(e.target.value)}
           className={`w-full px-2 py-1.5 text-xs outline-none ${inputCls}`} />
-        <p className="text-[9px] opacity-40 leading-snug">
-          Default is OpenRouter. Point this at a local runtime (e.g. Ollama) for a fully offline assistant.
-        </p>
       </div>
       <div className="flex gap-2">
         <button
