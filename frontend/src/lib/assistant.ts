@@ -85,17 +85,17 @@ export const TUTORIAL: Record<string, string> = {
   variables:
     'The Variables panel ("2. Variables") is both data profile and plot control. Every column shows its type, range or category count, missing values, and a mini-histogram. The small buttons on each row do the plotting: X, Y, Z put a numeric column on that axis; C colors the points by that column. If a components file was used, "Top PC contributors" shows which variables load on each PC.',
   plotting:
-    'The View section ("3. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
+    'The View section ("4. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
   pca:
     'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. Scores are added as PC1…PCk columns and plotted immediately; the scree bars show variance explained per component, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
-    'In "4. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
+    'In "5. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
   compare_pin:
-    '"Pin View" (section 5) freezes the current plot as a snapshot; the canvas tiles into a grid (up to 4 panes) so different axis choices, colorings, or cluster runs can be compared side by side. The live view keeps updating; pins do not.',
+    '"Pin View" (section 6) freezes the current plot as a snapshot; the canvas tiles into a grid (up to 4 panes) so different axis choices, colorings, or cluster runs can be compared side by side. The live view keeps updating; pins do not.',
   transfer:
     'With two or more datasets loaded, "Transfer column from another dataset" (bottom of the Data section) copies a column — typically Cluster labels — into the active dataset, aligned by row order (with an automatic identity check) or by a shared key column. This lets you e.g. color one projection space by clusters found in another.',
   export:
-    'Section 5 exports the active view: PNG (2x resolution), a rotating GIF of the 3D view, or a self-contained interactive HTML file that works offline — nice for sending a spinnable 3D plot to a collaborator. "Add title & legend to exports" controls the dressing.',
+    'Section 6 exports the active view: PNG (2x resolution), a rotating GIF of the 3D view, or a self-contained interactive HTML file that works offline — nice for sending a spinnable 3D plot to a collaborator. "Add title & legend to exports" controls the dressing.',
   workspaces:
     'The Workspace section saves the entire session — datasets, pins, notes, settings — locally in the browser (IndexedDB). "Export as file" downloads a workspace as a shareable file; "Import file" loads one. Nothing syncs to any server.',
   privacy:
