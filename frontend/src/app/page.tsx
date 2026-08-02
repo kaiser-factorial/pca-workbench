@@ -1714,6 +1714,16 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
   const bridgeRef = useRef<AppBridge>(null as any);
   // Lets the sidebar open the assistant with a prefilled question (upload errors)
   const askAssistantRef = useRef<((q: string) => void) | null>(null);
+  // Assistant dock mode: right column (default) / bottom row / floating overlay
+  const [assistantDock, setAssistantDock] = useState<'right' | 'bottom' | 'float'>('right');
+  useEffect(() => {
+      const saved = localStorage.getItem('scatterlab.assistant.dock');
+      if (saved === 'right' || saved === 'bottom' || saved === 'float') setAssistantDock(saved);
+  }, []);
+  const changeDock = (d: 'right' | 'bottom' | 'float') => {
+      setAssistantDock(d);
+      localStorage.setItem('scatterlab.assistant.dock', d);
+  };
   bridgeRef.current = {
       getState: () => ({
           datasets: datasets.map(d => ({ name: d.name, nRows: d.table.nRows, active: d.id === activeId })),
@@ -1818,6 +1828,12 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       },
 
       loadDemoData: async () => {
+          const existing = datasets.find(d => d.name === 'demo_dataset');
+          if (existing) {
+              if (existing.id !== activeId) selectDataset(existing.id);
+              freshTableRef.current = existing.table;
+              return `The demo dataset is already loaded (${existing.table.nRows} rows) and is now the active dataset — no need to load it again.`;
+          }
           const table = await loadDemo();
           if (!table) return 'Demo data failed to load.';
           freshTableRef.current = table;
@@ -2367,17 +2383,19 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       )}
 
       {/* Main visualizer area */}
-      <main className="flex-1 relative bg-[var(--background)] z-10 flex overflow-hidden">
-        {allViews.length > 0 ? (
-            <>
-                <TmuxGrid views={allViews} renderView={renderView} />
-                <ThemedNotes notes={notes} setNotes={setNotes} theme={theme} />
-                <ThemedLegend view={allViews[0]} theme={theme} muted={mutedMap} onToggle={toggleMuted} />
-            </>
-        ) : (
-            <EmptyState theme={theme} onLoadDemo={loadDemo} onUpload={() => dsInputRef.current?.click()} busy={isUploading} />
-        )}
-        <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} />
+      <main className={`flex-1 relative bg-[var(--background)] z-10 flex overflow-hidden ${assistantDock === 'bottom' ? 'flex-col' : ''}`}>
+        <div className="flex-1 relative min-w-0 min-h-0 flex overflow-hidden">
+          {allViews.length > 0 ? (
+              <>
+                  <TmuxGrid views={allViews} renderView={renderView} />
+                  <ThemedNotes notes={notes} setNotes={setNotes} theme={theme} />
+                  <ThemedLegend view={allViews[0]} theme={theme} muted={mutedMap} onToggle={toggleMuted} />
+              </>
+          ) : (
+              <EmptyState theme={theme} onLoadDemo={loadDemo} onUpload={() => dsInputRef.current?.click()} busy={isUploading} />
+          )}
+        </div>
+        <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} dock={assistantDock} onDockChange={changeDock} />
       </main>
     </div>
   );

@@ -562,7 +562,7 @@ export const runAssistantTurn = async (
     }
   };
 
-  const MAX_LOOPS = 8;
+  const MAX_LOOPS = 16;
   for (let i = 0; i < MAX_LOOPS; i++) {
     const stream = client.chat.completions.stream({
       model,
@@ -597,12 +597,16 @@ export const runAssistantTurn = async (
         tool_call_id: call.id,
         content: await executeTool(call.function.name, call.function.arguments),
       });
-      // Yield a macrotask so React commits state between sequential tool calls —
-      // otherwise a later call in the same response reads the pre-update bridge
-      await new Promise(r => setTimeout(r, 30));
+      // Yield until React has committed and painted between sequential tool
+      // calls — otherwise a later call in the same response reads stale state
+      // (a fixed timeout proved too short on slow machines)
+      await new Promise<void>(resolve => {
+        if (typeof requestAnimationFrame === 'undefined') return setTimeout(resolve, 50);
+        requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 20)));
+      });
     }
   }
-  handlers.onText('\n[Stopped: too many tool calls in one turn.]');
+  handlers.onText('\n[Paused after many tool calls — say "continue" to keep going.]');
   return messages;
 };
 

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { Sparkles, Settings2, Minus, CornerDownLeft, Info, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Sparkles, Settings2, Minus, CornerDownLeft, Info, ThumbsUp, ThumbsDown, PanelRight, PanelBottom, PictureInPicture2 } from 'lucide-react';
 import {
   AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
   runAssistantTurn, fetchModels, suggestModels, describeApiError,
@@ -25,10 +25,14 @@ type Layout = { w: number; h: number; right: number };
 const DEFAULT_LAYOUT: Layout = { w: 360, h: 560, right: 16 };
 const MIN_W = 300, MAX_W = 760, MIN_H = 280;
 
-export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
+export type DockMode = 'right' | 'bottom' | 'float';
+
+export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }: {
   bridgeRef: React.MutableRefObject<AppBridge>,
   theme: string | undefined,
   askRef?: React.MutableRefObject<((q: string) => void) | null>,
+  dock: DockMode,
+  onDockChange: (d: DockMode) => void,
 }) => {
   const [open, setOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -104,10 +108,12 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
         next.right = Math.min(Math.max(start.right - dx, 8), Math.max(8, cw - start.w - 8));
       }
       if (mode === 'w' || mode === 'wh') {
-        next.w = Math.min(Math.max(start.w - dx, MIN_W), Math.min(MAX_W, cw - start.right - 8));
+        const maxW = dock === 'right' ? Math.max(MIN_W, cw * 0.75) : Math.min(MAX_W, cw - start.right - 8);
+        next.w = Math.min(Math.max(start.w - dx, MIN_W), maxW);
       }
       if (mode === 'h' || mode === 'wh') {
-        next.h = Math.min(Math.max(start.h - dy, MIN_H), ch - 24);
+        const maxH = dock === 'bottom' ? Math.max(200, ch * 0.8) : ch - 24;
+        next.h = Math.min(Math.max(start.h - dy, dock === 'bottom' ? 200 : MIN_H), maxH);
       }
       latest = next;
       setLayout(next);
@@ -251,32 +257,60 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
 
   const chatMode = !!apiKey && !showSettings;
 
-  return (
-    <div
-      ref={panelRef}
-      className={`absolute bottom-4 z-40 flex flex-col ${panelCls}`}
-      style={{
-        width: layout.w,
-        right: layout.right,
-        ...(chatMode ? { height: layout.h } : {}),
-        maxHeight: 'calc(100% - 2rem)',
-      }}
-    >
-      {/* resize handles: left edge, top edge, top-left corner */}
-      <div onPointerDown={beginDrag('w')} className="absolute -left-1 top-0 bottom-0 w-2 cursor-ew-resize z-20" title="Drag to resize" />
-      <div onPointerDown={beginDrag('h')} className="absolute top-[-4px] left-0 right-0 h-2 cursor-ns-resize z-20" title="Drag to resize" />
-      <div onPointerDown={beginDrag('wh')} className="absolute -left-1.5 top-[-6px] w-5 h-5 cursor-nwse-resize z-30" title="Drag to resize" />
+  const rootProps = dock === 'float'
+    ? {
+        className: `absolute bottom-4 z-40 flex flex-col ${panelCls}`,
+        style: {
+          width: layout.w,
+          right: layout.right,
+          ...(chatMode ? { height: layout.h } : {}),
+          maxHeight: 'calc(100% - 2rem)',
+        } as React.CSSProperties,
+      }
+    : dock === 'right'
+      ? {
+          className: `relative z-40 flex flex-col flex-shrink-0 h-full min-h-0 ${panelCls}`,
+          style: { width: layout.w } as React.CSSProperties,
+        }
+      : {
+          className: `relative z-40 flex flex-col flex-shrink-0 w-full min-h-0 ${panelCls}`,
+          style: { height: layout.h } as React.CSSProperties,
+        };
 
-      {/* header — drag to slide the panel along the bottom */}
+  return (
+    <div ref={panelRef} {...rootProps}>
+      {/* resize handles per dock mode */}
+      {(dock === 'float' || dock === 'right') && (
+        <div onPointerDown={beginDrag('w')} className="absolute -left-1 top-0 bottom-0 w-2 cursor-ew-resize z-20" title="Drag to resize" />
+      )}
+      {(dock === 'float' || dock === 'bottom') && (
+        <div onPointerDown={beginDrag('h')} className="absolute top-[-4px] left-0 right-0 h-2 cursor-ns-resize z-20" title="Drag to resize" />
+      )}
+      {dock === 'float' && (
+        <div onPointerDown={beginDrag('wh')} className="absolute -left-1.5 top-[-6px] w-5 h-5 cursor-nwse-resize z-30" title="Drag to resize" />
+      )}
+
+      {/* header — in float mode, drag to slide the panel along the bottom */}
       <div
-        onPointerDown={beginDrag('move')}
-        className={`flex items-center justify-between px-3 py-2 flex-shrink-0 cursor-grab active:cursor-grabbing select-none ${headerCls}`}
-        title="Drag to move"
+        onPointerDown={dock === 'float' ? beginDrag('move') : undefined}
+        className={`flex items-center justify-between px-3 py-2 flex-shrink-0 select-none ${dock === 'float' ? 'cursor-grab active:cursor-grabbing' : ''} ${headerCls}`}
+        title={dock === 'float' ? 'Drag to move' : undefined}
       >
         <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest">
           <Sparkles className="w-3.5 h-3.5" /> Assistant
         </span>
         <span className="flex items-center gap-1" onPointerDown={e => e.stopPropagation()}>
+          {([['right', PanelRight, 'Dock to the right'], ['bottom', PanelBottom, 'Dock to the bottom'], ['float', PictureInPicture2, 'Float (drag anywhere along the bottom)']] as const).map(([m, Icon, label]) => (
+            <button
+              key={m}
+              onClick={() => onDockChange(m)}
+              title={label}
+              className={`p-1 cursor-pointer ${dock === m ? 'opacity-100' : 'opacity-40 hover:opacity-80'}`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+            </button>
+          ))}
+          <span className="w-1" />
           <button onClick={() => setShowSettings(s => !s)} title="Assistant settings" className="p-1 hover:opacity-60 cursor-pointer">
             <Settings2 className="w-4 h-4" />
           </button>
