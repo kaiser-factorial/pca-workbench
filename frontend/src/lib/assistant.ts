@@ -55,7 +55,13 @@ export type AppBridge = {
   removePin: (index: number) => string;
   saveWorkspaceAs: (name: string) => Promise<string>;
   // view control + on-screen guidance
-  controlView: (opts: { rotation?: 'start' | 'stop'; zoom?: number; reset_camera?: boolean }) => string;
+  controlView: (opts: {
+    rotation?: 'start' | 'stop';
+    zoom?: number;
+    pan?: 'left' | 'right' | 'up' | 'down';
+    pan_amount?: number;
+    reset_camera?: boolean;
+  }) => string;
   highlightUI: (target: string) => string;
   // undo support: snapshot/restore the whole view state
   snapshot: () => unknown;
@@ -384,13 +390,22 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'control_view',
       description:
-        'Control the 3D camera: start/stop auto-rotation, zoom (factor > 1 zooms in, < 1 zooms out), or reset the camera to the default angle. 3D mode only.',
+        'Move the viewport of the current plot. Works in both modes, but some options are mode-specific: zoom and reset_camera apply to either; rotation (auto-spin) is 3D-only; pan is 2D-only. In 3D, zoom moves the camera in or out and reset_camera returns it to the default angle. In 2D, zoom shrinks or widens the visible x/y window around its centre, pan slides that window one step in a direction, and reset_camera refits the view to all points. To inspect a region in 2D, zoom in and then pan toward it over successive calls; the result reports the visible window each time. Combining reset_camera with zoom/pan in one 2D call applies only the reset.',
       parameters: {
         type: 'object',
         properties: {
-          rotation: { type: 'string', enum: ['start', 'stop'] },
-          zoom: { type: 'number', description: 'e.g. 1.5 = 50% closer, 0.7 = further away' },
-          reset_camera: { type: 'boolean' },
+          rotation: { type: 'string', enum: ['start', 'stop'], description: '3D only: auto-rotation of the camera' },
+          zoom: { type: 'number', description: 'Factor > 1 zooms in, < 1 zooms out. e.g. 1.5 = 50% closer, 0.7 = further away' },
+          pan: {
+            type: 'string',
+            enum: ['left', 'right', 'up', 'down'],
+            description: '2D only: slide the visible window toward this side of the data',
+          },
+          pan_amount: {
+            type: 'number',
+            description: 'Pan step as a fraction of the visible span (default 0.5 = half a screen). Clamped to 0.05–2.',
+          },
+          reset_camera: { type: 'boolean', description: '3D: default camera angle. 2D: refit to all points.' },
         },
         additionalProperties: false,
       },

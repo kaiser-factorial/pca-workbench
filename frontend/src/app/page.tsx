@@ -999,6 +999,10 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
   const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": false, "2D": true });
   const [camera, setCamera] = useState({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+  // 2D viewport, the flat-mode counterpart of `camera`. null = autorange (fit all
+  // points). Set by assistant zoom/pan and by the user's own mouse zoom, so a
+  // React re-render can't silently snap the plot back to the full extent.
+  const [range2d, setRange2d] = useState<{ x: [number, number], y: [number, number] } | null>(null);
   const [isRotating, setIsRotating] = useState(false);
   const cntRef = useRef(0);
   const reqRef = useRef<number | undefined>(undefined);
@@ -1028,6 +1032,15 @@ export default function Home() {
       setMutedMap({});
   }, [colorBy, activeId]);
 
+
+  // A 2D viewport is only meaningful for the columns it was framed on — dropping
+  // different variables onto the axes would leave the old window clipping the new
+  // data (or showing empty space), so refit whenever the framing changes.
+  const skipRangeReset = useRef(false);
+  useEffect(() => {
+      if (skipRangeReset.current) { skipRangeReset.current = false; return; }
+      setRange2d(null);
+  }, [activeId, activeDataset?.axes2d.x, activeDataset?.axes2d.y]);
 
   // PCA state: scree info from the most recent in-app run (per active dataset)
   const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[] } | null>(null);
@@ -1181,7 +1194,7 @@ export default function Home() {
       return {
           version: 1,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
-          activeId, colorBy, viewMode, showAxes, camera,
+          activeId, colorBy, viewMode, showAxes, camera, range2d,
           notes, mutedMap,
           clusterMethod, eps, minSamples, k, breakdownBy, includeExportInfo,
       };
@@ -1246,6 +1259,9 @@ export default function Home() {
           setViewMode(ws.viewMode ?? "3D");
           setShowAxes(ws.showAxes ?? { "3D": false, "2D": true });
           setCamera(ws.camera ?? { eye: { x: 1.8, y: 1.2, z: 0.5 } });
+          // Restored deliberately — suppress the refit that the axis change would trigger
+          skipRangeReset.current = true;
+          setRange2d(ws.range2d ?? null);
           setNotes(ws.notes ?? "");
           setMutedMap(ws.mutedMap ?? {});
           setClusterMethod(ws.clusterMethod ?? "NONE");
@@ -1367,7 +1383,7 @@ export default function Home() {
       }
   };
 
-  const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false) => {
+  const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null) => {
       const dark = theme === 'terminal';
       const baseLayout: any = {
           autosize: true,
@@ -1410,6 +1426,19 @@ export default function Home() {
           });
           baseLayout.xaxis = axis2d(customAxisNames.x);
           baseLayout.yaxis = axis2d(customAxisNames.y);
+          // Each view brings its own viewport — the active one's live state, a
+          // pin's captured one — since these are data-space bounds and pins are
+          // framed on their own columns. `autorange` is set explicitly so a reset
+          // actually refits: dropping `range` alone lets Plotly keep the old window.
+          if (window2d) {
+              baseLayout.xaxis.range = [...window2d.x];
+              baseLayout.yaxis.range = [...window2d.y];
+              baseLayout.xaxis.autorange = false;
+              baseLayout.yaxis.autorange = false;
+          } else {
+              baseLayout.xaxis.autorange = true;
+              baseLayout.yaxis.autorange = true;
+          }
       }
 
       return baseLayout;
@@ -1419,6 +1448,25 @@ export default function Home() {
   // temporary clone div with that class, and grabbing the purged clone exports
   // empty default axes instead of the real plot
   const getActivePlotDiv = () => document.getElementById('active-plot') as any;
+
+  // The window the user is actually looking at in 2D. When no explicit viewport
+  // is set we read the autoranged bounds Plotly computed (`_fullLayout` is
+  // internal, but it is the only place the resolved range exists), so a relative
+  // zoom/pan starts from what is on screen rather than from raw data extents.
+  const get2dRange = (): { x: [number, number], y: [number, number] } | null => {
+      if (range2d) return range2d;
+      const fl = getActivePlotDiv()?._fullLayout;
+      const x = fl?.xaxis?.range, y = fl?.yaxis?.range;
+      if (!Array.isArray(x) || !Array.isArray(y)) return null;
+      const vals = [x[0], x[1], y[0], y[1]].map(Number);
+      if (!vals.every(Number.isFinite) || x[0] === x[1] || y[0] === y[1]) return null;
+      return { x: [vals[0], vals[1]], y: [vals[2], vals[3]] };
+  };
+
+  const fmtRange = (a: number, b: number) => {
+      const p = Math.abs(b - a) >= 10 ? 0 : 2;
+      return `${a.toFixed(p)}…${b.toFixed(p)}`;
+  };
 
   // Temporarily dress the live plot with a descriptive title + legend for
   // capture, then undress. Any later re-render also restores the props-driven
@@ -1581,6 +1629,12 @@ export default function Home() {
           } else {
               layout.xaxis = axisCfg(labels.x, '#cccccc');
               layout.yaxis = axisCfg(labels.y, '#cccccc');
+              // Same intent as startCam above: export the view as it is framed now
+              const win = get2dRange();
+              if (win) {
+                  layout.xaxis.range = [...win.x];
+                  layout.yaxis.range = [...win.y];
+              }
           }
 
           // Inline the Plotly bundle so the file is fully self-contained (offline-safe).
@@ -1639,6 +1693,9 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           { id: Date.now(), data: processedData, colorBy,
             axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode,
             showAxes: showAxes[viewMode],
+            // Freeze the 2D framing too, so a pin keeps showing the region it was
+            // taken on after the live view is zoomed elsewhere or reset
+            range2d: viewMode === "2D" ? get2dRange() : null,
             muted: { ...mutedMap },
             label: `${activeDataset?.name ?? 'Pinned'} · ${colorBy}` }
       ]);
@@ -1968,8 +2025,44 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           }
       },
 
-      controlView: ({ rotation, zoom, reset_camera }) => {
-          if (viewMode !== '3D') return 'View controls apply to 3D mode — the plot is currently 2D (in 2D, zoom and pan are direct mouse drag/scroll).';
+      controlView: ({ rotation, zoom, pan, pan_amount, reset_camera }) => {
+          if (viewMode === '2D') {
+              if (rotation) return 'Auto-rotation is 3D-only — the plot is currently 2D. Switch to 3D with set_plot first if you want to rotate.';
+              if (reset_camera) {
+                  setRange2d(null);
+                  return zoom != null || pan
+                      ? 'Done: 2D view reset to fit all points. The zoom/pan in the same call was skipped — call control_view again to re-frame from the full extent.'
+                      : 'Done: 2D view reset to fit all points.';
+              }
+              if (zoom == null && !pan) return 'Nothing requested — in 2D pass zoom, pan, or reset_camera.';
+              if (zoom != null && !(zoom > 0)) return 'zoom must be a positive number (e.g. 1.5 to zoom in, 0.7 to zoom out).';
+              const cur = get2dRange();
+              if (!cur) return 'Could not read the current axis ranges — the plot may not have finished rendering. Try again.';
+              let [x0, x1] = cur.x;
+              let [y0, y1] = cur.y;
+              const acts2d: string[] = [];
+              if (zoom != null) {
+                  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+                  const hx = (x1 - x0) / 2 / zoom, hy = (y1 - y0) / 2 / zoom;
+                  [x0, x1, y0, y1] = [cx - hx, cx + hx, cy - hy, cy + hy];
+                  acts2d.push(`zoomed ${zoom > 1 ? 'in' : 'out'} (×${zoom})`);
+              }
+              if (pan) {
+                  // Fraction of the visible span per step — clamped so one call
+                  // can't fling the viewport somewhere with no points in it
+                  const amt = Math.min(Math.max(pan_amount ?? 0.5, 0.05), 2);
+                  const dx = (x1 - x0) * amt, dy = (y1 - y0) * amt;
+                  if (pan === 'left') { x0 -= dx; x1 -= dx; }
+                  else if (pan === 'right') { x0 += dx; x1 += dx; }
+                  else if (pan === 'down') { y0 -= dy; y1 -= dy; }
+                  else if (pan === 'up') { y0 += dy; y1 += dy; }
+                  else return `Unknown pan direction "${pan}". Use left, right, up, or down.`;
+                  acts2d.push(`panned ${pan} by ${Math.round(amt * 100)}% of the view`);
+              }
+              setRange2d({ x: [x0, x1], y: [y0, y1] });
+              return `Done: ${acts2d.join('; ')}. Visible window is now x ${fmtRange(x0, x1)}, y ${fmtRange(y0, y1)}.`;
+          }
+          if (pan) return 'Directional pan is 2D-only — the plot is currently 3D, where framing is the camera angle. Use rotation/zoom/reset_camera, or switch to 2D with set_plot.';
           const acts: string[] = [];
           if (reset_camera) {
               setIsRotating(false);
@@ -1990,7 +2083,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               setIsRotating(rotation === 'start');
               acts.push(`auto-rotation ${rotation === 'start' ? 'started' : 'stopped'}`);
           }
-          return acts.length ? `Done: ${acts.join('; ')}.` : 'Nothing requested — pass rotation, zoom, or reset_camera.';
+          return acts.length ? `Done: ${acts.join('; ')}.` : 'Nothing requested — in 3D pass rotation, zoom, or reset_camera.';
       },
 
       highlightUI: (target) => {
@@ -2043,11 +2136,24 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               )}
               <ViewPlot
                   view={view}
-                  layout={getLayout(view.label ?? (isPinned ? "Pinned View" : "Active View"), view.labels, view.viewMode, view.showAxes ?? false)}
+                  layout={getLayout(view.label ?? (isPinned ? "Pinned View" : "Active View"), view.labels, view.viewMode, view.showAxes ?? false, (isPinned ? view.range2d : range2d) ?? null)}
                   onRelayout={(e: any) => {
-                      if (view.id === 'active' && view.viewMode === "3D" && e['scene.camera'] && isRotating) {
-                          setIsRotating(false);
-                          setCamera(e['scene.camera']);
+                      if (view.id !== 'active') return;
+                      if (view.viewMode === "3D") {
+                          if (e['scene.camera'] && isRotating) {
+                              setIsRotating(false);
+                              setCamera(e['scene.camera']);
+                          }
+                          return;
+                      }
+                      // Mirror the user's own box-zoom/pan into state; without this
+                      // the next re-render would re-apply the old layout and snap
+                      // the plot back. Double-click sends autorange instead.
+                      if (e['xaxis.autorange'] || e['yaxis.autorange']) { setRange2d(null); return; }
+                      const x0 = e['xaxis.range[0]'], x1 = e['xaxis.range[1]'];
+                      const y0 = e['yaxis.range[0]'], y1 = e['yaxis.range[1]'];
+                      if ([x0, x1, y0, y1].every(v => typeof v === 'number' && Number.isFinite(v))) {
+                          setRange2d({ x: [x0, x1], y: [y0, y1] });
                       }
                   }}
               />

@@ -95,12 +95,32 @@ order by event_id, created_at desc;
    `model = 'mock/model'`. Free-tier projects pause after ~1 week idle (restore from
    dashboard). Write-only anon key means spam inserts are possible — acceptable at this
    scale; revisit (edge-function rate limit) if it ever matters.
-5. **2D zoom/pan is not assistant-controllable** (`control_view` is 3D-only).
-6. **Roadmap file** (`PCA_workbench_ROADMAP.md`) has one stale unchecked item —
-   upload-error explanation now exists (the "Ask the assistant about this error" chip).
+5. ~~2D zoom/pan is not assistant-controllable~~ **Done (2026-08-02):** `control_view`
+   now covers both modes — in 2D, `zoom` scales the visible x/y window around its
+   centre, `pan` (left/right/up/down, `pan_amount` as a fraction of the span) slides
+   it, and `reset_camera` refits to all points. The viewport lives in `range2d` state
+   (null = autorange), is applied to the active view only (pinned views are framed on
+   their own columns), and now also captures the user's own mouse zoom via
+   `onRelayout` — previously any re-render snapped a manual 2D zoom back to full
+   extent. Persisted in workspaces and carried into the HTML export, mirroring `camera`.
+6. ~~Roadmap file has one stale unchecked item~~ **Done (2026-08-02):** the
+   upload-error item is checked off (the "Ask the assistant about this error" chip).
 7. **Portfolio writeup** was delivered as a file (not in repo); its "in progress" line
    about the assistant is now outdated — update before publishing.
-8. **Possible future directions** discussed but not committed: embeddings-based RAG for
+8. **Assistant "show me *that* region" (Corina's idea, 2026-08-02)** — the natural next
+   step past directional pan. Two halves, useful separately:
+   - *Center + frame:* let the assistant name a region in data coordinates and have the
+     plot centre on it and draw around it (a box/ellipse annotation, the plot-space
+     sibling of `highlight_ui`'s sidebar ring). 2D is straightforward — Plotly shapes
+     plus an explicit x/y range, and `range2d` already exists to hold the framing. 3D is
+     the harder half: no shape layer in `scene`, so it likely means a wireframe-box
+     mesh trace plus aiming `camera.center`.
+   - *Highlight by rule:* recolor points matching a condition — e.g. "everything with
+     positive PC1, PC2 and PC3" — rather than by a column. Cuts across the current
+     `colorBy` model, so it probably wants a transient "selection" overlay trace (or a
+     synthetic boolean column) that leaves `colorBy` intact and clears on the next turn.
+     Would pair well with the undo snapshot already taken per mutating turn.
+9. **Possible future directions** discussed but not committed: embeddings-based RAG for
    user-supplied papers (only worth it beyond the curated corpus), OpenRouter spend-limit
    note in settings, silhouette/elbow charts in the Cluster section UI.
 

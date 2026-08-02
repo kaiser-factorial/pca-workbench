@@ -63,7 +63,7 @@ This phase covers building the foundational app, from data ingestion to the fina
 - `[x]` **OpenRouter by default, any OpenAI-compatible endpoint supported** — one key works across Claude/GPT/Gemini; the endpoint field also accepts local runtimes (Ollama/LM Studio) for a fully offline assistant. Key lives in localStorage only, never in exported workspaces.
 - `[x]` **Tool-driven app control:** the model can read column profiles/app state, set axes & coloring & 2D/3D, run DBSCAN/K-Means, read cluster compositions, and pin views. No destructive tools.
 - `[x]` **Privacy contract:** requests carry column metadata and aggregate stats only — raw data rows are never sent; the panel states this under the input.
-- `[ ]` Explain-my-upload-error helper wired to validation failures (assistant can already answer when asked).
+- `[x]` **Explain-my-upload-error helper wired to validation failures:** a failed upload now offers an "Ask the assistant about this error" chip that hands the assistant the validation message directly, instead of relying on the user to ask.
 
 ---
 
