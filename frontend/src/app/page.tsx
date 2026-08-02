@@ -11,6 +11,7 @@ import { dbscan, kmeans } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
+import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
 import { runPCA } from "@/lib/pca";
 
@@ -506,7 +507,7 @@ const VariablesPanel = ({ dataset, viewMode, colorBy, theme, onAxis, onColor }: 
 
 // First-run landing: an abstract scatter built from the Bauhaus glyphs, three
 // steps, and a zero-friction demo loader. Occupies the otherwise-blank canvas.
-const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, onLoadDemo: () => void, busy: boolean }) => {
+const EmptyState = ({ theme, onLoadDemo, onUpload, busy }: { theme: string | undefined, onLoadDemo: () => void, onUpload: () => void, busy: boolean }) => {
     const steps = [
         "Add a dataset — CSV, XLSX, or Parquet",
         "Assign variables to X · Y · Z and color",
@@ -526,13 +527,22 @@ const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, on
                             </div>
                         ))}
                     </div>
-                    <button
-                        onClick={onLoadDemo}
-                        disabled={busy}
-                        className="w-full py-2 text-sm font-bold border border-[var(--system-green)] text-[var(--system-green)] hover:bg-[var(--system-green)]/10 disabled:opacity-40 cursor-pointer"
-                    >
-                        {busy ? "Loading…" : "> load demo data"}
-                    </button>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={onUpload}
+                            disabled={busy}
+                            className="flex-1 py-2 text-sm font-bold bg-[var(--system-green)]/15 border border-[var(--system-green)] text-[var(--system-green)] hover:bg-[var(--system-green)]/25 disabled:opacity-40 cursor-pointer"
+                        >
+                            {"> upload data"}
+                        </button>
+                        <button
+                            onClick={onLoadDemo}
+                            disabled={busy}
+                            className="flex-1 py-2 text-sm font-bold border border-[var(--system-green)]/60 text-[var(--system-green)]/80 hover:bg-[var(--system-green)]/10 disabled:opacity-40 cursor-pointer"
+                        >
+                            {busy ? "loading…" : "> load demo"}
+                        </button>
+                    </div>
                     <p className="text-[11px] text-[var(--foreground)]/60">
                         New here? Open the <span className="text-[var(--system-green)]">Assistant</span> (bottom right) and ask for a tour.
                     </p>
@@ -575,13 +585,22 @@ const EmptyState = ({ theme, onLoadDemo, busy }: { theme: string | undefined, on
                         </div>
                     ))}
                 </div>
-                <button
-                    onClick={onLoadDemo}
-                    disabled={busy}
-                    className="bauhaus-btn w-full py-2.5 text-sm font-bold bg-[var(--p-yellow)] text-[#111111] disabled:opacity-40 cursor-pointer"
-                >
-                    {busy ? "Loading…" : "Load demo data"}
-                </button>
+                <div className="flex gap-3">
+                    <button
+                        onClick={onUpload}
+                        disabled={busy}
+                        className="bauhaus-btn flex-1 py-2.5 text-sm font-bold bg-[var(--p-blue)] text-white disabled:opacity-40 cursor-pointer"
+                    >
+                        Upload data
+                    </button>
+                    <button
+                        onClick={onLoadDemo}
+                        disabled={busy}
+                        className="bauhaus-btn flex-1 py-2.5 text-sm font-bold bg-[var(--p-yellow)] text-[#111111] disabled:opacity-40 cursor-pointer"
+                    >
+                        {busy ? "Loading…" : "Load demo data"}
+                    </button>
+                </div>
                 <p className="text-[11px] opacity-50 text-center -mt-2">
                     New here? Open the <span className="font-bold">Assistant</span> (bottom right) and ask for a tour.
                 </p>
@@ -873,6 +892,36 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
 // Module-level (not inside Home): inline component definitions get a fresh
 // identity per render, so React remounts their whole subtree on every state
 // change — losing input focus and recreating plot divs.
+// Ephemeral on-screen pointer: scrolls the target into view, then rings it and
+// bounces an arrow beside it for ~5s. Position is re-read on an interval so it
+// tracks sidebar scrolling and layout shifts while visible.
+const flashGuide = (target: string, color: string): boolean => {
+    const el = document.querySelector(`[data-guide="${target}"]`) as HTMLElement | null;
+    if (!el) return false;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const ring = document.createElement('div');
+    const arrow = document.createElement('div');
+    ring.style.cssText = `position:fixed;z-index:95;pointer-events:none;border:3px solid ${color};box-shadow:0 0 0 3px rgba(255,214,0,.4);border-radius:4px;`;
+    arrow.textContent = '◀';
+    arrow.style.cssText = `position:fixed;z-index:95;pointer-events:none;color:${color};font-size:22px;font-weight:bold;text-shadow:0 1px 3px rgba(0,0,0,.35);`;
+    document.body.append(ring, arrow);
+    const place = () => {
+        const r = el.getBoundingClientRect();
+        ring.style.left = `${r.left - 5}px`;
+        ring.style.top = `${r.top - 5}px`;
+        ring.style.width = `${r.width + 10}px`;
+        ring.style.height = `${r.height + 10}px`;
+        arrow.style.left = `${r.right + 10}px`;
+        arrow.style.top = `${r.top + r.height / 2 - 13}px`;
+    };
+    place();
+    const tracker = setInterval(place, 100);
+    ring.animate([{ opacity: 1 }, { opacity: 0.35 }, { opacity: 1 }], { duration: 900, iterations: 6 });
+    arrow.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(8px)' }, { transform: 'translateX(0)' }], { duration: 600, iterations: 9 });
+    setTimeout(() => { clearInterval(tracker); ring.remove(); arrow.remove(); }, 5400);
+    return true;
+};
+
 // Steps cycle through the Bauhaus triad; yellow flips to black text for contrast
 const STEP_COLORS = [
     { bg: 'var(--p-red)', fg: '#FFFFFF' },
@@ -880,17 +929,19 @@ const STEP_COLORS = [
     { bg: 'var(--p-yellow)', fg: '#111111' },
 ];
 
-const SidebarSection = ({ title, step, children, hasBorder = false, theme }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined }) => {
+const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined, guide?: string }) => {
     if (theme === 'terminal') {
         return (
-            <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any}>
-                {children}
-            </CyberContainer>
+            <div data-guide={guide}>
+                <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any}>
+                    {children}
+                </CyberContainer>
+            </div>
         );
     }
     const c = step != null ? STEP_COLORS[(step - 1) % STEP_COLORS.length] : null;
     return (
-        <div className={`space-y-3 ${hasBorder ? 'border-t border-[var(--border)] pt-6' : ''}`}>
+        <div data-guide={guide} className={`space-y-3 ${hasBorder ? 'border-t border-[var(--border)] pt-6' : ''}`}>
             <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider">
                 {c && <span className="bauhaus-step" style={{ backgroundColor: c.bg, color: c.fg }}>{step}</span>}
                 <span className="opacity-60">{title}</span>
@@ -1899,6 +1950,40 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           }
       },
 
+      controlView: ({ rotation, zoom, reset_camera }) => {
+          if (viewMode !== '3D') return 'View controls apply to 3D mode — the plot is currently 2D (in 2D, zoom and pan are direct mouse drag/scroll).';
+          const acts: string[] = [];
+          if (reset_camera) {
+              setIsRotating(false);
+              setCamera({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+              acts.push('camera reset');
+          }
+          if (zoom != null) {
+              if (!(zoom > 0)) return 'zoom must be a positive number (e.g. 1.5 to zoom in, 0.7 to zoom out).';
+              setIsRotating(false);
+              const eye = camera.eye;
+              const dist = Math.sqrt(eye.x ** 2 + eye.y ** 2 + eye.z ** 2) || 2.2;
+              const target = Math.min(Math.max(dist / zoom, 0.4), 12);
+              const f = target / dist;
+              setCamera({ eye: { x: eye.x * f, y: eye.y * f, z: eye.z * f } });
+              acts.push(`zoomed ${zoom > 1 ? 'in' : 'out'} (×${zoom})`);
+          }
+          if (rotation) {
+              setIsRotating(rotation === 'start');
+              acts.push(`auto-rotation ${rotation === 'start' ? 'started' : 'stopped'}`);
+          }
+          return acts.length ? `Done: ${acts.join('; ')}.` : 'Nothing requested — pass rotation, zoom, or reset_camera.';
+      },
+
+      highlightUI: (target) => {
+          if (!(GUIDE_TARGETS as readonly string[]).includes(target)) {
+              return `Unknown target "${target}". Valid targets: ${GUIDE_TARGETS.join(', ')}.`;
+          }
+          const ok = flashGuide(target, theme === 'terminal' ? '#10ff50' : '#EB1A26');
+          if (!ok) return `"${target}" is not on screen right now${datasets.length === 0 ? ' — sections after Data appear once a dataset is loaded' : ''}.`;
+          return `Highlighted ${target} with an ephemeral arrow (~5s). Continue explaining while the user looks.`;
+      },
+
       snapshot: () => ({
           datasets, activeId, colorBy, viewMode, showAxes, pinnedViews,
           clusterMethod, eps, minSamples, k, breakdownBy, mutedMap,
@@ -1992,7 +2077,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
         <SidebarGroup theme={theme}>
 
           {/* Workspace persistence */}
-          <SidebarSection title="Workspace" theme={theme}>
+          <SidebarSection title="Workspace" theme={theme} guide="workspace">
             <div className="flex gap-2">
               <input
                 type="text"
@@ -2060,6 +2145,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             ]).map(zone => (
               <div
                 key={zone.key}
+                data-guide={zone.key === 'ds' ? 'upload-dropzone' : undefined}
                 onClick={() => zone.ref.current?.click()}
                 onDragOver={e => { e.preventDefault(); setDragOver(zone.key); }}
                 onDragLeave={() => setDragOver(null)}
@@ -2080,12 +2166,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               </div>
             ))}
             <button
+              data-guide="components-toggle"
               onClick={() => { if (showComponents) setComponentsFile(null); setShowComponents(!showComponents); }}
               className="text-[11px] underline-offset-2 hover:underline opacity-60 hover:opacity-100 text-left cursor-pointer"
             >
               {showComponents || componentsFile ? '− Remove components file' : '+ Project through a PCA components file'}
             </button>
-            <button onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+            <button data-guide="add-dataset" onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
               {isUploading ? "Processing..." : "Add Dataset"}
             </button>
             {(datasetFile || componentsFile || processedData) && (
@@ -2105,7 +2192,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               </button>
             )}
             {datasets.length > 0 && (
-              <div className="space-y-1.5 pt-1">
+              <div className="space-y-1.5 pt-1" data-guide="datasets-list">
                 {datasets.map(d => (
                   <div key={d.id} onClick={() => selectDataset(d.id)}
                     className={`flex items-center justify-between gap-2 px-2 py-1.5 cursor-pointer border text-xs ${d.id === activeId
@@ -2129,7 +2216,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
           {processedData && (
             <>
-              <SidebarSection title="Variables" step={2} hasBorder theme={theme}>
+              <SidebarSection title="Variables" step={2} hasBorder theme={theme} guide="variables">
                 <div className="text-[11px] opacity-60 -mt-1">
                   {processedData.nRows} rows × {processedData.columns.length} columns — click X · Y · Z to plot, C to color
                 </div>
@@ -2160,7 +2247,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
               </SidebarSection>
 
-              <SidebarSection title="PCA" step={3} hasBorder theme={theme}>
+              <SidebarSection title="PCA" step={3} hasBorder theme={theme} guide="pca">
                 {processedData && (
                   <PCASection
                     table={processedData}
@@ -2171,7 +2258,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
               </SidebarSection>
 
-              <SidebarSection title="View" step={4} hasBorder theme={theme}>
+              <SidebarSection title="View" step={4} hasBorder theme={theme} guide="view">
                 <div className="flex gap-2 mb-2">
                     <button onClick={() => setViewMode("2D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "2D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>2D</button>
                     <button onClick={() => setViewMode("3D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "3D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>3D</button>
@@ -2216,7 +2303,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 </button>
               </SidebarSection>
 
-              <SidebarSection title="Cluster" step={5} hasBorder theme={theme}>
+              <SidebarSection title="Cluster" step={5} hasBorder theme={theme} guide="cluster">
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
                     <option value="DBSCAN">DBSCAN</option>
@@ -2247,7 +2334,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
                   </SidebarSection>
 
-              <SidebarSection title="Export & Pin" step={6} hasBorder theme={theme}>
+              <SidebarSection title="Export & Pin" step={6} hasBorder theme={theme} guide="export">
                   <button onClick={pinCurrentView} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)]'}`}>
                       <Pin className="w-4 h-4" /> Pin View
                   </button>
@@ -2286,7 +2373,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 <ThemedLegend view={allViews[0]} theme={theme} muted={mutedMap} onToggle={toggleMuted} />
             </>
         ) : (
-            <EmptyState theme={theme} onLoadDemo={loadDemo} busy={isUploading} />
+            <EmptyState theme={theme} onLoadDemo={loadDemo} onUpload={() => dsInputRef.current?.click()} busy={isUploading} />
         )}
         <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} />
       </main>

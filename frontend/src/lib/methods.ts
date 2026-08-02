@@ -1,0 +1,93 @@
+// Curated methods reference the assistant retrieves from when users ask for
+// help interpreting results. Ships with the app: retrieval is topic + keyword
+// match (the corpus is small and vetted — no embeddings needed). The assistant
+// is instructed to ground interpretation answers in these chunks and to name
+// the cited sources, rather than answering from model memory alone.
+
+export type MethodsChunk = { title: string; text: string };
+
+export const METHODS: Record<string, MethodsChunk> = {
+  pca_interpretation: {
+    title: 'Interpreting principal components',
+    text: 'A principal component is a weighted combination of the input variables; the loadings are those weights. Read a component by its strongest loadings (roughly |loading| ≥ 0.3–0.4 on standardized data): variables loading together and in the same direction move together along that component. Signs are relative — a component and its mirror image are the same component, so "high PC1" only means something once you check which variables load positively. Naming components ("distress", "engagement") is convenient shorthand, but the name is an interpretation, not a finding; report the loadings that motivated it. Components are orthogonal by construction, which rarely matches how psychological constructs behave — treat them as a coordinate system, not as discovered entities (Jolliffe, Principal Component Analysis, 2002).',
+  },
+  how_many_components: {
+    title: 'How many components to keep',
+    text: 'Common heuristics: (1) Kaiser criterion — keep components with eigenvalue > 1 on a correlation PCA (each keeps more variance than a single standardized variable contributes); it tends to over-extract with many variables. (2) Cattell scree test — look for the "elbow" where the scree plot flattens; components after the elbow mostly carry noise. (3) Cumulative variance — keep enough components to reach a target (often 70–80% in measurement contexts, much less is common in noisy behavioral data). (4) Horn parallel analysis — compare eigenvalues to those from random data of the same shape; generally the best-behaved criterion, though it requires simulation. A common classroom workflow (NYU CDS Intro to Data Science, Lab 13) plots both diagnostics together — cumulative variance with a 95% target line and the eigenvalue scree with the eigenvalue-1 line — and compares what each rule keeps; on wide data the 95% rule can retain many components (35 of 100 in that lab\'s example), which is fine for compression but far more than is useful for visualization. In practice: examine the scree, check whether the kept components are interpretable, and remember that "how many components are real" and "how many are useful for this visualization" are different questions (Cattell 1966; Horn 1965).',
+  },
+  loadings_vs_scores: {
+    title: 'Loadings vs. scores',
+    text: 'Loadings describe variables: how much each variable contributes to a component. Scores describe respondents: where each row of the data lands on that component (the PC1/PC2/PC3 columns this app plots are scores). A participant with a high PC1 score is high on the variables that load positively on PC1 and low on those loading negatively. A variable that loads substantially on several components ("cross-loading") makes both components harder to interpret — that is a property of the data, not an error. When comparing loadings across different datasets or software, check the sign convention and whether loadings were scaled by the eigenvalue (unit-norm eigenvectors vs. correlation-scaled loadings differ by a factor of √eigenvalue (Jolliffe, 2002).',
+  },
+  standardize_or_not: {
+    title: 'Correlation vs. covariance PCA (standardizing)',
+    text: 'Standardizing each variable before PCA (the default here) makes it a correlation-matrix PCA: every variable gets equal weight regardless of its scale or variance. Skipping standardization gives a covariance-matrix PCA, where high-variance variables dominate the components. Use correlation PCA when variables are on different scales or arbitrary scales (survey items, mixed units) — which is nearly always in questionnaire research. Covariance PCA is defensible only when variables share a meaningful common unit and their variance differences are themselves informative. The two analyses can produce very different components; report which one was used (Jolliffe, 2002, ch. 2–3).',
+  },
+  pca_caveats: {
+    title: 'PCA caveats and limitations',
+    text: 'PCA finds directions of maximal variance, not directions of maximal meaning: it is linear, sensitive to outliers (a few extreme respondents can rotate the components), and affected by how missing data were handled — median imputation (used here) shrinks variance and can attenuate correlations, so with substantial missingness the components should be checked against complete cases. PCA is also not factor analysis: PCA summarizes total variance; exploratory factor analysis models shared variance and is usually the better fit when the goal is measuring latent constructs. Rotations (e.g. varimax) that aid interpretability in EFA are not applied here — components are unrotated. Finally, component structure is sample-dependent; expect loadings to wobble across samples, especially with n below a few hundred (Fabrigar, Wegener, MacCallum & Strahan, 1999).',
+  },
+  kmeans_interpretation: {
+    title: 'Interpreting K-Means results',
+    text: 'K-Means partitions points into k groups by minimizing within-cluster squared distance. It always returns exactly k clusters whether or not the data have k groups — so the existence of clusters in the output is not evidence of structure. It favors compact, roughly spherical, similarly-sized clusters, and struggles with elongated or nested shapes and strong density differences. Interpret clusters by comparing composition and variable means across clusters (the breakdown panel), and check robustness: does a similar solution appear at neighboring k, and do silhouette scores support the chosen k? Besides silhouette-by-k, the classic elbow method plots within-cluster sum of squares (inertia) against k and picks the bend where added clusters stop paying for themselves — inertia always decreases with k, so the bend, not the minimum, is the signal; course practice also validates a solution visually by coloring the PC-space scatter by cluster (NYU CDS Lab 13). This app uses k-means++ seeding with fixed seeds, so repeated runs are deterministic; with other software, rerun with several seeds before trusting a solution (MacQueen 1967; Arthur & Vassilvitskii 2007).',
+  },
+  dbscan_interpretation: {
+    title: 'Interpreting DBSCAN results',
+    text: 'DBSCAN groups points that sit in dense regions: a point is a core point if at least min_samples points lie within distance eps; clusters grow from connected core points, and points in no dense region are labeled Noise. Unlike K-Means it discovers the number of clusters and can find irregular shapes — but results are sensitive to eps: too small fragments the data and labels most points noise, too large merges everything into one cluster. The k-distance heuristic (this app\'s suggest_eps) picks eps near the knee of the sorted distance-to-kth-neighbor curve (Ester, Kriegel, Sander & Xu, 1996). For min_samples, a common default is about twice the number of dimensions used (so ~6 for a 3-axis plot), with the k-distance curve computed at k = min_samples − 1 (NYU CDS Lab 13). Treat both parameters as judgment calls anchored by diagnostics — inspect the k-distance curve and try neighboring values rather than trusting any single rule. A large Noise share is not failure — it can honestly reflect that much of the sample does not belong to any dense subgroup, which is itself a finding.',
+  },
+  silhouette: {
+    title: 'Silhouette scores',
+    text: 'The silhouette of a point compares its average distance to its own cluster (a) with its average distance to the nearest other cluster (b): s = (b − a) / max(a, b), ranging −1 to 1. The mean silhouette summarizes how separated the clustering is. Rough reading (Rousseeuw 1987; Kaufman & Rousseeuw 1990): above ~0.7 strong structure; ~0.5–0.7 reasonable; ~0.25–0.5 weak and possibly artificial; below ~0.25 little evidence of substantial structure. Survey data in PC space very often lives in the weak range — overlapping, continuous variation rather than crisp types. A low silhouette does not make a clustering useless for description, but it should temper claims that distinct subgroups exist.',
+  },
+  choosing_cluster_method: {
+    title: 'K-Means or DBSCAN?',
+    text: 'Choose K-Means when you expect compact, similarly-dense groups, want every point assigned, and have a defensible k (or diagnostics like silhouette-by-k to pick one). Choose DBSCAN when you suspect irregular cluster shapes, want the algorithm to find the number of clusters, or want an explicit Noise category rather than forcing every respondent into a group — often attractive in survey research, where many participants sit between prototypes. The two methods answer different questions: K-Means asks "what is the best partition into k groups?", DBSCAN asks "where are the dense regions?". Running both and comparing the stories they tell is a legitimate exploratory strategy — divergence is informative (MacQueen 1967; Ester et al. 1996).',
+  },
+  cluster_validity: {
+    title: 'How seriously to take clusters',
+    text: 'Clustering is exploratory description, not hypothesis testing: any clustering algorithm imposes structure, and parameters (k, eps) change the result. Before treating clusters as meaningful subgroups, check: stability (do similar clusters appear under nearby parameters, subsamples, or a different method?), separation (silhouette), and external validity (do clusters differ on variables not used to build them? — the strongest evidence). When examining cluster composition against a demographic, mind base rates: a group that is 60% of the sample will dominate most clusters; the "% of group" normalization shows where each group concentrates instead. Percentages computed on small groups (n below ~30) are unstable — report counts alongside them. Clusters found in PC space also inherit every caveat of the PCA beneath them. There is no single \"true\" clustering of a dataset — which clustering is best depends on what the clusters are for (Hennig, 2015).',
+  },
+  pca_workflow: {
+    title: 'A sound PCA workflow',
+    text: 'The preprocessing order matters: (1) handle missing data — columns that are mostly missing (a common cutoff: more than ~50%) are better dropped than imputed, and remaining gaps filled by a simple imputer (this app uses medians) with the caveat that imputation shrinks variance; (2) keep numeric variables only, and exclude identifiers (IDs, names, fold numbers) — they are numbers but not measurements; (3) standardize, because PCA and distance-based clustering are sensitive to scale; verify the transform (means ≈ 0, sd ≈ 1) rather than trusting it. When plotting components, label axes with the variance explained (e.g. "PC1 (24%)") so readers can weight what they see. When reading loadings, translate variable codes into plain language before interpreting — components are only as interpretable as their variables\' names (workflow after NYU CDS Intro to Data Science, Lab 13, J. Yang).',
+  },
+  correlation_notes: {
+    title: 'Reading correlations',
+    text: 'Pearson r captures linear association; Spearman rho captures monotonic association via ranks and is more robust to outliers and curved-but-monotonic relations — a large Pearson–Spearman gap suggests outliers or nonlinearity worth plotting. Conventional magnitude benchmarks (Cohen 1988): |r| ≈ .10 small, .30 medium, .50 large — but field norms matter; in individual-differences research rs above .30 are already substantial. Correlations say nothing about direction of cause, are attenuated by measurement unreliability, and shrink under restriction of range (e.g., within a preselected subsample). With pairwise-complete data (used here), different correlations may be computed on different subsets of respondents — noteworthy when missingness is heavy.',
+  },
+  eta_squared: {
+    title: 'Eta-squared (group differences)',
+    text: 'Eta-squared is the share of variance in a numeric variable accounted for by group membership: SS-between / SS-total, ranging 0–1. Conventional benchmarks (Cohen 1988): ~.01 small, ~.06 medium, ~.14 large. It is a descriptive effect size, not a significance test — with small groups it is upwardly biased (omega-squared corrects this), and a sizable eta² can be driven by one small, extreme group, so always inspect the per-group means and ns rather than the single number. Group mean differences also say nothing about why groups differ; in observational survey data, confounding is the default assumption.',
+  },
+  survey_data_notes: {
+    title: 'Survey-data particulars',
+    text: 'Likert-type items are ordinal; treating them as continuous (as PCA and these correlations do) is common practice and usually benign with 5+ response options and roughly symmetric distributions, but it understates associations for skewed, few-category items (polychoric correlations are the rigorous alternative). Scale scores built from few items carry measurement error that attenuates every downstream correlation and blurs cluster boundaries. Percentages and means for small demographic subgroups (n below ~30) are fragile — prefer reporting counts, and avoid strong claims about small groups. Finally, patterns in one sample are hypotheses for the next one, not conclusions: exploratory structure (components, clusters) should ideally be checked in a holdout or replication sample before it hardens into a finding (Norman 2010; Rhemtulla, Brosseau-Liard & Savalei 2012).',
+  },
+};
+
+export const METHODS_TOPICS = Object.keys(METHODS);
+
+// Retrieval: exact topics win; otherwise a keyword score over title + text.
+// The corpus is tiny and curated, so lexical matching is exact, free, and
+// debuggable — embeddings would add machinery without adding recall.
+export const searchMethods = (opts: { topics?: string[]; query?: string }): MethodsChunk[] => {
+  const picked = new Map<string, MethodsChunk>();
+  for (const t of opts.topics ?? []) {
+    if (METHODS[t]) picked.set(t, METHODS[t]);
+  }
+  const q = (opts.query ?? '').toLowerCase().trim();
+  if (q) {
+    const terms = q.split(/[^a-z0-9²]+/).filter(w => w.length > 2);
+    const scored = Object.entries(METHODS)
+      .map(([key, chunk]) => {
+        const hay = (key + ' ' + chunk.title + ' ' + chunk.text).toLowerCase();
+        const score = terms.reduce((s, term) => s + (hay.includes(term) ? 1 : 0), 0);
+        return { key, chunk, score };
+      })
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    for (const { key, chunk } of scored) picked.set(key, chunk);
+  }
+  return Array.from(picked.values());
+};

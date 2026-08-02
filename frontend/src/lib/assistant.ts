@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { METHODS_TOPICS, searchMethods } from './methods';
 import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
@@ -53,10 +54,19 @@ export type AppBridge = {
   transferColumn: (opts: { source_dataset: string; column: string; mode?: 'order' | 'match'; key_column?: string; new_name?: string }) => string;
   removePin: (index: number) => string;
   saveWorkspaceAs: (name: string) => Promise<string>;
+  // view control + on-screen guidance
+  controlView: (opts: { rotation?: 'start' | 'stop'; zoom?: number; reset_camera?: boolean }) => string;
+  highlightUI: (target: string) => string;
   // undo support: snapshot/restore the whole view state
   snapshot: () => unknown;
   restore: (snap: unknown) => void;
 };
+
+// UI anchors the assistant can point at (data-guide attributes in the sidebar)
+export const GUIDE_TARGETS = [
+  'workspace', 'upload-dropzone', 'add-dataset', 'components-toggle',
+  'datasets-list', 'variables', 'pca', 'view', 'cluster', 'export',
+] as const;
 
 // Tools that change what the user sees — a turn using any of these offers Undo
 export const MUTATING_TOOLS = new Set([
@@ -353,6 +363,55 @@ const TOOLS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_methods_reference',
+      description:
+        `Retrieve curated methods-reference chunks (with named citations) on interpreting PCA, clustering, and the app's statistics. ALWAYS call this before answering interpretation or methods questions — e.g. "help me interpret these components", "is this clustering meaningful", "how many components should I keep", "what does eta-squared mean" — and ground your answer in the returned text, naming its cited sources. Topics: ${METHODS_TOPICS.join(', ')}. Provide topics, a free-text query, or both.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          topics: { type: 'array', items: { type: 'string', enum: METHODS_TOPICS as string[] } },
+          query: { type: 'string', description: 'Free-text search over the reference library' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'control_view',
+      description:
+        'Control the 3D camera: start/stop auto-rotation, zoom (factor > 1 zooms in, < 1 zooms out), or reset the camera to the default angle. 3D mode only.',
+      parameters: {
+        type: 'object',
+        properties: {
+          rotation: { type: 'string', enum: ['start', 'stop'] },
+          zoom: { type: 'number', description: 'e.g. 1.5 = 50% closer, 0.7 = further away' },
+          reset_camera: { type: 'boolean' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'highlight_ui',
+      description:
+        `Point at a part of the interface with an ephemeral animated highlight (auto-scrolls the sidebar to it, fades after a few seconds). Use while teaching or answering "where/how do I…" questions so the user sees exactly where to look — e.g. highlight upload-dropzone when explaining how to add data. Targets: ${GUIDE_TARGETS.join(', ')}.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', enum: GUIDE_TARGETS as unknown as string[] },
+        },
+        required: ['target'],
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 const fmtNum = (v: number | undefined) =>
@@ -378,6 +437,10 @@ You can drive the app with your tools: change plot axes and coloring, switch 2D/
 You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
 
 Statistical guidance is welcome: help interpret PC loadings, choose sensible eps/min_samples or k, and reason about what cluster compositions suggest — while being clear about the limits of exploratory clustering (results depend on parameters; clusters are descriptive, not proof of latent groups).
+
+When the user asks you to interpret results or asks a methods question (components to keep, whether clusters are meaningful, effect sizes, correlations), call get_methods_reference first and ground your answer in the returned text, mentioning the sources it names. Keep the interpretation tied to their actual numbers.
+
+When explaining where something is in the interface or how to do something manually, call highlight_ui to point an ephemeral highlight at the relevant control while you explain — especially during tours (pair each tour step with its highlight).
 
 Tours: when the user asks for a tour, asks how the app works, or seems new, call get_tutorial and teach from it — never invent UI details. Go step by step, not all at once: pick the sections that match their situation (no data yet → start with load_data), and demonstrate live where it helps — load_demo_data, then set_plot or run_clustering, narrating briefly. End each step by offering the next one.
 
@@ -482,6 +545,15 @@ export const runAssistantTurn = async (
           return bridge.removePin(input.index);
         case 'save_workspace':
           return await bridge.saveWorkspaceAs(input.name);
+        case 'get_methods_reference': {
+          const chunks = searchMethods({ topics: input?.topics, query: input?.query });
+          if (!chunks.length) return `Nothing matched. Available topics: ${METHODS_TOPICS.join(', ')}.`;
+          return chunks.map(c => `## ${c.title}\n${c.text}`).join('\n\n');
+        }
+        case 'control_view':
+          return bridge.controlView(input ?? {});
+        case 'highlight_ui':
+          return bridge.highlightUI(input.target);
         default:
           return `Unknown tool: ${name}`;
       }
