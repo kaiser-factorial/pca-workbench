@@ -511,9 +511,11 @@ export const runAssistantTurn = async (
   return messages;
 };
 
+export type ModelInfo = { id: string; created: number };
+
 // Fetch the model catalog from the endpoint (OpenRouter serves this publicly).
 // Returns [] on failure — the panel falls back to a free-text model field.
-export const fetchModels = async (baseURL: string, apiKey: string): Promise<string[]> => {
+export const fetchModels = async (baseURL: string, apiKey: string): Promise<ModelInfo[]> => {
   try {
     const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
       headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -525,14 +527,33 @@ export const fetchModels = async (baseURL: string, apiKey: string): Promise<stri
     // support tool calling can drive the app. Endpoints without capability
     // info (e.g. local runtimes) are left unfiltered.
     const hasCaps = list.some(m => Array.isArray(m?.supported_parameters));
-    const ids = list
+    return list
       .filter(m => !hasCaps || (Array.isArray(m?.supported_parameters) && m.supported_parameters.includes('tools')))
-      .map(m => m?.id)
-      .filter((id: any) => typeof id === 'string');
-    return ids.sort();
+      .filter(m => typeof m?.id === 'string')
+      .map(m => ({ id: m.id as string, created: typeof m?.created === 'number' ? m.created : 0 }))
+      .sort((a, b) => a.id.localeCompare(b.id));
   } catch {
     return [];
   }
+};
+
+// Curated suggestions: the newest tool-capable model from each major family
+// actually present in the live catalog — so we never suggest a stale ID.
+const SUGGESTED_FAMILIES = [
+  'anthropic/claude', 'openai/gpt', 'google/gemini',
+  'x-ai/grok', 'deepseek/deepseek', 'qwen/qwen',
+];
+export const suggestModels = (models: ModelInfo[]): string[] => {
+  const out: string[] = [];
+  for (const fam of SUGGESTED_FAMILIES) {
+    const candidates = models
+      .filter(m => m.id.startsWith(fam) && !m.id.includes(':free') && !/preview|exp/.test(m.id))
+      .sort((a, b) => b.created - a.created);
+    // Prefer the newest full-strength model; speed tiers only as fallback
+    const best = candidates.find(m => !/fast|flash|mini|lite|nano|tiny|air/.test(m.id)) ?? candidates[0];
+    if (best) out.push(best.id);
+  }
+  return out;
 };
 
 // Friendly error strings for the panel

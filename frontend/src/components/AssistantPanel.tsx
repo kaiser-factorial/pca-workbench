@@ -3,9 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { Sparkles, Settings2, X, CornerDownLeft } from 'lucide-react';
 import {
-  AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS,
-  runAssistantTurn, fetchModels, describeApiError,
+  AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
+  runAssistantTurn, fetchModels, suggestModels, describeApiError,
 } from '@/lib/assistant';
+import { startOpenRouterOAuth, completeOpenRouterOAuth } from '@/lib/openrouterAuth';
 
 // Chat entries for display; the wire-format history is kept separately
 type ChatEntry = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string };
@@ -26,7 +27,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [baseURL, setBaseURL] = useState(DEFAULT_BASE_URL);
-  const [models, setModels] = useState<string[]>([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [chat, setChat] = useState<ChatEntry[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -34,15 +35,35 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Undo: view-state snapshot taken before the last mutating turn
   const [undoSnap, setUndoSnap] = useState<unknown>(null);
+  // OAuth failure to surface inside the settings view (chat may be hidden there)
+  const [authError, setAuthError] = useState('');
 
   useEffect(() => {
     setApiKey(localStorage.getItem(LS.key) ?? '');
     setModel(localStorage.getItem(LS.model) ?? DEFAULT_MODEL);
     setBaseURL(localStorage.getItem(LS.baseURL) ?? DEFAULT_BASE_URL);
+    // Returning from OpenRouter's OAuth approval? Exchange the code for a key.
+    completeOpenRouterOAuth()
+      .then(key => {
+        if (!key) return;
+        localStorage.setItem(LS.key, key);
+        localStorage.setItem(LS.baseURL, DEFAULT_BASE_URL);
+        setApiKey(key);
+        setBaseURL(DEFAULT_BASE_URL);
+        setShowSettings(false);
+        setOpen(true);
+        setChat(prev => [...prev, { kind: 'tool', text: 'connected to OpenRouter — you’re all set' }]);
+      })
+      .catch(err => {
+        setOpen(true);
+        setAuthError(`Connect failed: ${err?.message ?? err} Try again, or paste a key manually.`);
+      });
   }, []);
 
   useEffect(() => {
-    if (apiKey && open) fetchModels(baseURL, apiKey).then(setModels);
+    // OpenRouter's catalog is public — fetch even before a key exists so the
+    // model suggestions render during first-time setup
+    if (open) fetchModels(baseURL, apiKey).then(setModels);
   }, [apiKey, baseURL, open]);
 
   useEffect(() => {
@@ -159,7 +180,9 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
           primary={primary}
           inputCls={inputCls}
           apiKey={apiKey} model={model} baseURL={baseURL} models={models}
-          onSave={(k, m, u) => { saveSettings(k, m, u); setShowSettings(false); }}
+          authError={authError}
+          onConnect={() => { setAuthError(''); startOpenRouterOAuth(); }}
+          onSave={(k, m, u) => { saveSettings(k, m, u); setShowSettings(false); setAuthError(''); }}
           onClearKey={clearKey}
         />
       ) : (
@@ -243,27 +266,57 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   );
 };
 
-const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, onSave, onClearKey }: {
+const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authError, onConnect, onSave, onClearKey }: {
   primary: boolean, inputCls: string,
-  apiKey: string, model: string, baseURL: string, models: string[],
+  apiKey: string, model: string, baseURL: string, models: ModelInfo[],
+  authError: string,
+  onConnect: () => void,
   onSave: (key: string, model: string, baseURL: string) => void,
   onClearKey: () => void,
 }) => {
   const [key, setKey] = useState(apiKey);
   const [mdl, setMdl] = useState(model);
   const [url, setUrl] = useState(baseURL);
+  const [modelError, setModelError] = useState('');
   const labelCls = 'text-[10px] font-bold uppercase tracking-wider opacity-60';
+  const ids = models.map(m => m.id);
+  const suggested = suggestModels(models);
+
+  const trySave = () => {
+    if (!key.trim() || !mdl.trim() || !url.trim()) return;
+    // The catalog is already filtered to tool-capable models; a typed model
+    // outside it cannot drive the app. Endpoints without a catalog (local
+    // runtimes) skip this check.
+    if (ids.length && !ids.includes(mdl.trim())) {
+      setModelError(`"${mdl.trim()}" doesn't support tool calling on this endpoint, so it can't drive the app. Pick a suggested model or one from the list.`);
+      return;
+    }
+    setModelError('');
+    onSave(key.trim(), mdl.trim(), url.trim().replace(/\/$/, ''));
+  };
 
   return (
     <div className="px-3 py-3 space-y-2.5 overflow-y-auto">
       {!apiKey && (
         <p className="text-[11px] leading-snug opacity-70">
-          The assistant runs on your own key. Get one at{' '}
-          <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="underline">openrouter.ai/keys</a>{' '}
-          — one key works for Claude, GPT, Gemini, and more. The key is stored only in this
-          browser and is never included in exported workspaces.
+          The assistant runs on your own OpenRouter account — one account covers Claude, GPT,
+          Gemini, and more. Your key is stored only in this browser and never included in
+          exported workspaces.
         </p>
       )}
+      {authError && <p className="text-[11px] leading-snug text-red-500">{authError}</p>}
+      <button
+        onClick={onConnect}
+        className={`w-full py-2 text-xs font-bold cursor-pointer ${primary
+          ? 'bauhaus-btn bg-[var(--p-blue)] text-white'
+          : 'border border-[var(--system-green)]/60 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
+      >
+        {apiKey ? 'Reconnect OpenRouter' : 'Connect OpenRouter'}
+      </button>
+      <p className="text-[10px] opacity-40 leading-snug">
+        One click: approve on openrouter.ai and a scoped key is issued to this app automatically.
+        Or paste a key manually below (any OpenAI-compatible endpoint works).
+      </p>
       <div className="space-y-1">
         <div className={labelCls}>API key</div>
         <input type="password" value={key} onChange={e => setKey(e.target.value)}
@@ -271,11 +324,30 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, onSav
       </div>
       <div className="space-y-1">
         <div className={labelCls}>Model</div>
-        <input type="text" value={mdl} onChange={e => setMdl(e.target.value)} list="assistant-models"
+        {suggested.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {suggested.map(id => (
+              <button
+                key={id}
+                onClick={() => { setMdl(id); setModelError(''); }}
+                title={id}
+                className={`px-1.5 py-0.5 text-[9px] cursor-pointer ${mdl === id
+                  ? (primary ? 'bg-[#111111] text-white border border-[#111111]' : 'bg-[var(--system-green)] text-black border border-[var(--system-green)]')
+                  : (primary ? 'border border-[#111111]/40 hover:border-[#111111]' : 'border border-[var(--system-green)]/30 text-[var(--system-green)] hover:border-[var(--system-green)]')}`}
+              >
+                {id.split('/')[1] ?? id}
+              </button>
+            ))}
+          </div>
+        )}
+        <input type="text" value={mdl} onChange={e => { setMdl(e.target.value); setModelError(''); }} list="assistant-models"
+          placeholder="provider/model-id — type to search"
           className={`w-full px-2 py-1.5 text-xs outline-none ${inputCls}`} />
         <datalist id="assistant-models">
-          {models.map(m => <option key={m} value={m} />)}
+          {ids.map(id => <option key={id} value={id} />)}
         </datalist>
+        {modelError && <p className="text-[10px] leading-snug text-red-500">{modelError}</p>}
+        {ids.length > 0 && <p className="text-[9px] opacity-40">Only tool-capable models are listed ({ids.length} available) — others can't drive the app.</p>}
       </div>
       <div className="space-y-1">
         <div className={labelCls}>Endpoint (OpenAI-compatible)</div>
@@ -287,7 +359,7 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, onSav
       </div>
       <div className="flex gap-2">
         <button
-          onClick={() => key.trim() && onSave(key.trim(), mdl.trim(), url.trim().replace(/\/$/, ''))}
+          onClick={trySave}
           disabled={!key.trim() || !mdl.trim() || !url.trim()}
           className={`flex-1 py-1.5 text-xs font-bold disabled:opacity-30 cursor-pointer ${primary
             ? 'bauhaus-btn bg-[var(--p-blue)] text-white'
