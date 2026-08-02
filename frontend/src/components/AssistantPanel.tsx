@@ -405,7 +405,8 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
                   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
                 }}
                 aria-label="Message the assistant"
-                placeholder={busy ? 'Working…' : 'Ask or instruct… (Shift+Enter for a new line)'}
+                placeholder={busy ? 'Working…' : 'Ask or instruct…'}
+                title="Enter sends · Shift+Enter for a new line"
                 disabled={busy}
                 className={`flex-1 min-w-0 px-2 py-1.5 text-xs outline-none resize-none leading-snug overflow-y-auto ${inputCls}`}
               />
