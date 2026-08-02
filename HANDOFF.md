@@ -81,9 +81,10 @@ order by event_id, created_at desc;
 
 ## Outstanding
 
-1. **Unit tests are not in the repo.** The stats, PCA, and methods-retrieval suites
-   (34 passing cases total) were run from a session scratchpad. Port them into
-   `frontend/` under vitest + a CI step. Highest-value follow-up.
+1. ~~Unit tests are not in the repo~~ **Done (2026-08-02):** stats, PCA, and
+   methods-retrieval suites live in `frontend/src/lib/__tests__/` (vitest,
+   `npm test`, 24 cases) and run in GitHub Actions on every push/PR
+   (`.github/workflows/test.yml`).
 2. **Methods library editorial pass** (`src/lib/methods.ts`): content synthesized from
    model knowledge + the NYU CDS Lab 13 notebook, with named citations. The intended
    vetting step is a ten-minute read/edit by Corina — not yet done.
