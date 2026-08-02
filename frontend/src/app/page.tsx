@@ -907,11 +907,13 @@ const flashGuide = (target: string, color: string): boolean => {
     document.body.append(ring, arrow);
     const place = () => {
         const r = el.getBoundingClientRect();
-        ring.style.left = `${r.left - 5}px`;
-        ring.style.top = `${r.top - 5}px`;
-        ring.style.width = `${r.width + 10}px`;
-        ring.style.height = `${r.height + 10}px`;
-        arrow.style.left = `${r.right + 10}px`;
+        // generous padding so the target sits fully inside the ring
+        const pad = 12;
+        ring.style.left = `${r.left - pad}px`;
+        ring.style.top = `${r.top - pad}px`;
+        ring.style.width = `${r.width + pad * 2}px`;
+        ring.style.height = `${r.height + pad * 2}px`;
+        arrow.style.left = `${r.right + pad + 6}px`;
         arrow.style.top = `${r.top + r.height / 2 - 13}px`;
     };
     place();
