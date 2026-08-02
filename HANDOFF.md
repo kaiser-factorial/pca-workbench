@@ -33,6 +33,15 @@ The app is one page ([src/app/page.tsx](frontend/src/app/page.tsx)) plus librari
 Two full visual themes (Bauhaus "primary" / Terminal) via `next-themes`; theme-aware
 plot chrome throughout.
 
+**Visual channels:** position (X/Y/Z), colour (`colorBy`, categorical palette or Viridis
+ramp), and marker shape (`shapeBy`, added 2026-08-02). Shape is capped at 6 levels
+(`SHAPE_SYMBOLS`: filled circle/square/diamond then their open twins — cross/x are
+excluded because scatter3d draws them at a much heavier visual weight, which reads as
+size). Plotly takes one symbol per trace, so an active shape variable subdivides every
+colour group; palette indices are keyed to the colour categories alone so nobody's
+colour shifts. Legend shows a colour key (clickable: mute → hide) plus a display-only
+shape key — muting stays a colour concept, since `mutedMap` is keyed by colour value.
+
 ## The assistant
 
 Bring-your-own-key via **OpenRouter** (one-click OAuth PKCE, or manual key; any
@@ -120,7 +129,28 @@ order by event_id, created_at desc;
      `colorBy` model, so it probably wants a transient "selection" overlay trace (or a
      synthetic boolean column) that leaves `colorBy` intact and clears on the next turn.
      Would pair well with the undo snapshot already taken per mutating turn.
-9. **Possible future directions** discussed but not committed: embeddings-based RAG for
+9. **Clustering: the gap is inputs, not algorithms (reviewed 2026-08-02).** Two findings
+   worth acting on before any new method is added:
+   - *No standardization.* `imputeColumns` in `cluster.ts` median-imputes but never
+     z-scales, unlike the PCA path. On raw columns of different scales (Age 18–65 vs a
+     1–7 Likert) Euclidean distance is almost entirely the wider column, and every
+     distance-based method inherits this. A "standardize before clustering" toggle
+     would improve DBSCAN/K-Means today more than a new algorithm would.
+   - *Axes are the feature selection.* Clustering runs on the 2–3 **plotted** columns
+     ([page.tsx](frontend/src/app/page.tsx) `handleCluster`). Fine for PC axes; weak for
+     two arbitrary raw ones. Letting users pick cluster variables independently of the
+     plotted axes is the bigger win.
+   Methods ranked by fit, if one is added anyway: **Ward agglomerative** (~60 lines,
+   deterministic, one run yields every k plus a dendrogram — best pure fit to the
+   `(number|null)[][] → string[]` contract); **Gaussian mixtures/EM** (elliptical
+   clusters, soft assignments that could drive opacity or the new shape channel, BIC as
+   a companion to the silhouette `suggest_k`); **k-medoids + Gower** (mixed
+   numeric/categorical, so survey categoricals become clusterable — but needs the
+   decoupled-variables work first); **HDBSCAN** (removes `eps`, the most annoying
+   parameter, but 250–400 lines and no small JS implementation worth trusting).
+   Ruled out: spectral (needs an n×n Laplacian eigendecomposition; the Jacobi solver in
+   `pca.ts` is O(n³) per sweep and would hang the tab) and affinity propagation.
+10. **Possible future directions** discussed but not committed: embeddings-based RAG for
    user-supplied papers (only worth it beyond the curated corpus), OpenRouter spend-limit
    note in settings, silhouette/elbow charts in the Cluster section UI.
 

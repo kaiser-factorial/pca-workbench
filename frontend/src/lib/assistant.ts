@@ -33,11 +33,12 @@ export type AppBridge = {
     columns: ColumnProfile[];
     axes: { x: string; y: string; z: string | null };
     colorBy: string;
+    shapeBy: string;
     viewMode: '2D' | '3D';
     pinnedViews: number;
     clusterSettings: { method: string; eps: number; minSamples: number; k: number };
   };
-  setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; view_mode?: '2D' | '3D' }) => string;
+  setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
   runClustering: (method: 'DBSCAN' | 'KMEANS', opts: { eps?: number; min_samples?: number; k?: number }) => string;
   getClusterBreakdown: (attribute: string) => string;
   pinView: () => string;
@@ -89,7 +90,7 @@ export const TUTORIAL: Record<string, string> = {
   load_data:
     'Add data via the dropzone in the sidebar ("1. Data") — drag a CSV, XLSX, or Parquet file in, or click to browse, then press "Add Dataset". Datasets with PC score columns plot immediately. Optionally, "+ Project through a PCA components file" reveals a second dropzone: supply a loadings file and the app median-imputes, standardizes, and computes PC1–PC3 itself. Several datasets can be loaded at once; click one in the list to make it active.',
   variables:
-    'The Variables panel ("2. Variables") is both data profile and plot control. Every column shows its type, range or category count, missing values, and a mini-histogram. The small buttons on each row do the plotting: X, Y, Z put a numeric column on that axis; C colors the points by that column. If a components file was used, "Top PC contributors" shows which variables load on each PC.',
+    'The Variables panel ("2. Variables") is both data profile and plot control. Every column shows its type, range or category count, missing values, and a mini-histogram. The small buttons on each row do the plotting: X, Y, Z put a numeric column on that axis; C colors the points by that column; S encodes it as the marker shape (circle, square, diamond, then open variants — offered only for columns with at most 6 distinct values, and pressed again to switch off). Color and shape are independent, so two variables can be read at once, with a shape key under the legend. If a components file was used, "Top PC contributors" shows which variables load on each PC.',
   plotting:
     'The View section ("4. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
   pca:
@@ -116,7 +117,7 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'get_app_state',
       description:
-        'Read the current state of the workbench: loaded datasets, all column profiles (name, type, range, missing count, top categories), current plot axes, coloring, view mode, pinned view count, and clustering settings. Call this before answering questions about the data or changing the plot.',
+        'Read the current state of the workbench: loaded datasets, all column profiles (name, type, range, missing count, top categories), current plot axes, coloring, marker-shape encoding, view mode, pinned view count, and clustering settings. Call this before answering questions about the data or changing the plot.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -125,7 +126,7 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'set_plot',
       description:
-        'Change what the scatter plot shows. Any combination of: assign a numeric column to the x, y, or z axis; color points by any column; switch between 2D and 3D. Omitted fields are left unchanged.',
+        'Change what the scatter plot shows. Any combination of: assign a numeric column to the x, y, or z axis; color points by any column; encode a low-cardinality column as the marker shape; switch between 2D and 3D. Omitted fields are left unchanged. Color and shape are independent channels, so setting both shows two variables at once — useful for asking whether one grouping lines up with another (e.g. color by cluster, shape by a demographic, and see whether the shapes separate).',
       parameters: {
         type: 'object',
         properties: {
@@ -133,6 +134,11 @@ const TOOLS: ChatCompletionTool[] = [
           y: { type: 'string', description: 'Numeric column for the Y axis' },
           z: { type: 'string', description: 'Numeric column for the Z axis (3D only)' },
           color_by: { type: 'string', description: 'Column to color points by' },
+          shape_by: {
+            type: 'string',
+            description:
+              'Column to encode as marker symbol (filled circle, square, diamond, then their open variants). At most 6 distinct values, and only really readable up to about 4 — prefer color for anything richer. Pass "none" to turn the shape encoding off.',
+          },
           view_mode: { type: 'string', enum: ['2D', '3D'] },
         },
         additionalProperties: false,
@@ -447,7 +453,7 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
   return `You are the built-in assistant of Scatter Lab, a browser-based workbench where researchers explore tabular data as interactive 2D/3D scatter plots, project data through PCA components, run DBSCAN/K-Means clustering, and compare pinned views. The user is typically a survey researcher.
 
-You can drive the app with your tools: change plot axes and coloring, switch 2D/3D or the active dataset, run clustering, read cluster compositions, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
+You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
 You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
 
@@ -463,7 +469,7 @@ Keep responses short and concrete. This is a side panel, not a report.
 
 Current session:
 ${s.datasets.length === 0 ? 'No dataset loaded yet — suggest loading one (there is a demo dataset button on the empty canvas).' : `Datasets: ${s.datasets.map(d => `${d.name} (${d.nRows} rows${d.active ? ', active' : ''})`).join('; ')}
-Plot: ${s.viewMode}, x=${s.axes.x}, y=${s.axes.y}${s.axes.z ? `, z=${s.axes.z}` : ''}, colored by ${s.colorBy}. Pinned views: ${s.pinnedViews}/3.
+Plot: ${s.viewMode}, x=${s.axes.x}, y=${s.axes.y}${s.axes.z ? `, z=${s.axes.z}` : ''}, colored by ${s.colorBy}${s.shapeBy ? `, marker shape by ${s.shapeBy}` : ''}. Pinned views: ${s.pinnedViews}/3.
 Columns of the active dataset:
 ${cols}`}`;
 };

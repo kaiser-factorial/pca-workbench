@@ -67,6 +67,22 @@ const PrimaryCollapsible = ({ title, mode = 'top', defaultOpen = true, width, bu
     );
 };
 
+// Legend swatch for the shape channel — mirrors the Plotly symbol names in
+// SHAPE_SYMBOLS. Drawn rather than imported so it inherits the theme colour.
+const SymbolGlyph = ({ symbol, color }: { symbol: string, color: string }) => {
+    const open = symbol.endsWith('-open');
+    const base = symbol.replace('-open', '');
+    const fill = open ? 'none' : color;
+    const p = { fill, stroke: color, strokeWidth: 1.5 };
+    return (
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" className="flex-shrink-0">
+            {base === 'circle' && <circle cx="6" cy="6" r="4.2" {...p} />}
+            {base === 'square' && <rect x="2" y="2" width="8" height="8" {...p} />}
+            {base === 'diamond' && <path d="M6 1.4 L10.6 6 L6 10.6 L1.4 6 Z" {...p} />}
+        </svg>
+    );
+};
+
 const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme: string | undefined, muted?: MuteMap, onToggle?: (val: any) => void }) => {
     const legendInfo = useMemo(() => {
         const colVals: any[] = view.data?.data?.[view.colorBy] ?? [];
@@ -87,6 +103,15 @@ const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme:
     }, [view.data, view.colorBy]);
     const colors = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#38A6A5', '#0F8554', '#73AF48', '#EDAD08', '#E17C05'];
     const textClass = theme === 'primary' ? 'text-[10px] font-bold text-[var(--foreground)]' : 'text-[10px] text-gray-300';
+
+    // Shape is an independent channel, so it gets its own key below the colours.
+    // Display-only: muting stays a colour concept (mutedMap is keyed by colour value).
+    const shapeCats = useMemo(() => {
+        const vals: any[] = view.shapeBy ? (view.data?.data?.[view.shapeBy] ?? []) : [];
+        const cats = vals.length ? shapeCategories(vals) : [];
+        return cats.length && cats.length <= MAX_SHAPE_CATEGORIES ? cats : [];
+    }, [view.data, view.shapeBy]);
+    const glyphColor = theme === 'primary' ? '#111111' : '#10ff50';
 
     const innerContent = legendInfo.kind === "continuous" ? (
         <div className="flex flex-col gap-1">
@@ -121,6 +146,22 @@ const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme:
         </div>
     );
 
+    const shapeSection = shapeCats.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-current/15">
+            <div className={`mb-1.5 opacity-60 uppercase tracking-wider ${textClass}`} title={view.shapeBy}>
+                Shape · {view.shapeBy}
+            </div>
+            <div className="flex flex-col gap-1.5 max-h-[30vh] overflow-y-auto">
+                {shapeCats.map((val, i) => (
+                    <div key={val} className="flex items-center gap-2">
+                        <SymbolGlyph symbol={SHAPE_SYMBOLS[i]} color={glyphColor} />
+                        <span className={`truncate ${textClass}`} title={val}>{val}</span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+
     if (theme === 'terminal') {
         return (
             <div className="absolute top-1/4 right-0 z-30">
@@ -128,16 +169,18 @@ const ThemedLegend = ({ view, theme, muted = {}, onToggle }: { view: any, theme:
                     <div className="p-3 w-full">
                         <div className="text-[10px] font-bold mb-2 uppercase tracking-widest text-[#10ff50]/70">{view.colorBy}</div>
                         {innerContent}
+                        {shapeSection}
                     </div>
                 </CyberPanel>
             </div>
         );
     }
-    
+
     return (
         <div className="absolute top-1/4 right-0 z-30">
             <PrimaryCollapsible title={view.colorBy} mode="side" width={200}>
                 {innerContent}
+                {shapeSection}
             </PrimaryCollapsible>
         </div>
     );
@@ -253,13 +296,36 @@ const sortCategories = (vals: any[]) => [...vals].sort((a, b) => {
     return A.localeCompare(B, undefined, { numeric: true });
 });
 
-const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false) => {
+// Marker symbols understood by BOTH scatter and scatter3d, so switching modes
+// never changes what a shape means. Filled glyphs lead, then their open twins.
+// cross/x are deliberately absent: scatter3d draws them as line glyphs at a much
+// heavier visual weight than the filled shapes, which reads as "these points are
+// bigger" — shape must not imply magnitude. Shape is a low-cardinality channel
+// anyway (past ~5 levels the glyphs stop being tellable apart), so the list is
+// also the cap.
+const SHAPE_SYMBOLS = ['circle', 'square', 'diamond', 'circle-open', 'square-open', 'diamond-open'];
+const MAX_SHAPE_CATEGORIES = SHAPE_SYMBOLS.length;
+
+const shapeCategories = (vals: any[]) =>
+    sortCategories(Array.from(new Set(vals.map((v: any) => String(v ?? 'N/A')))));
+
+const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false, shapeField = "") => {
     if (!table || table.nRows === 0) return [];
     const n = table.nRows;
     const px = table.data[axes.x] ?? [];
     const py = table.data[axes.y] ?? [];
     const pz = axes.z ? (table.data[axes.z] ?? []) : new Array(n).fill(0);
     const colorVals = table.data[colorField] ?? [];
+
+    // Shape is a second, independent categorical channel. Plotly takes one symbol
+    // per trace, so an active shape variable splits each colour group further —
+    // hence the hard cardinality cap, which also keeps the glyphs distinguishable.
+    const shapeVals = shapeField ? (table.data[shapeField] ?? []) : [];
+    const shapeCats = shapeField ? shapeCategories(shapeVals) : [];
+    const shapeOn = shapeCats.length > 0 && shapeCats.length <= MAX_SHAPE_CATEGORIES;
+    const symbolFor: Record<string, string> = {};
+    if (shapeOn) shapeCats.forEach((v, i) => { symbolFor[v] = SHAPE_SYMBOLS[i]; });
+    const shapeAt = (i: number) => (shapeOn ? String(shapeVals[i] ?? 'N/A') : null);
 
     const traces: any[] = [];
     const colors = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#38A6A5', '#0F8554', '#73AF48', '#EDAD08', '#E17C05'];
@@ -270,51 +336,101 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
     const kind = getColorFieldKind(colorVals);
 
     if (kind === "categorical") {
-        const grouped: any = {};
+        // Palette index comes from the colour categories alone, so adding a shape
+        // variable subdivides traces without shifting anybody's colour
+        const colorCats = sortCategories(Array.from(new Set(colorVals.map((v: any) => v ?? "N/A"))));
+        const colorIdx = new Map(colorCats.map((v, i) => [String(v), i]));
+        const grouped: Record<string, { x: any[], y: any[], z: any[], color: any, shape: string | null }> = {};
         for (let i = 0; i < n; i++) {
-            const val = colorVals[i] ?? "N/A";
-            if (!grouped[val]) grouped[val] = { x: [], y: [], z: [] };
-            grouped[val].x.push(px[i]);
-            grouped[val].y.push(py[i]);
-            grouped[val].z.push(pz[i]);
+            const cval = colorVals[i] ?? "N/A";
+            const sval = shapeAt(i);
+            const key = sval == null ? String(cval) : `${cval}␟${sval}`;
+            const g = (grouped[key] ??= { x: [], y: [], z: [], color: cval, shape: sval });
+            g.x.push(px[i]);
+            g.y.push(py[i]);
+            g.z.push(pz[i]);
         }
-        sortCategories(Object.keys(grouped)).forEach((key, i) => {
+        // Colour-major, then shape — keeps trace order aligned with the legend
+        const groups = Object.values(grouped).sort((a, b) => {
+            const ca = colorIdx.get(String(a.color)) ?? 0, cb = colorIdx.get(String(b.color)) ?? 0;
+            if (ca !== cb) return ca - cb;
+            return shapeCats.indexOf(a.shape ?? '') - shapeCats.indexOf(b.shape ?? '');
+        });
+        groups.forEach(g => {
             // Muted/hidden categories keep their trace slot so colors don't shift:
             // 'muted' renders hollow with a thin grey outline, 'hidden' is invisible
+            const key = String(g.color);
             const state = muted[key];
+            const i = colorIdx.get(key) ?? 0;
+            const symbol = g.shape ? symbolFor[g.shape] : undefined;
+            // Hollowing out only works for fillable glyphs — the -open symbols draw
+            // in the marker colour, so a transparent fill would erase them entirely.
+            // Those mute to a grey ghost instead, which keeps the shape readable.
+            const mutedMarker = symbol?.endsWith('-open')
+                ? { color: '#999999', opacity: 0.3 }
+                : { color: 'rgba(0,0,0,0)', opacity: 0.5, line: { color: '#999999', width: 1 } };
             traces.push({
-                x: grouped[key].x,
-                y: grouped[key].y,
-                z: mode === "3D" ? grouped[key].z : undefined,
+                x: g.x,
+                y: g.y,
+                z: mode === "3D" ? g.z : undefined,
                 visible: state !== 'hidden',
                 mode: 'markers',
                 type: mode === "3D" ? 'scatter3d' : 'scatter',
-                name: String(key),
-                marker: state === 'muted'
-                    ? { size: mode === "3D" ? 4 : 6, color: 'rgba(0,0,0,0)', opacity: 0.5, line: { color: '#999999', width: 1 } }
-                    : { size: mode === "3D" ? 4 : 6, color: key === 'Noise' ? '#8a8a8a' : colors[i % colors.length], opacity: key === 'Noise' ? 0.35 : 0.7 },
+                name: g.shape ? `${key} · ${g.shape}` : key,
+                marker: {
+                    size: mode === "3D" ? 4 : 6,
+                    ...(symbol ? { symbol } : {}),
+                    ...(state === 'muted'
+                        ? mutedMarker
+                        : { color: key === 'Noise' ? '#8a8a8a' : colors[i % colors.length], opacity: key === 'Noise' ? 0.35 : 0.7 }),
+                },
                 hovertemplate
             });
         });
     } else {
         // Single trace: the columnar arrays go to Plotly as-is, no reshaping.
         // Continuous fields get a Viridis colorscale, overflowing categoricals a flat color.
-        traces.push({
-            x: px,
-            y: py,
-            z: mode === "3D" ? pz : undefined,
+        // A shape variable splits this into one trace per symbol; the colorscale is
+        // then pinned to the full range so the split traces stay directly comparable.
+        let cmin = Infinity, cmax = -Infinity;
+        if (kind === "continuous") {
+            for (const v of colorVals) {
+                if (typeof v !== 'number') continue;
+                if (v < cmin) cmin = v;
+                if (v > cmax) cmax = v;
+            }
+        }
+        const markerFor = (vals: any[]) => ({
+            size: mode === "3D" ? 4 : 6,
+            opacity: 0.7,
+            ...(kind === "continuous"
+                ? { color: vals, colorscale: 'Viridis', showscale: false, cmin, cmax }
+                : { color: '#4195DE' })
+        });
+        const base = {
             mode: 'markers',
             type: mode === "3D" ? 'scatter3d' : 'scatter',
-            name: colorField,
-            marker: {
-                size: mode === "3D" ? 4 : 6,
-                opacity: 0.7,
-                ...(kind === "continuous"
-                    ? { color: colorVals, colorscale: 'Viridis', showscale: false }
-                    : { color: '#4195DE' })
-            },
             hovertemplate
-        });
+        };
+        if (!shapeOn) {
+            traces.push({ ...base, x: px, y: py, z: mode === "3D" ? pz : undefined, name: colorField, marker: markerFor(colorVals) });
+        } else {
+            const buckets: Record<string, { x: any[], y: any[], z: any[], c: any[] }> = {};
+            for (let i = 0; i < n; i++) {
+                const sval = shapeAt(i)!;
+                const b = (buckets[sval] ??= { x: [], y: [], z: [], c: [] });
+                b.x.push(px[i]); b.y.push(py[i]); b.z.push(pz[i]); b.c.push(colorVals[i]);
+            }
+            shapeCats.filter(s => buckets[s]).forEach(s => {
+                const b = buckets[s];
+                traces.push({
+                    ...base,
+                    x: b.x, y: b.y, z: mode === "3D" ? b.z : undefined,
+                    name: s,
+                    marker: { ...markerFor(b.c), symbol: symbolFor[s] },
+                });
+            });
+        }
     }
 
     if (mode === "3D") {
@@ -436,9 +552,9 @@ const MiniCatBar = ({ values }: { values: any[] }) => {
 // One row per column: profile (kind, range, missing, sparkline) plus one-click
 // plot assignment — X/Y/Z axis for numeric columns, C (color) for any column.
 // This is the app's data inspector and its variable picker in one surface.
-const VariablesPanel = ({ dataset, viewMode, colorBy, theme, onAxis, onColor }: {
-    dataset: Dataset, viewMode: "3D" | "2D", colorBy: string, theme: string | undefined,
-    onAxis: (axis: 'x' | 'y' | 'z', col: string) => void, onColor: (col: string) => void,
+const VariablesPanel = ({ dataset, viewMode, colorBy, shapeBy, theme, onAxis, onColor, onShape }: {
+    dataset: Dataset, viewMode: "3D" | "2D", colorBy: string, shapeBy: string, theme: string | undefined,
+    onAxis: (axis: 'x' | 'y' | 'z', col: string) => void, onColor: (col: string) => void, onShape: (col: string) => void,
 }) => {
     const table = dataset.table;
     const axes = viewMode === "2D" ? { ...dataset.axes2d, z: null as string | null } : dataset.axes;
@@ -456,17 +572,22 @@ const VariablesPanel = ({ dataset, viewMode, colorBy, theme, onAxis, onColor }: 
 
     const fmt = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2).replace(/\.?0+$/, '');
     // Assignment buttons carry the Bauhaus triad in primary; terminal goes green
-    const AXIS_STYLE: Record<string, string> = { x: 'var(--p-red)', y: 'var(--p-blue)', z: 'var(--p-yellow)', c: 'var(--p-black)' };
+    const AXIS_STYLE: Record<string, string> = { x: 'var(--p-red)', y: 'var(--p-blue)', z: 'var(--p-yellow)', c: 'var(--p-black)', s: 'var(--p-white)' };
     const activeStyle = (slot: string) => theme === 'primary'
-        ? { backgroundColor: AXIS_STYLE[slot], color: slot === 'z' ? '#111111' : '#FFFFFF', borderColor: '#111111' }
+        ? { backgroundColor: AXIS_STYLE[slot], color: slot === 'z' || slot === 's' ? '#111111' : '#FFFFFF', borderColor: '#111111' }
         : { backgroundColor: 'var(--system-green)', color: '#000000', borderColor: 'var(--system-green)' };
 
-    const slotBtn = (slot: 'x' | 'y' | 'z' | 'c', p: { col: string }, active: boolean, disabled = false) => (
+    const slotTitle = (slot: string, col: string, active: boolean) =>
+        slot === 'c' ? `Color by ${col}`
+        : slot === 's' ? (active ? `Stop encoding ${col} as marker shape` : `Encode ${col} as marker shape`)
+        : `Plot ${col} on the ${slot.toUpperCase()} axis`;
+
+    const slotBtn = (slot: 'x' | 'y' | 'z' | 'c' | 's', p: { col: string }, active: boolean, disabled = false) => (
         <button
             key={slot}
             disabled={disabled}
-            onClick={() => slot === 'c' ? onColor(p.col) : onAxis(slot, p.col)}
-            title={slot === 'c' ? `Color by ${p.col}` : `Plot ${p.col} on the ${slot.toUpperCase()} axis`}
+            onClick={() => slot === 'c' ? onColor(p.col) : slot === 's' ? onShape(p.col) : onAxis(slot, p.col)}
+            title={slotTitle(slot, p.col, active)}
             className="w-5 h-5 text-[9px] font-bold uppercase border flex items-center justify-center transition-colors disabled:opacity-20 cursor-pointer"
             style={active ? activeStyle(slot) : { borderColor: 'var(--border)', opacity: 0.45 }}
         >
@@ -497,6 +618,9 @@ const VariablesPanel = ({ dataset, viewMode, colorBy, theme, onAxis, onColor }: 
                             {p.isNumeric && slotBtn('y', p, axes.y === p.col)}
                             {p.isNumeric && viewMode === "3D" && slotBtn('z', p, axes.z === p.col)}
                             {kind !== 'too-many' && slotBtn('c', p, colorBy === p.col)}
+                            {/* Shape only reads at low cardinality — offered for any
+                                column inside the cap, numeric Likert scales included */}
+                            {p.nUnique > 1 && p.nUnique <= MAX_SHAPE_CATEGORIES && slotBtn('s', p, shapeBy === p.col)}
                         </div>
                     </div>
                 );
@@ -963,8 +1087,8 @@ const SidebarGroup = ({ children, theme }: { children: React.ReactNode, theme: s
 const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRelayout: (e: any) => void }) => {
     const { theme } = useTheme();
     const traces = useMemo(
-        () => buildTraces(view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted ?? {}, theme === 'terminal'),
-        [view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted, theme]
+        () => buildTraces(view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted ?? {}, theme === 'terminal', view.shapeBy ?? ""),
+        [view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted, theme, view.shapeBy]
     );
     return (
         <Plot
@@ -992,6 +1116,8 @@ export default function Home() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [colorBy, setColorBy] = useState<string>("");
+  // Second categorical channel, rendered as marker symbols. "" = off.
+  const [shapeBy, setShapeBy] = useState<string>("");
   const activeDataset = datasets.find(d => d.id === activeId) ?? null;
   const processedData = activeDataset?.table ?? null;
   
@@ -1041,6 +1167,14 @@ export default function Home() {
       if (skipRangeReset.current) { skipRangeReset.current = false; return; }
       setRange2d(null);
   }, [activeId, activeDataset?.axes2d.x, activeDataset?.axes2d.y]);
+
+  // Drop the shape encoding when the column it points at is gone (dataset switch,
+  // Clear All) or has grown past the cap (a clustering run adding levels)
+  useEffect(() => {
+      if (!shapeBy) return;
+      const vals = activeDataset?.table.data[shapeBy];
+      if (!vals || shapeCategories(vals).length > MAX_SHAPE_CATEGORIES) setShapeBy("");
+  }, [activeId, activeDataset?.table, shapeBy]);
 
   // PCA state: scree info from the most recent in-app run (per active dataset)
   const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[] } | null>(null);
@@ -1194,7 +1328,7 @@ export default function Home() {
       return {
           version: 1,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
-          activeId, colorBy, viewMode, showAxes, camera, range2d,
+          activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
           notes, mutedMap,
           clusterMethod, eps, minSamples, k, breakdownBy, includeExportInfo,
       };
@@ -1256,6 +1390,7 @@ export default function Home() {
           setPinnedViews((ws.pinnedViews ?? []).map((v: any) => ({ ...v, data: rehydrate(v.data) })));
           setActiveId(ws.activeId ?? null);
           setColorBy(ws.colorBy ?? "");
+          setShapeBy(ws.shapeBy ?? "");
           setViewMode(ws.viewMode ?? "3D");
           setShowAxes(ws.showAxes ?? { "3D": false, "2D": true });
           setCamera(ws.camera ?? { eye: { x: 1.8, y: 1.2, z: 0.5 } });
@@ -1344,6 +1479,7 @@ export default function Home() {
       setDatasets([]);
       setActiveId(null);
       setColorBy("");
+      setShapeBy("");
       setPinnedViews([]);
       setDatasetFile(null);
       setComponentsFile(null);
@@ -1599,7 +1735,7 @@ export default function Home() {
           const kind = getColorFieldKind(processedData.data[colorBy] ?? []);
           const title = includeExportInfo ? `${axesStr} · colored by ${colorBy}` : `${activeDataset.name}`;
 
-          const data = buildTraces(processedData, colorBy, viewMode, axes, labels, mutedMap);
+          const data = buildTraces(processedData, colorBy, viewMode, axes, labels, mutedMap, false, shapeBy);
           if (includeExportInfo && kind === "continuous" && data[0]?.marker) {
               data[0].marker.showscale = true;
               data[0].marker.colorbar = { title: { text: colorBy }, thickness: 14 };
@@ -1690,7 +1826,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       setPinnedViews([
           ...pinnedViews,
           // Tables are replaced wholesale on change, so sharing the reference is a safe snapshot
-          { id: Date.now(), data: processedData, colorBy,
+          { id: Date.now(), data: processedData, colorBy, shapeBy,
             axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode,
             showAxes: showAxes[viewMode],
             // Freeze the 2D framing too, so a pin keeps showing the region it was
@@ -1787,6 +1923,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           columns: columnProfiles(),
           axes: activeDataset ? effectiveAxes(activeDataset, viewMode) : { x: '', y: '', z: null },
           colorBy,
+          shapeBy,
           viewMode,
           pinnedViews: pinnedViews.length,
           clusterSettings: { method: clusterMethod, eps, minSamples, k },
@@ -1802,6 +1939,18 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               if (col && !numeric.has(col)) problems.push(`"${col}" is not a numeric column (${axis} axis).`);
           }
           if (opts.color_by && !t.columns.includes(opts.color_by)) problems.push(`"${opts.color_by}" is not a column.`);
+          // "" / "none" is the documented way to switch the shape channel off
+          const clearShape = opts.shape_by != null && ['', 'none'].includes(String(opts.shape_by).toLowerCase());
+          if (opts.shape_by && !clearShape) {
+              if (!t.columns.includes(opts.shape_by)) {
+                  problems.push(`"${opts.shape_by}" is not a column.`);
+              } else {
+                  const levels = shapeCategories(t.data[opts.shape_by] ?? []);
+                  if (levels.length > MAX_SHAPE_CATEGORIES) {
+                      problems.push(`"${opts.shape_by}" has ${levels.length} distinct values — shape encodes at most ${MAX_SHAPE_CATEGORIES}, and is only readable up to about 5. Use color_by for it instead, or shape a coarser column.`);
+                  }
+              }
+          }
           if (problems.length) return `Not applied. ${problems.join(' ')} Numeric columns: ${numericColumns(t).join(', ')}.`;
 
           if (opts.view_mode) setViewMode(opts.view_mode);
@@ -1817,12 +1966,18 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               }));
           }
           if (opts.color_by) setColorBy(opts.color_by);
+          if (opts.shape_by != null) setShapeBy(clearShape ? "" : opts.shape_by);
           const parts = [
               opts.view_mode && `view=${opts.view_mode}`,
               opts.x && `x=${opts.x}`, opts.y && `y=${opts.y}`, opts.z && `z=${opts.z}`,
               opts.color_by && `color=${opts.color_by}`,
+              opts.shape_by != null && (clearShape ? 'shape=off' : `shape=${opts.shape_by}`),
           ].filter(Boolean);
-          return `Applied: ${parts.join(', ')}.`;
+          if (!parts.length) return 'Nothing requested — pass at least one of x, y, z, color_by, shape_by, view_mode.';
+          const shapeNote = opts.shape_by && !clearShape
+              ? ` Marker symbols now encode ${opts.shape_by} (${shapeCategories(t.data[opts.shape_by] ?? []).join(', ')}); a shape key is listed under the legend.`
+              : '';
+          return `Applied: ${parts.join(', ')}.${shapeNote}`;
       },
 
       runClustering: (method, opts) => {
@@ -2096,7 +2251,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       },
 
       snapshot: () => ({
-          datasets, activeId, colorBy, viewMode, showAxes, pinnedViews,
+          datasets, activeId, colorBy, shapeBy, viewMode, showAxes, pinnedViews,
           clusterMethod, eps, minSamples, k, breakdownBy, mutedMap,
       }),
 
@@ -2106,6 +2261,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           setDatasets(snap.datasets);
           setActiveId(snap.activeId);
           setColorBy(snap.colorBy);
+          setShapeBy(snap.shapeBy ?? "");
           setViewMode(snap.viewMode);
           setShowAxes(snap.showAxes);
           setPinnedViews(snap.pinnedViews);
@@ -2165,7 +2321,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
   // We construct the views array for TmuxGrid: active view is always first, then pinned views
   const allViews = processedData
-      ? [{ id: 'active', data: processedData, colorBy, axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode, showAxes: showAxes[viewMode], muted: mutedMap, label: `${activeDataset?.name} · live` }, ...pinnedViews]
+      ? [{ id: 'active', data: processedData, colorBy, shapeBy, axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode, showAxes: showAxes[viewMode], muted: mutedMap, label: `${activeDataset?.name} · live` }, ...pinnedViews]
       : [];
 
   return (
@@ -2342,7 +2498,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             <>
               <SidebarSection title="Variables" step={2} hasBorder theme={theme} guide="variables">
                 <div className="text-[11px] opacity-60 -mt-1">
-                  {processedData.nRows} rows × {processedData.columns.length} columns — click X · Y · Z to plot, C to color
+                  {processedData.nRows} rows × {processedData.columns.length} columns — click X · Y · Z to plot, C to color, S to shape
                 </div>
                 {activeDataset?.summary?.top_contributors && (
                   <details className="text-xs">
@@ -2364,9 +2520,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                     dataset={activeDataset}
                     viewMode={viewMode}
                     colorBy={colorBy}
+                    shapeBy={shapeBy}
                     theme={theme}
                     onAxis={(axis, col) => updateAxis(axis, col)}
                     onColor={setColorBy}
+                    onShape={col => setShapeBy(prev => (prev === col ? "" : col))}
                   />
                 )}
               </SidebarSection>
