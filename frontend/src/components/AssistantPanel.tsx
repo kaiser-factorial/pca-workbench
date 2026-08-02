@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { Sparkles, Settings2, Minus, CornerDownLeft, Info } from 'lucide-react';
+import { Sparkles, Settings2, Minus, CornerDownLeft, Info, ThumbsUp, ThumbsDown } from 'lucide-react';
 import {
   AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
   runAssistantTurn, fetchModels, suggestModels, describeApiError,
 } from '@/lib/assistant';
 import { startOpenRouterOAuth, completeOpenRouterOAuth } from '@/lib/openrouterAuth';
+import { feedbackEnabled, submitFeedback, flushFeedback } from '@/lib/feedback';
 
 // Chat entries for display; the wire-format history is kept separately
 type ChatEntry = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string };
@@ -47,6 +48,8 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
   const [undoSnap, setUndoSnap] = useState<unknown>(null);
   // OAuth failure to surface inside the settings view (chat may be hidden there)
   const [authError, setAuthError] = useState('');
+  // Per-message feedback state, keyed by chat index
+  const [fb, setFb] = useState<Record<number, { rating: 'up' | 'down'; eventId: string; askWhy: boolean; done: boolean }>>({});
 
   useEffect(() => {
     setApiKey(localStorage.getItem(LS.key) ?? '');
@@ -56,6 +59,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
       const saved = JSON.parse(localStorage.getItem(LS.layout) ?? 'null');
       if (saved && typeof saved.w === 'number') setLayout(saved);
     } catch { /* keep defaults */ }
+    void flushFeedback(); // retry any feedback buffered while offline
     // Returning from OpenRouter's OAuth approval? Exchange the code for a key.
     completeOpenRouterOAuth()
       .then(key => {
@@ -169,6 +173,44 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
       setUndoSnap(mutated ? snapBefore : null);
       setBusy(false);
     }
+  };
+
+  // The user message and tool calls belonging to the assistant message at idx
+  const turnContext = (idx: number) => {
+    let userMsg: string | null = null;
+    const tools: string[] = [];
+    for (let i = idx - 1; i >= 0; i--) {
+      const e = chat[i];
+      if (e.kind === 'user') { userMsg = e.text; break; }
+      if (e.kind === 'tool') tools.unshift(e.text.split(' · ')[0]);
+    }
+    return { userMsg, tools };
+  };
+
+  const rate = (idx: number, rating: 'up' | 'down') => {
+    if (fb[idx]) return;
+    const eventId = crypto.randomUUID();
+    const { tools } = turnContext(idx);
+    // Instant row carries metadata only — conversation text goes with the
+    // optional "why" step, where the user can see and exclude it
+    void submitFeedback({ event_id: eventId, rating, model, tools });
+    setFb(prev => ({ ...prev, [idx]: { rating, eventId, askWhy: true, done: false } }));
+  };
+
+  const sendReason = (idx: number, reason: string, includeExchange: boolean) => {
+    const f = fb[idx];
+    if (!f) return;
+    const { userMsg, tools } = turnContext(idx);
+    void submitFeedback({
+      event_id: f.eventId,
+      rating: f.rating,
+      reason: reason.trim() || null,
+      model,
+      tools,
+      user_message: includeExchange ? userMsg : null,
+      assistant_message: includeExchange ? chat[idx]?.text ?? null : null,
+    });
+    setFb(prev => ({ ...prev, [idx]: { ...f, askWhy: false, done: true } }));
   };
 
   const undo = () => {
@@ -290,6 +332,15 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef }: {
                   {e.kind === 'user' && <span className="opacity-50">&gt; </span>}
                   {e.text}
                   {busy && i === chat.length - 1 && e.kind === 'assistant' && <span className="animate-pulse">▌</span>}
+                  {feedbackEnabled() && e.kind === 'assistant' && e.text && !(busy && i === chat.length - 1) && (
+                    <FeedbackControls
+                      primary={primary}
+                      state={fb[i]}
+                      onRate={r => rate(i, r)}
+                      onReason={(reason, include) => sendReason(i, reason, include)}
+                      onDismiss={() => setFb(prev => ({ ...prev, [i]: { ...prev[i], askWhy: false } }))}
+                    />
+                  )}
                 </div>
               )
             ))}
@@ -457,6 +508,68 @@ const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authE
           </button>
         )}
       </div>
+    </div>
+  );
+};
+
+const FeedbackControls = ({ primary, state, onRate, onReason, onDismiss }: {
+  primary: boolean,
+  state?: { rating: 'up' | 'down'; askWhy: boolean; done: boolean },
+  onRate: (r: 'up' | 'down') => void,
+  onReason: (reason: string, includeExchange: boolean) => void,
+  onDismiss: () => void,
+}) => {
+  const [reason, setReason] = useState('');
+  const [include, setInclude] = useState(true);
+  const chosen = state?.rating;
+
+  return (
+    <div className="mt-1 select-none">
+      <div className="flex justify-end gap-1.5">
+        {(['up', 'down'] as const).map(r => {
+          const Icon = r === 'up' ? ThumbsUp : ThumbsDown;
+          const active = chosen === r;
+          return (
+            <button
+              key={r}
+              onClick={() => onRate(r)}
+              disabled={!!chosen}
+              title={chosen ? 'Feedback recorded' : r === 'up' ? 'Helpful' : 'Not helpful'}
+              className={`p-0.5 transition-opacity cursor-pointer disabled:cursor-default ${active
+                ? (primary ? 'text-[var(--p-blue)] opacity-100' : 'text-[var(--system-green)] opacity-100')
+                : chosen ? 'opacity-15' : 'opacity-30 hover:opacity-80'}`}
+            >
+              <Icon className="w-3 h-3" />
+            </button>
+          );
+        })}
+        {state?.done && <span className="text-[9px] opacity-40 self-center">thanks ✓</span>}
+      </div>
+      {state?.askWhy && (
+        <div className={`mt-1 p-2 space-y-1.5 text-[10px] ${primary ? 'border border-[#111111]/30 bg-black/[0.03]' : 'border border-[var(--system-green)]/25 bg-[var(--system-green)]/5'}`}>
+          <div className="opacity-70">Mind saying why? (optional)</div>
+          <textarea
+            rows={2}
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            className={`w-full px-1.5 py-1 text-[10px] outline-none resize-none ${primary ? 'bg-white border border-[#111111]/40' : 'bg-[var(--input)] border border-[var(--border)] text-[var(--foreground)]'}`}
+            placeholder="e.g. wrong column, k didn't match the data, explanation unclear…"
+          />
+          <label className="flex items-start gap-1.5 cursor-pointer opacity-70">
+            <input type="checkbox" checked={include} onChange={e => setInclude(e.target.checked)} className="mt-0.5" />
+            <span>Include this exchange (your message + the reply — may contain column names/summaries) to help debugging</span>
+          </label>
+          <div className="flex gap-2 justify-end">
+            <button onClick={onDismiss} className="underline-offset-2 hover:underline opacity-50 cursor-pointer">no thanks</button>
+            <button
+              onClick={() => onReason(reason, include)}
+              className={`px-2 py-0.5 font-bold cursor-pointer ${primary ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'border border-[var(--system-green)]/60 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
