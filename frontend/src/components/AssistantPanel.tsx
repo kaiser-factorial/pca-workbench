@@ -6,6 +6,9 @@ import {
   AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
   runAssistantTurn, fetchModels, suggestModels, describeApiError,
 } from '@/lib/assistant';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { startOpenRouterOAuth, completeOpenRouterOAuth } from '@/lib/openrouterAuth';
 import { feedbackEnabled, submitFeedback, flushFeedback } from '@/lib/feedback';
 
@@ -24,6 +27,25 @@ const LS = {
 type Layout = { w: number; h: number; right: number };
 const DEFAULT_LAYOUT: Layout = { w: 360, h: 560, right: 16 };
 const MIN_W = 300, MAX_W = 760, MIN_H = 280;
+
+// Compact markdown styling for assistant bubbles — inherits the chat's tiny
+// type scale; neutral tints work on both themes
+const MD_COMPONENTS = {
+  p: (props: any) => <p className="my-1" {...props} />,
+  h1: (props: any) => <div className="font-bold mt-2 mb-1 text-sm" {...props} />,
+  h2: (props: any) => <div className="font-bold mt-2 mb-1" {...props} />,
+  h3: (props: any) => <div className="font-bold mt-1.5 mb-0.5" {...props} />,
+  ul: (props: any) => <ul className="list-disc pl-4 my-1 space-y-0.5" {...props} />,
+  ol: (props: any) => <ol className="list-decimal pl-4 my-1 space-y-0.5" {...props} />,
+  a: (props: any) => <a className="underline underline-offset-2" target="_blank" rel="noreferrer" {...props} />,
+  code: (props: any) => <code className="px-1 bg-[var(--foreground)]/10 rounded-sm" {...props} />,
+  pre: (props: any) => <pre className="p-2 my-1 overflow-x-auto text-[10px] bg-[var(--foreground)]/10" {...props} />,
+  blockquote: (props: any) => <blockquote className="border-l-2 border-[var(--foreground)]/30 pl-2 my-1 opacity-80" {...props} />,
+  hr: () => <hr className="my-2 border-[var(--foreground)]/20" />,
+  table: (props: any) => <table className="my-1 text-[10px] border-collapse" {...props} />,
+  th: (props: any) => <th className="border border-[var(--foreground)]/20 px-1.5 py-0.5 text-left font-bold" {...props} />,
+  td: (props: any) => <td className="border border-[var(--foreground)]/20 px-1.5 py-0.5" {...props} />,
+};
 
 export type DockMode = 'right' | 'bottom' | 'float';
 
@@ -360,11 +382,13 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
                   ▸ {e.text}
                 </div>
               ) : (
-                <div key={i} className={`text-xs leading-relaxed whitespace-pre-wrap ${e.kind === 'user'
+                <div key={i} className={`text-xs leading-relaxed ${e.kind === 'assistant' ? '' : 'whitespace-pre-wrap'} ${e.kind === 'user'
                   ? (primary ? 'font-bold' : 'text-[var(--system-green)]')
                   : e.kind === 'error' ? 'text-red-500' : ''}`}>
                   {e.kind === 'user' && <span className="opacity-50">&gt; </span>}
-                  {e.text}
+                  {e.kind === 'assistant'
+                    ? <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={MD_COMPONENTS}>{e.text}</ReactMarkdown>
+                    : e.text}
                   {busy && i === chat.length - 1 && e.kind === 'assistant' && <span className="animate-pulse">▌</span>}
                   {feedbackEnabled() && e.kind === 'assistant' && e.text && !(busy && i === chat.length - 1) && (
                     <FeedbackControls
