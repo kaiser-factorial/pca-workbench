@@ -556,6 +556,11 @@ const FeedbackControls = ({ primary, state, onRate, onReason, onDismiss }: {
   const [reason, setReason] = useState('');
   const [include, setInclude] = useState(true);
   const chosen = state?.rating;
+  const whyRef = useRef<HTMLDivElement>(null);
+  // the box appears below the fold when rating the last message — bring it into view
+  useEffect(() => {
+    if (state?.askWhy) whyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [state?.askWhy]);
 
   return (
     <div className="mt-1 select-none">
@@ -580,14 +585,16 @@ const FeedbackControls = ({ primary, state, onRate, onReason, onDismiss }: {
         {state?.done && <span className="text-[9px] opacity-40 self-center">thanks ✓</span>}
       </div>
       {state?.askWhy && (
-        <div className={`mt-1 p-2 space-y-1.5 text-[10px] ${primary ? 'border border-[#111111]/30 bg-black/[0.03]' : 'border border-[var(--system-green)]/25 bg-[var(--system-green)]/5'}`}>
+        <div ref={whyRef} className={`mt-1 p-2 space-y-1.5 text-[10px] ${primary ? 'border border-[#111111]/30 bg-black/[0.03]' : 'border border-[var(--system-green)]/25 bg-[var(--system-green)]/5'}`}>
           <div className="opacity-70">Mind saying why? (optional)</div>
           <textarea
             rows={2}
             value={reason}
             onChange={e => setReason(e.target.value)}
             className={`w-full px-1.5 py-1 text-[10px] outline-none resize-none ${primary ? 'bg-white border border-[#111111]/40' : 'bg-[var(--input)] border border-[var(--border)] text-[var(--foreground)]'}`}
-            placeholder="e.g. wrong column, k didn't match the data, explanation unclear…"
+            placeholder={chosen === 'up'
+              ? 'e.g. did exactly what I meant, clear interpretation, good parameter pick…'
+              : 'e.g. wrong column, k didn\u2019t match the data, explanation unclear…'}
           />
           <label className="flex items-start gap-1.5 cursor-pointer opacity-70">
             <input type="checkbox" checked={include} onChange={e => setInclude(e.target.checked)} className="mt-0.5" />
