@@ -4,6 +4,46 @@ import { median, numericValues } from './table';
 // Sizes here are survey-scale (hundreds to low thousands of points), so the
 // O(n²) DBSCAN neighbor search and plain kmeans++ are more than fast enough.
 
+// Column-wise z-scaling, preserving nulls (imputation happens downstream in
+// dbscan/kmeans/toMatrix). Applied at the CALL SITE — by the cluster runners
+// and by the k/eps diagnostics — so suggestions are always computed in the same
+// units the clustering will actually use. An sd-0 column becomes all zeros: a
+// variable that does not vary contributes nothing to distance, which is the
+// honest reading.
+export const zscoreCellColumns = (cols: (number | null)[][]): (number | null)[][] =>
+  cols.map(col => {
+    let n = 0, sum = 0;
+    for (const v of col) if (typeof v === 'number') { n++; sum += v; }
+    if (!n) return col;
+    const mean = sum / n;
+    let ss = 0;
+    for (const v of col) if (typeof v === 'number') ss += (v - mean) ** 2;
+    const sd = Math.sqrt(ss / n);
+    return col.map(v => (typeof v === 'number' ? (sd ? (v - mean) / sd : 0) : v));
+  });
+
+// Smart default for the standardize toggle, by data regime:
+// - PC scores → off: the variance ordering IS the information PCA produced;
+//   z-scoring makes PC3's noise count as much as PC1's structure.
+// - shared-scale columns (ranges within 3× of each other) → off: on a common
+//   scale, variance differences are themselves signal, and z-scoring inflates
+//   near-constant items by dividing by a tiny sd.
+// - heterogeneous scales → on: otherwise Euclidean distance is effectively
+//   just the widest column.
+export const suggestStandardize = (cols: (number | null)[][], names: string[]): boolean => {
+  if (names.length > 0 && names.every(nm => /^PC\d+$/i.test(nm))) return false;
+  const ranges: number[] = [];
+  for (const col of cols) {
+    let min = Infinity, max = -Infinity;
+    for (const v of col) if (typeof v === 'number') { if (v < min) min = v; if (v > max) max = v; }
+    if (max > min) ranges.push(max - min);
+  }
+  if (ranges.length < 2) return false;
+  let lo = Infinity, hi = 0;
+  for (const r of ranges) { if (r < lo) lo = r; if (r > hi) hi = r; }
+  return hi / lo > 3;
+};
+
 // Column-wise median imputation so missing axis values don't break distance math
 const imputeColumns = (cols: (number | null)[][]): number[][] => {
   const meds = cols.map(c => median(numericValues(c)));

@@ -36,10 +36,10 @@ export type AppBridge = {
     shapeBy: string;
     viewMode: '2D' | '3D';
     pinnedViews: number;
-    clusterSettings: { method: string; eps: number; minSamples: number; k: number };
+    clusterSettings: { method: string; eps: number; minSamples: number; k: number; standardize: boolean };
   };
   setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
-  runClustering: (method: 'DBSCAN' | 'KMEANS', opts: { eps?: number; min_samples?: number; k?: number }) => string;
+  runClustering: (method: 'DBSCAN' | 'KMEANS', opts: { eps?: number; min_samples?: number; k?: number; standardize?: boolean }) => string;
   getClusterBreakdown: (attribute: string) => string;
   pinView: () => string;
   loadDemoData: () => Promise<string>;
@@ -96,7 +96,7 @@ export const TUTORIAL: Record<string, string> = {
   pca:
     'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. Scores are added as PC1…PCk columns and plotted immediately; the scree bars show variance explained per component, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
-    'In "5. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
+    'In "5. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. The "Standardize variables (z-score)" checkbox gives every variable equal weight in the distance — its default follows the data: on for mixed scales, off for PC scores and shared-scale items (where it is a deliberate methodological choice). Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
   compare_pin:
     '"Pin View" (section 6) freezes the current plot as a snapshot; the canvas tiles into a grid (up to 4 panes) so different axis choices, colorings, or cluster runs can be compared side by side. The live view keeps updating; pins do not.',
   transfer:
@@ -150,14 +150,15 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'run_clustering',
       description:
-        'Run clustering on the currently plotted axes and color the points by the result. DBSCAN takes eps and min_samples; KMEANS takes k. Returns the cluster sizes.',
+        'Run clustering on the currently plotted axes and color the points by the result. DBSCAN takes eps and min_samples; KMEANS takes k. Returns the cluster sizes. `standardize` z-scores each variable first so all get equal weight in the distance — recommended when the axes mix scales (e.g. Age with survey items); leave it off for PC scores (their variance ordering is the point of PCA) and usually off for items sharing a response scale (variance differences are signal there — a deliberate choice; see the methods reference). Omitted = the current UI toggle, whose default follows these same rules. With standardize, eps is in SD units. If unsure which applies, consult get_methods_reference topic standardize_clustering.',
       parameters: {
         type: 'object',
         properties: {
           method: { type: 'string', enum: ['DBSCAN', 'KMEANS'] },
-          eps: { type: 'number', description: 'DBSCAN neighborhood radius (default 0.5)' },
+          eps: { type: 'number', description: 'DBSCAN neighborhood radius (default 0.5; in SD units when standardize is on)' },
           min_samples: { type: 'integer', description: 'DBSCAN min points per core (default 5)' },
           k: { type: 'integer', description: 'KMEANS cluster count (default 3)' },
+          standardize: { type: 'boolean', description: 'Z-score variables before clustering (see tool description for when)' },
         },
         required: ['method'],
         additionalProperties: false,

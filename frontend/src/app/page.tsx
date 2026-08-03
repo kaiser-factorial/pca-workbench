@@ -7,7 +7,7 @@ import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { readTable } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
-import { dbscan, kmeans } from "@/lib/cluster";
+import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
@@ -1185,8 +1185,25 @@ export default function Home() {
   const [eps, setEps] = useState(0.5);
   const [minSamples, setMinSamples] = useState(5);
   const [k, setK] = useState(3);
+  const [standardize, setStandardize] = useState(false);
   const [isClustering, setIsClustering] = useState(false);
   const [breakdownBy, setBreakdownBy] = useState<string>("");
+
+  // The standardize toggle defaults by data regime (PC scores or shared-scale
+  // columns → off, mixed scales → on; see suggestStandardize). Recomputed when
+  // the clustered columns change; skipped once when a workspace load or undo
+  // restore supplies a deliberate value.
+  const skipStdReset = useRef(false);
+  const axNow = activeDataset ? effectiveAxes(activeDataset, viewMode) : null;
+  useEffect(() => {
+      if (skipStdReset.current) { skipStdReset.current = false; return; }
+      if (!activeDataset || !axNow) return;
+      const t = activeDataset.table;
+      const names = [axNow.x, axNow.y, ...(axNow.z ? [axNow.z] : [])];
+      const cols = names.map(nm => t.data[nm]).filter(Boolean);
+      setStandardize(suggestStandardize(cols, names));
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, axNow?.x, axNow?.y, axNow?.z]);
 
   // Workspace persistence (file-based via backend)
   const [workspaces, setWorkspaces] = useState<{ name: string, saved_at: string, bytes: number }[]>([]);
@@ -1330,7 +1347,7 @@ export default function Home() {
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
           activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
           notes, mutedMap,
-          clusterMethod, eps, minSamples, k, breakdownBy, includeExportInfo,
+          clusterMethod, eps, minSamples, k, standardize, breakdownBy, includeExportInfo,
       };
   };
 
@@ -1403,6 +1420,8 @@ export default function Home() {
           setEps(ws.eps ?? 0.5);
           setMinSamples(ws.minSamples ?? 5);
           setK(ws.k ?? 3);
+          skipStdReset.current = true;
+          setStandardize(ws.standardize ?? false);
           setBreakdownBy(ws.breakdownBy ?? "");
           setIncludeExportInfo(ws.includeExportInfo ?? true);
           setWorkspaceName(name);
@@ -1498,8 +1517,9 @@ export default function Home() {
       await new Promise(r => setTimeout(r, 30));
       try {
           const ax = effectiveAxes(activeDataset!, viewMode);
-          const cols = [processedData.data[ax.x], processedData.data[ax.y]];
-          if (ax.z) cols.push(processedData.data[ax.z]);
+          const rawCols = [processedData.data[ax.x], processedData.data[ax.y]];
+          if (ax.z) rawCols.push(processedData.data[ax.z]);
+          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
           const labels = clusterMethod === "DBSCAN"
               ? dbscan(cols, eps, minSamples)
               : kmeans(cols, k);
@@ -1926,7 +1946,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           shapeBy,
           viewMode,
           pinnedViews: pinnedViews.length,
-          clusterSettings: { method: clusterMethod, eps, minSamples, k },
+          clusterSettings: { method: clusterMethod, eps, minSamples, k, standardize },
       }),
 
       setPlot: (opts) => {
@@ -1984,9 +2004,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const t = latestTable();
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ax = effectiveAxes(activeDataset, viewMode);
-          const cols = [t.data[ax.x], t.data[ax.y]];
-          if (ax.z) cols.push(t.data[ax.z]);
+          const rawCols = [t.data[ax.x], t.data[ax.y]];
+          if (ax.z) rawCols.push(t.data[ax.z]);
           const useEps = opts.eps ?? eps, useMin = opts.min_samples ?? minSamples, useK = opts.k ?? k;
+          const useStd = opts.standardize ?? standardize;
+          const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
           const labels = method === 'DBSCAN' ? dbscan(cols, useEps, useMin) : kmeans(cols, useK);
           const newTable: DataTable = {
               columns: t.columns.includes('Cluster') ? t.columns : [...t.columns, 'Cluster'],
@@ -1999,12 +2021,16 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (opts.eps != null) setEps(opts.eps);
           if (opts.min_samples != null) setMinSamples(opts.min_samples);
           if (opts.k != null) setK(opts.k);
+          if (opts.standardize != null) { skipStdReset.current = true; setStandardize(opts.standardize); }
           if (colorBy !== 'Cluster') setBreakdownBy(colorBy);
           setColorBy('Cluster');
           const sizes = new Map<string, number>();
           for (const l of labels) sizes.set(l, (sizes.get(l) ?? 0) + 1);
           const summary = sortCategories(Array.from(sizes.keys())).map(l => `${l}: ${sizes.get(l)}`).join(', ');
-          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}. Points are now colored by cluster.`;
+          const stdNote = useStd
+              ? ` Variables were z-scored first${method === 'DBSCAN' ? ' (eps is in SD units)' : ''}.`
+              : ' Variables were used on their raw scales.';
+          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote} Points are now colored by cluster.`;
       },
 
       getClusterBreakdown: (attribute) => {
@@ -2087,11 +2113,14 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const t = latestTable();
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ax = effectiveAxes(activeDataset, viewMode);
-          const cols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
+          // Diagnostics must see the same units the clustering will use, or the
+          // suggestion answers a different question than the run
+          const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
+          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
           const rows = silhouetteByK(cols, kmeans, maxK);
           if (!rows.length) return 'Too few complete rows on the current axes to evaluate.';
           const best = rows.reduce((a, b) => (b.silhouette > a.silhouette ? b : a));
-          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}):\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
+          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ', z-scored' : ', raw scales'}:\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
       },
 
       suggestEps: (minSamplesArg) => {
@@ -2099,11 +2128,12 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ms = minSamplesArg ?? minSamples;
           const ax = effectiveAxes(activeDataset, viewMode);
-          const cols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
+          const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
+          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
           const res = kDistancePercentiles(cols, ms);
           if (!res) return 'Too few complete rows on the current axes.';
           const p = res.percentiles;
-          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}), n=${res.n}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise.`;
+          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}, n=${res.n}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise.`;
       },
 
       switchDataset: (name) => {
@@ -2252,7 +2282,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
       snapshot: () => ({
           datasets, activeId, colorBy, shapeBy, viewMode, showAxes, pinnedViews,
-          clusterMethod, eps, minSamples, k, breakdownBy, mutedMap,
+          clusterMethod, eps, minSamples, k, standardize, breakdownBy, mutedMap,
       }),
 
       restore: (snap: any) => {
@@ -2269,6 +2299,8 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           setEps(snap.eps);
           setMinSamples(snap.minSamples);
           setK(snap.k);
+          skipStdReset.current = true;
+          setStandardize(snap.standardize ?? false);
           setBreakdownBy(snap.breakdownBy);
           setMutedMap(snap.mutedMap);
           freshTableRef.current = null;
@@ -2605,6 +2637,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                         <label className="flex justify-between"><span className="opacity-70">K (Clusters):</span> <span>{k}</span></label>
                         <input type="range" min="2" max="20" step="1" value={k} onChange={e => setK(parseInt(e.target.value))} className="w-full" />
                     </div>
+                )}
+                {clusterMethod !== "NONE" && (
+                    <label
+                        className="flex items-center gap-2 text-xs cursor-pointer select-none"
+                        title={"Z-score each variable before the distance math, giving all variables equal weight. Suggested ON for mixed scales (e.g. Age with survey items), OFF for PC scores (their variance ordering is the point) and for items sharing a response scale (variance differences are signal). With DBSCAN, eps is then in SD units."}
+                    >
+                        <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
+                        <span className="opacity-80">Standardize variables (z-score)</span>
+                    </label>
                 )}
                 {clusterMethod !== "NONE" && (
                     <button onClick={handleCluster} disabled={isClustering} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--abaci)]'}`}>

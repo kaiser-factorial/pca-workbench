@@ -149,11 +149,16 @@ keep their native storage; analysis gets one table.
      Would pair well with the undo snapshot already taken per mutating turn.
 9. **Clustering: the gap is inputs, not algorithms (reviewed 2026-08-02).** Two findings
    worth acting on before any new method is added:
-   - *No standardization.* `imputeColumns` in `cluster.ts` median-imputes but never
-     z-scales, unlike the PCA path. On raw columns of different scales (Age 18–65 vs a
-     1–7 Likert) Euclidean distance is almost entirely the wider column, and every
-     distance-based method inherits this. A "standardize before clustering" toggle
-     would improve DBSCAN/K-Means today more than a new algorithm would.
+   - ~~No standardization.~~ **Done (2026-08-02):** "Standardize variables (z-score)"
+     checkbox in the Cluster section + `standardize` param on `run_clustering`.
+     Smart default by data regime (`suggestStandardize` in `cluster.ts`): OFF for
+     PC scores (variance ordering is the point) and shared-scale columns (variance
+     is signal — Corina's call, deliberate), ON for mixed scales (range ratio > 3).
+     Scaling happens at the call site via `zscoreCellColumns`, and `suggest_k` /
+     `suggest_eps` scale the same way so diagnostics match the run (eps in SD units
+     when on). Persisted in workspaces/undo; methods chunk `standardize_clustering`
+     (Milligan & Cooper 1988; Everitt et al. 2011; Jolliffe 2002) documents the
+     three regimes; vitest suite `cluster.test.ts` proves the dominance behavior.
    - *Axes are the feature selection.* Clustering runs on the 2–3 **plotted** columns
      ([page.tsx](frontend/src/app/page.tsx) `handleCluster`). Fine for PC axes; weak for
      two arbitrary raw ones. Letting users pick cluster variables independently of the
