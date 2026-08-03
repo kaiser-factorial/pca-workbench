@@ -33,7 +33,7 @@
   <circle cx="78" cy="33" r="12" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
   <path d="M106,45 L118,21 L130,45 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
   <text x="152" y="41" font-size="21" font-weight="700" letter-spacing="2">SCATTER LAB — DATA PIPELINE</text>
-  <text x="1480" y="40" text-anchor="end" class="n11">system diagram 01/02 · 02 = the assistant</text>
+  <text x="1480" y="40" text-anchor="end" class="n11">system diagram 01/03 · 02–03 = the assistant</text>
 
   <!-- browser boundary -->
   <rect x="24" y="70" width="1464" height="896" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>

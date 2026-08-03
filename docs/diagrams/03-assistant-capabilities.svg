@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1504 980" font-family="'Courier Prime','Courier New',monospace">
+  <title>Scatter Lab — what the assistant can do</title>
+  <defs>
+    <filter id="hs3" x="-5%" y="-5%" width="115%" height="115%">
+      <feDropShadow dx="5" dy="5" stdDeviation="0" flood-color="#111111" flood-opacity="1"/>
+    </filter>
+    <filter id="hsy" x="-5%" y="-5%" width="115%" height="115%">
+      <feDropShadow dx="5" dy="5" stdDeviation="0" flood-color="#FFD600" flood-opacity="1"/>
+    </filter>
+  </defs>
+  <style>
+    text { fill:#111111; }
+    .wt  { fill:#ffffff; }
+    .gy  { fill:#9a9a9a; }
+    .ct  { font-size:17px; font-weight:700; }
+    .say { font-size:12.5px; }
+    .li  { font-size:12px; }
+    .tc  { font-size:10px; }
+    .n11 { font-size:11px; fill:#555555; }
+    .n10 { font-size:10.5px; fill:#555555; }
+    .card{ fill:#ffffff; stroke:#111111; stroke-width:3; }
+    .chip{ fill:#FFD600; stroke:#111111; stroke-width:2.5; }
+    .tool{ fill:#ffffff; stroke:#111111; stroke-width:1.5; }
+  </style>
+
+  <rect x="0" y="0" width="1504" height="980" fill="#ffffff"/>
+
+  <!-- title row -->
+  <rect x="32" y="16" width="22" height="22" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <circle cx="78" cy="27" r="12" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <path d="M106,39 L118,15 L130,39 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="152" y="35" font-size="21" font-weight="700" letter-spacing="2">SCATTER LAB — WHAT THE ASSISTANT CAN DO</text>
+  <text x="1472" y="34" text-anchor="end" class="n11">system diagram 03/03 · 02 shows how it works</text>
+
+  <rect x="32" y="58" width="690" height="32" fill="#111111"/>
+  <text x="377" y="79" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">AN AI COPILOT THAT DRIVES THE WORKBENCH THROUGH TOOL CALLS — ASK IN PLAIN WORDS</text>
+
+  <!-- ═══ CARD 1 · DRIVE THE PLOT ═══ -->
+  <g>
+    <rect x="32" y="130" width="460" height="372" class="card" filter="url(#hs3)"/>
+    <rect x="52" y="152" width="26" height="26" fill="#0045AD" stroke="#111111" stroke-width="2.5"/>
+    <text x="94" y="173" class="ct">DRIVE THE PLOT</text>
+    <rect x="50" y="194" width="424" height="36" class="chip"/>
+    <text x="62" y="217" class="say">"put PC1 on x, colour by cluster, make it 3D"</text>
+    <path d="M76,230 L104,230 L76,246 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
+    <rect x="52" y="270" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="278" class="li">assign axes · colour · marker shape</text>
+    <rect x="52" y="294" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="302" class="li">switch 2D/3D · zoom · pan · auto-rotate</text>
+    <rect x="52" y="318" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="326" class="li">mute or hide legend categories</text>
+    <rect x="52" y="342" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="350" class="li">pin up to 3 views for comparison</text>
+    <rect x="50" y="404" width="64" height="22" class="tool"/><text x="58" y="419" class="tc">set_plot</text>
+    <rect x="122" y="404" width="88" height="22" class="tool"/><text x="130" y="419" class="tc">control_view</text>
+    <rect x="218" y="404" width="64" height="22" class="tool"/><text x="226" y="419" class="tc">pin_view</text>
+    <rect x="50" y="434" width="150" height="22" class="tool"/><text x="58" y="449" class="tc">set_category_visibility</text>
+    <rect x="208" y="434" width="96" height="22" class="tool"/><text x="216" y="449" class="tc">switch_dataset</text>
+  </g>
+
+  <!-- ═══ CARD 2 · RUN THE ANALYSIS ═══ -->
+  <g>
+    <rect x="522" y="130" width="460" height="372" class="card" filter="url(#hs3)"/>
+    <circle cx="555" cy="165" r="14" fill="#EB1A26" stroke="#111111" stroke-width="2.5"/>
+    <text x="584" y="173" class="ct">RUN THE ANALYSIS</text>
+    <rect x="540" y="194" width="424" height="36" class="chip"/>
+    <text x="552" y="217" class="say">"find the clusters — how many are there?"</text>
+    <path d="M566,230 L594,230 L566,246 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
+    <rect x="542" y="270" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="278" class="li">PCA with named subset runs + composites</text>
+    <rect x="542" y="294" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="302" class="li">DBSCAN / K-Means, smart standardize default</text>
+    <rect x="542" y="318" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="326" class="li">picks k and eps from real diagnostics</text>
+    <rect x="542" y="342" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="350" class="li">breaks clusters down by any category</text>
+    <rect x="540" y="404" width="54" height="22" class="tool"/><text x="548" y="419" class="tc">run_pca</text>
+    <rect x="602" y="404" width="96" height="22" class="tool"/><text x="610" y="419" class="tc">run_clustering</text>
+    <rect x="706" y="404" width="66" height="22" class="tool"/><text x="714" y="419" class="tc">suggest_k</text>
+    <rect x="540" y="434" width="78" height="22" class="tool"/><text x="548" y="449" class="tc">suggest_eps</text>
+    <rect x="626" y="434" width="138" height="22" class="tool"/><text x="634" y="449" class="tc">get_cluster_breakdown</text>
+  </g>
+
+  <!-- ═══ CARD 3 · ANSWER FROM THE DATA ═══ -->
+  <g>
+    <rect x="1012" y="130" width="460" height="372" class="card" filter="url(#hs3)"/>
+    <path d="M1030,178 L1045,148 L1060,178 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
+    <text x="1074" y="173" class="ct">ANSWER FROM THE DATA</text>
+    <rect x="1030" y="194" width="424" height="36" class="chip"/>
+    <text x="1042" y="217" class="say">"is age related to sensation seeking?"</text>
+    <path d="M1056,230 L1084,230 L1056,246 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
+    <rect x="1032" y="270" width="7" height="7" fill="#FFD600" stroke="#111111" stroke-width="1"/>
+    <text x="1048" y="278" class="li">Pearson + Spearman correlations</text>
+    <rect x="1032" y="294" width="7" height="7" fill="#FFD600" stroke="#111111" stroke-width="1"/>
+    <text x="1048" y="302" class="li">group means · sd · eta-squared</text>
+    <rect x="1032" y="318" width="7" height="7" fill="#FFD600" stroke="#111111" stroke-width="1"/>
+    <text x="1048" y="326" class="li">reads live column profiles + app state</text>
+    <rect x="1032" y="342" width="7" height="7" fill="#FFD600" stroke="#111111" stroke-width="1"/>
+    <text x="1048" y="350" class="li">answers only from computed aggregates —</text>
+    <text x="1048" y="370" class="n11">never invents numbers it hasn't seen</text>
+    <rect x="1030" y="404" width="66" height="22" class="tool"/><text x="1038" y="419" class="tc">correlate</text>
+    <rect x="1104" y="404" width="96" height="22" class="tool"/><text x="1112" y="419" class="tc">compare_groups</text>
+    <rect x="1208" y="404" width="90" height="22" class="tool"/><text x="1216" y="419" class="tc">get_app_state</text>
+  </g>
+
+  <!-- ═══ CARD 4 · INTERPRET, WITH SOURCES ═══ -->
+  <g>
+    <rect x="32" y="538" width="460" height="372" class="card" filter="url(#hs3)"/>
+    <rect x="52" y="560" width="26" height="26" fill="#ffffff" stroke="#0045AD" stroke-width="4"/>
+    <text x="94" y="581" class="ct">INTERPRET, WITH SOURCES</text>
+    <rect x="50" y="602" width="424" height="36" class="chip"/>
+    <text x="62" y="625" class="say">"how many components should I keep?"</text>
+    <path d="M76,638 L104,638 L76,654 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
+    <rect x="52" y="678" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="686" class="li">retrieves curated, cited methods chunks</text>
+    <rect x="52" y="702" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="710" class="li">Kaiser · scree · parallel analysis · silhouette</text>
+    <rect x="52" y="726" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="734" class="li">ties the advice to your actual numbers</text>
+    <rect x="52" y="750" width="7" height="7" fill="#0045AD"/>
+    <text x="68" y="758" class="li">names sources: Jolliffe, Rousseeuw, Cattell…</text>
+    <text x="68" y="782" class="n11">honest about limits: clusters are descriptive,</text>
+    <text x="68" y="800" class="n11">not proof of latent groups</text>
+    <rect x="50" y="842" width="138" height="22" class="tool"/><text x="58" y="857" class="tc">get_methods_reference</text>
+  </g>
+
+  <!-- ═══ CARD 5 · TEACH THE APP ═══ -->
+  <g>
+    <rect x="522" y="538" width="460" height="372" class="card" filter="url(#hs3)"/>
+    <circle cx="555" cy="573" r="14" fill="#ffffff" stroke="#EB1A26" stroke-width="4"/>
+    <text x="584" y="581" class="ct">TEACH THE APP</text>
+    <rect x="540" y="602" width="424" height="36" class="chip"/>
+    <text x="552" y="625" class="say">"i'm new here — show me around"</text>
+    <path d="M566,638 L594,638 L566,654 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
+    <rect x="542" y="678" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="686" class="li">step-by-step tour from a curated tutorial</text>
+    <rect x="542" y="702" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="710" class="li">loads demo data to show, not tell</text>
+    <rect x="542" y="726" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="734" class="li">points at the real controls with an</text>
+    <text x="558" y="754" class="li">ephemeral highlight ring + arrow</text>
+    <rect x="542" y="774" width="7" height="7" fill="#EB1A26"/>
+    <text x="558" y="782" class="li">demonstrates live, one step at a time</text>
+    <rect x="540" y="842" width="84" height="22" class="tool"/><text x="548" y="857" class="tc">get_tutorial</text>
+    <rect x="632" y="842" width="96" height="22" class="tool"/><text x="640" y="857" class="tc">load_demo_data</text>
+    <rect x="736" y="842" width="84" height="22" class="tool"/><text x="744" y="857" class="tc">highlight_ui</text>
+  </g>
+
+  <!-- ═══ CARD 6 · ALWAYS TRUE ═══ -->
+  <g>
+    <rect x="1012" y="538" width="460" height="372" fill="#111111" stroke="#111111" stroke-width="3" filter="url(#hsy)"/>
+    <rect x="1032" y="560" width="16" height="16" fill="#0045AD" stroke="#ffffff" stroke-width="1.5"/>
+    <circle cx="1064" cy="568" r="8" fill="#EB1A26" stroke="#ffffff" stroke-width="1.5"/>
+    <path d="M1082,576 L1090,560 L1098,576 Z" fill="#FFD600" stroke="#ffffff" stroke-width="1.5"/>
+    <text x="1114" y="581" class="ct wt">ALWAYS TRUE</text>
+    <rect x="1032" y="614" width="7" height="7" fill="#FFD600"/>
+    <text x="1048" y="622" class="say wt">sees column names + aggregates only —</text>
+    <text x="1048" y="642" class="say wt">raw data rows never leave the browser</text>
+    <rect x="1032" y="668" width="7" height="7" fill="#0045AD"/>
+    <text x="1048" y="676" class="say wt">your key · your model — OpenRouter,</text>
+    <text x="1048" y="696" class="say wt">any endpoint, or offline Ollama</text>
+    <rect x="1032" y="722" width="7" height="7" fill="#EB1A26"/>
+    <text x="1048" y="730" class="say wt">every change it makes = one-click undo</text>
+    <rect x="1032" y="756" width="7" height="7" fill="#FFD600"/>
+    <text x="1048" y="764" class="say wt">feedback is opt-in and write-only</text>
+    <text x="1032" y="822" font-size="10.5" class="gy">the mechanics — tool loop, bridge, boundary</text>
+    <text x="1032" y="838" font-size="10.5" class="gy">crossings — are diagram 02</text>
+  </g>
+
+  <!-- footer -->
+  <text x="32" y="955" class="n10">source: frontend/src/lib/assistant.ts — 19 tool definitions · card icons = the app's marker-shape symbols</text>
+  <text x="1472" y="955" text-anchor="end" class="n10">scatter-lab.vercel.app</text>
+</svg>
