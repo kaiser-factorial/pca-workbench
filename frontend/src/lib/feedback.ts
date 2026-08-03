@@ -156,7 +156,12 @@ const flushOnce = async (keepalive: boolean): Promise<void> => {
   for (const { key, entry } of pending) {
     let result = await postRows([entry.rec], { keepalive });
     if (result === 'rejected') {
-      result = await postRows([entry.rec], { keepalive, onConflict: false });
+      // Pre-migration bridge: that server lacks the client_key COLUMN too, and
+      // PostgREST rejects unknown body keys — so the key must leave the body,
+      // not just the on_conflict param. Costs idempotency for this one delivery,
+      // which is the documented pre-migration trade-off.
+      const { client_key: _omit, ...legacy } = entry.rec;
+      result = await postRows([legacy], { keepalive, onConflict: false });
     }
     if (result === 'ok') {
       await removeFromQueue([key]);

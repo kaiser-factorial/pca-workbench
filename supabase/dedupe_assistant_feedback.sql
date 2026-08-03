@@ -22,9 +22,13 @@ order by copies desc, first_seen;
 --    ctid is used so this works regardless of the primary-key column;
 --    user_message is included in the identity so a metadata-only row and a
 --    consented-exchange row are never treated as copies of each other.
+--    `a.client_key is null` restricts deletion to legacy (pre-idempotency)
+--    rows — post-migration rows are index-protected and must never be touched,
+--    so run this AFTER the new client is deployed and the preview has settled.
 -- delete from assistant_feedback a
 -- using assistant_feedback b
 -- where a.ctid > b.ctid
+--   and a.client_key is null
 --   and a.event_id = b.event_id
 --   and a.rating = b.rating
 --   and coalesce(a.reason, '') = coalesce(b.reason, '')
