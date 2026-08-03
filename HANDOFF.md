@@ -80,6 +80,24 @@ select distinct on (event_id) * from assistant_feedback
 order by event_id, created_at desc;
 ```
 
+**Cross-project review (2026-08-02, from the joint-session side).** Scatter Lab's
+feedback design was ported to joint-session the same day (per-message 👍/👎 + optional
+reason), which prompted a read of `feedback.ts` from outside. Two robustness gaps and a
+convergence plan came out of it — the gaps are Outstanding #11, the plan is below.
+
+Joint-session stores its ratings differently on purpose: it has Firebase auth and the
+rated message is itself a Firestore document, so the rating lives *on* the message
+(`ratings`/`ratingNotes` maps keyed by uid) instead of in a snapshot row — no
+`user_message`/`assistant_message` copies needed. Scatter Lab's snapshot-row model is
+right for *this* app (no backend, nothing to join against); neither should adopt the
+other's storage. The convergence point is the **warehouse**: this Supabase project's
+`assistant_feedback` table becomes the shared eval sink by (a) adding a `source_app`
+column defaulting to `'scatter-lab'`, and (b) a small offline export script (service
+role, runs locally — never in an app bundle) that pulls joint-session's ratings via a
+collection-group query and inserts them with `source_app = 'joint-session'`. Shared
+record shape: `source_app, event_id, model, rating, reason, tools?, created_at`. Apps
+keep their native storage; analysis gets one table.
+
 ## Data hygiene (repo is PUBLIC)
 
 - `LS_pca_workbench_views copy/` holds real participant-derived data — **gitignored,
@@ -153,6 +171,37 @@ order by event_id, created_at desc;
 10. **Possible future directions** discussed but not committed: embeddings-based RAG for
    user-supplied papers (only worth it beyond the curated corpus), OpenRouter spend-limit
    note in settings, silhouette/elbow charts in the Cluster section UI.
+11. **Feedback queue robustness — FIXED in code (2026-08-02), one console step left.**
+   The review gaps became a live incident the same day: the table filled with duplicate
+   rows. Root cause, confirmed by reading the flush path: delivery is at-least-once
+   (AssistantPanel mount-flushes the SHARED IndexedDB queue in every tab while the
+   `flushing` guard is per-tab → two open tabs double-post every drained row; and a
+   POST that lands right before tab close never gets its queue-delete → re-sent next
+   session), and the insert-only table had no idempotency key, so every redelivery was
+   a visible duplicate. `feedback.ts` is rewritten:
+   - `client_key` (uuid, stamped at enqueue) + `on_conflict=client_key` with
+     `Prefer: resolution=ignore-duplicates` → redelivery is a server-side no-op;
+   - a Web Lock serializes flushes across tabs;
+   - `pagehide` flush with `keepalive` so last-moment records don't wait a session;
+   - per-row fallback on batch rejection, attempts counter, drop after 5 rejections
+     (network failures stay queued and cost no attempts), plus a bridge that retries
+     without `on_conflict` against a pre-migration server.
+   Remaining steps, in order (the client has a bridge that keeps working against a
+   pre-migration server, but idempotency — the actual dupe protection — only starts
+   once the index exists, so do the migration first):
+   - [ ] **Run the migration** `supabase/migrations/20260802000000_feedback_idempotency.sql`
+         (adds `client_key` + unique index + `source_app`). Repo is linked:
+         `supabase db push` — or paste it into the dashboard SQL editor.
+   - [ ] **Clear the existing dupes** with `supabase/dedupe_assistant_feedback.sql`:
+         run the preview query, eyeball the groups, then uncomment and run the
+         delete (keeps the earliest copy of each identical row). Destructive — by
+         hand only, deliberately not a migration.
+   - [ ] **Push to `main`** so Vercel ships the new client (idempotent inserts,
+         cross-tab flush lock, pagehide flush, poison-row handling).
+   - [ ] Optional sanity check afterwards: re-run the preview query — new dupes
+         should be structurally impossible now.
+   Verified fine on review: insert-only RLS, the two-row `event_id` pattern with the
+   `distinct on` analysis query, and metadata-only rows without consent.
 
 ## Working on it
 
