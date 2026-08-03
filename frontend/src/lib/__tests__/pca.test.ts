@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runPCA } from '../pca';
+import { runPCA, deriveRunLabel } from '../pca';
 import type { DataTable } from '../table';
 
 // deterministic LCG so results are stable across runs
@@ -112,5 +112,64 @@ describe('runPCA — robustness', () => {
       nRows: 4,
     };
     expect(() => runPCA(table, ['x', 'y'], { k: 2 })).toThrow(/constant/);
+  });
+});
+
+describe('deriveRunLabel', () => {
+  it('finds a shared prefix once counters are stripped', () => {
+    expect(deriveRunLabel(['openness_1', 'openness_2', 'openness_3'])).toBe('openness');
+  });
+
+  it('finds a shared suffix (Q1_Need style)', () => {
+    expect(deriveRunLabel(['Q1_Need', 'Q2_Need', 'Q5_Need'])).toBe('Need');
+  });
+
+  it('returns null for mixed subsets and too-short affixes', () => {
+    expect(deriveRunLabel(['O1', 'O2', 'N1', 'N2'])).toBeNull();  // nothing shared
+    expect(deriveRunLabel(['O1', 'O2', 'O3'])).toBeNull();        // "O" too short
+  });
+});
+
+describe('runPCA — labeled runs and composites', () => {
+  const rng = makeRng(7);
+  const n = 200;
+  const cols: Record<string, number[]> = {};
+  for (const name of ['o1', 'o2', 'o3', 'n1', 'n2', 'n3']) {
+    cols[name] = Array.from({ length: n }, () => rng());
+  }
+  const base: DataTable = { columns: Object.keys(cols), data: cols, nRows: n };
+
+  it('k=1 with a label yields a single COMP_ column', () => {
+    const res = runPCA(base, ['o1', 'o2', 'o3'], { k: 1, label: 'openness' });
+    expect(res.columns).toEqual(['COMP_openness']);
+    expect(res.table.columns).toContain('COMP_openness');
+    expect(res.varianceExplained).toHaveLength(1);
+  });
+
+  it('labeled runs coexist; re-running a label replaces only its own columns', () => {
+    const t1 = runPCA(base, ['o1', 'o2', 'o3'], { k: 1, label: 'openness' }).table;
+    const t2 = runPCA(t1, ['n1', 'n2', 'n3'], { k: 1, label: 'neuroticism' }).table;
+    expect(t2.columns).toContain('COMP_openness');
+    expect(t2.columns).toContain('COMP_neuroticism');
+
+    // re-run openness with k=2 → COMP_openness is replaced by PC1/2_openness
+    const res3 = runPCA(t2, ['o1', 'o2', 'o3'], { k: 2, label: 'openness' });
+    expect(res3.replaced).toEqual(['COMP_openness']);
+    expect(res3.table.columns).toContain('PC1_openness');
+    expect(res3.table.columns).not.toContain('COMP_openness');
+    expect(res3.table.columns).toContain('COMP_neuroticism'); // untouched
+  });
+
+  it('a bare run replaces only bare PC columns, not labeled ones', () => {
+    const t1 = runPCA(base, ['o1', 'o2', 'o3'], { k: 2, label: 'openness' }).table;
+    const t2 = runPCA(t1, Object.keys(cols), { k: 2 }).table;
+    expect(t2.columns).toEqual(expect.arrayContaining(['PC1', 'PC2', 'PC1_openness', 'PC2_openness']));
+    const t3 = runPCA(t2, Object.keys(cols), { k: 2 }).table;
+    expect(t3.columns.filter(c => c === 'PC1')).toHaveLength(1); // replaced, not duplicated
+  });
+
+  it('sanitizes labels used in column names', () => {
+    const res = runPCA(base, ['o1', 'o2'], { k: 1, label: '  sensation seeking! ' });
+    expect(res.columns).toEqual(['COMP_sensation_seeking']);
   });
 });

@@ -6,12 +6,60 @@ import { DataTable, median, numericValues } from './table';
 // signs are fixed so each component's largest-|loading| variable is positive.
 
 export type PCAResult = {
-  table: DataTable;                       // input table + PC1..PCk score columns
-  loadings: Record<string, { var: string; loading: number }[]>; // per PC, sorted by |loading|
+  table: DataTable;                       // input table + score columns (see `columns`)
+  columns: string[];                      // names of the score columns this run added
+  replaced: string[];                     // columns of a previous same-label run this one replaced
+  label: string;                          // sanitized run label ('' = the unnamed run)
+  loadings: Record<string, { var: string; loading: number }[]>; // per score column, sorted by |loading|
   varianceExplained: number[];            // fraction per kept component
   cumulative: number[];
   variables: string[];
   k: number;
+};
+
+// Run labels become column-name fragments — keep them word-shaped
+export const sanitizeLabel = (s: string): string =>
+  s.trim().replace(/\s+/g, '_').replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+
+// Suggest a run label from the selected variable names: the shared prefix or
+// suffix once counters are stripped (openness_1..openness_5 → "openness",
+// Q1_Need..Q5_Need → "Need"). Returns null when nothing at least two
+// characters long is shared — mixed subsets (O1..O5 + N1..N5) on purpose
+// yield null so the user (or the assistant) names the run deliberately.
+export const deriveRunLabel = (names: string[]): string | null => {
+  if (names.length < 2) return null;
+  const shared = (get: (s: string, i: number) => string, len: (s: string) => number) => {
+    let n = Math.min(...names.map(len));
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const ch = get(names[0], i);
+      if (!names.every(nm => get(nm, i) === ch)) break;
+      out += ch;
+    }
+    return out;
+  };
+  const prefix = shared((s, i) => s[i], s => s.length).replace(/[\d_\-\s]+$/g, '');
+  const suffix = shared((s, i) => s[s.length - 1 - i], s => s.length)
+    .split('').reverse().join('').replace(/^[\d_\-\s]+/g, '');
+  const best = (suffix.length > prefix.length ? suffix : prefix);
+  const clean = sanitizeLabel(best);
+  return clean.length >= 2 ? clean : null;
+};
+
+// The column names a run owns: COMP_<label> for a single kept component (a
+// composite score), PC1_<label>.. for a labeled set, bare PC1.. when unnamed.
+export const pcaColumnNames = (label: string, k: number): string[] => {
+  if (label && k === 1) return [`COMP_${label}`];
+  return Array.from({ length: k }, (_, c) => (label ? `PC${c + 1}_${label}` : `PC${c + 1}`));
+};
+
+// Which existing columns a (re-)run of `label` replaces. Covers both shapes
+// (COMP_x and PCn_x) so relabeling k between runs never strands columns.
+const ownedByLabel = (label: string) => {
+  const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return label
+    ? new RegExp(`^(PC\\d+_${esc}|COMP_${esc})$`)
+    : /^PC\d+$/;
 };
 
 // Jacobi eigenvalue iteration for symmetric matrices. Rock-solid for the
@@ -67,14 +115,17 @@ const jacobiEigen = (A: number[][]): { values: number[]; vectors: number[][] } =
 export const runPCA = (
   table: DataTable,
   variables: string[],
-  opts: { k?: number; standardize?: boolean } = {},
+  opts: { k?: number; standardize?: boolean; label?: string } = {},
 ): PCAResult => {
   const standardize = opts.standardize ?? true;
+  const label = sanitizeLabel(opts.label ?? '');
   const p = variables.length;
   if (p < 2) throw new Error('Pick at least two numeric variables for a PCA.');
   const n = table.nRows;
   if (n < 3) throw new Error('Too few rows for a PCA.');
-  const k = Math.max(2, Math.min(opts.k ?? 3, p));
+  // k = 1 is legitimate: it keeps only the first component, the composite-score
+  // workflow (run per item subset, keep the top PC of each as a named score)
+  const k = Math.max(1, Math.min(opts.k ?? 3, p));
 
   // median-impute, center, optionally scale (population sd, sklearn-style)
   const X: number[][] = Array.from({ length: n }, () => new Array(p));
@@ -133,11 +184,17 @@ export const runPCA = (
     return col;
   });
 
-  const pcNames = comps.map((_, c) => `PC${c + 1}`);
+  // Replacement is scoped to THIS run's identity: a re-run of "openness"
+  // replaces only the openness columns; other labeled runs and the bare
+  // PC1..PCk set coexist untouched. (Replacing everything matching ^PC\d+$
+  // was the old behavior, and it silently ate earlier subset runs.)
+  const owned = ownedByLabel(label);
+  const pcNames = pcaColumnNames(label, k);
+  const replaced = table.columns.filter(c => owned.test(c));
   const newTable: DataTable = {
-    columns: [...table.columns.filter(c => !/^PC\d+$/.test(c)), ...pcNames],
+    columns: [...table.columns.filter(c => !owned.test(c)), ...pcNames],
     data: {
-      ...Object.fromEntries(Object.entries(table.data).filter(([c]) => !/^PC\d+$/.test(c))),
+      ...Object.fromEntries(Object.entries(table.data).filter(([c]) => !owned.test(c))),
       ...Object.fromEntries(pcNames.map((name, c) => [name, scoreCols[c]])),
     },
     nRows: n,
@@ -156,5 +213,5 @@ export const runPCA = (
     return acc;
   }, []);
 
-  return { table: newTable, loadings, varianceExplained, cumulative, variables, k };
+  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k };
 };

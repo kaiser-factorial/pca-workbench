@@ -13,7 +13,7 @@ import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
-import { runPCA } from "@/lib/pca";
+import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames } from "@/lib/pca";
 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
@@ -230,6 +230,20 @@ type AxisLabels = { x: string, y: string, z: string };
 
 type Axes2D = { x: string, y: string };
 
+// Provenance of one PCA run: which variables went in, what came out, when.
+// Identity is the label — re-running a label replaces its registry entry and
+// its columns. The column NAME stays short (PC1_openness / COMP_openness);
+// everything else about the run lives here, not in the name.
+type PcaRun = {
+    label: string;            // '' = the unnamed bare-PC1..PCk run
+    columns: string[];
+    variables: string[];
+    k: number;
+    standardize: boolean;
+    savedAt: string;
+    varianceExplained: number[];
+};
+
 // A cached upload: processed table, upload-time profile, and its plot-axis choices.
 // 3D (axes) and 2D (axes2d) are independent so picking a 2D pair never disturbs
 // the 3D triple. labels are display overrides — they default to the column names.
@@ -237,6 +251,7 @@ type Dataset = {
     id: number, name: string, table: DataTable, summary: any,
     axes: Axes, labels: AxisLabels,
     axes2d: Axes2D, labels2d: Axes2D,
+    pcaRuns?: PcaRun[],
 };
 
 // The axes a view actually plots, given its mode
@@ -735,28 +750,63 @@ const EmptyState = ({ theme, onLoadDemo, onUpload, busy }: { theme: string | und
 
 // In-app PCA: pick variables, pick k, run — scores land as PC columns and the
 // scree bars show what each component buys you.
-const PCASection = ({ table, theme, lastRun, onRun }: {
+const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     table: DataTable,
+    datasetId: number,
     theme: string | undefined,
     lastRun: { varianceExplained: number[]; cumulative: number[] } | null,
-    onRun: (vars: string[], k: number, standardize: boolean) => void,
+    runs: PcaRun[],
+    onRun: (vars: string[], k: number, standardize: boolean, label: string) => void,
 }) => {
+    // Component columns (bare or labeled) don't feed new PCAs; COMP_ composites
+    // stay selectable on purpose — feeding composites into a second-order PCA
+    // is a legitimate technique.
     const numericVars = useMemo(
-        () => numericColumns(table).filter(c => !/^PC\d+$/.test(c) && c !== 'Cluster'),
+        () => numericColumns(table).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster'),
         [table]
     );
     const [selected, setSelected] = useState<Set<string>>(() => new Set(numericVars));
     const [k, setK] = useState(3);
     const [standardize, setStandardize] = useState(true);
-    // new dataset → new default selection
-    useEffect(() => { setSelected(new Set(numericVars)); }, [numericVars]);
+    const [label, setLabel] = useState('');
+    // Auto-suggest tracks the selection until the user types a label of their
+    // own; a cleared field re-arms the suggestion.
+    const labelTouched = useRef(false);
+    // Replacement confirm: what's waiting for an OK, and whether the user has
+    // opted out of being asked (persisted).
+    const [pendingRun, setPendingRun] = useState<{ vars: string[]; k: number; standardize: boolean; label: string; replaces: string[] } | null>(null);
+    // New dataset → fresh default selection and label. A mere table change
+    // (a run adding columns) must NOT reset — that would wipe the user's
+    // subset selection mid-iteration — it only prunes columns that vanished.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => { setSelected(new Set(numericVars)); setLabel(''); labelTouched.current = false; }, [datasetId]);
+    const varsKey = numericVars.join('\u0000');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => { setSelected(prev => new Set(Array.from(prev).filter(c => numericVars.includes(c)))); }, [varsKey]);
+    useEffect(() => {
+        if (labelTouched.current) return;
+        setLabel(selected.size === numericVars.length ? '' : (deriveRunLabel(Array.from(selected)) ?? ''));
+    }, [selected, numericVars.length]);
 
     const toggle = (c: string) => setSelected(prev => {
         const next = new Set(prev);
         if (next.has(c)) next.delete(c); else next.add(c);
         return next;
     });
-    const maxK = Math.max(2, Math.min(10, selected.size));
+    const maxK = Math.max(1, Math.min(10, selected.size));
+
+    const submit = () => {
+        const vars = Array.from(selected).filter(c => numericVars.includes(c));
+        const cleanLabel = sanitizeLabel(label);
+        const effK = Math.min(k, maxK);
+        const existing = runs.find(r => r.label === cleanLabel);
+        const suppressed = typeof localStorage !== 'undefined' && localStorage.getItem('scatterlab.pca.confirmReplace') === 'off';
+        if (existing && !suppressed) {
+            setPendingRun({ vars, k: effK, standardize, label: cleanLabel, replaces: existing.columns });
+            return;
+        }
+        onRun(vars, effK, standardize, cleanLabel);
+    };
 
     return (
         <div className="space-y-2 text-xs">
@@ -777,20 +827,71 @@ const PCASection = ({ table, theme, lastRun, onRun }: {
                 {numericVars.length === 0 && <div className="opacity-50 p-1">No numeric variables available.</div>}
             </div>
             <label className="flex justify-between items-center">
-                <span className="opacity-70">Components: <b>{Math.min(k, maxK)}</b></span>
-                <input type="range" min={2} max={maxK} step={1} value={Math.min(k, maxK)} onChange={e => setK(parseInt(e.target.value))} className="w-32" />
+                <span className="opacity-70">Components: <b>{Math.min(k, maxK)}</b>{Math.min(k, maxK) === 1 ? ' (composite)' : ''}</span>
+                <input type="range" min={1} max={maxK} step={1} value={Math.min(k, maxK)} onChange={e => setK(parseInt(e.target.value))} className="w-32" />
             </label>
             <label className="flex items-center gap-2 cursor-pointer select-none" title="On: correlation-based PCA (each variable weighted equally — right when scales differ). Off: covariance-based (high-variance variables dominate).">
                 <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
                 <span className="opacity-80">Standardize variables (correlation PCA)</span>
             </label>
+            <input
+                type="text"
+                value={label}
+                onChange={e => { labelTouched.current = e.target.value.trim().length > 0; setLabel(e.target.value); }}
+                placeholder={selected.size < numericVars.length ? 'name this run (e.g. openness)' : 'run label (optional)'}
+                title={'Names this run\'s columns: 1 component → COMP_<label>; several → PC1_<label>… Re-running the same label replaces its columns; different labels coexist, so subsets like "openness" and "neuroticism" can each keep their own scores. Empty = plain PC1…PCk.'}
+                className="w-full bg-[var(--input)] border border-[var(--border)] p-1.5 text-xs outline-none"
+            />
+            {label && sanitizeLabel(label) && (
+                <div className="text-[10px] opacity-50">
+                    → {pcaColumnNames(sanitizeLabel(label), Math.min(k, maxK)).join(', ')}
+                </div>
+            )}
             <button
-                onClick={() => onRun(Array.from(selected), Math.min(k, maxK), standardize)}
+                onClick={submit}
                 disabled={selected.size < 2}
                 className={`w-full text-sm font-bold py-2 disabled:opacity-40 cursor-pointer ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--mauk)]'}`}
             >
                 Run PCA
             </button>
+            {pendingRun && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setPendingRun(null)}>
+                    <div
+                        className={`max-w-sm w-full mx-4 p-4 space-y-3 text-xs bg-[var(--card)] text-[var(--foreground)] ${theme === 'primary' ? 'border-[3px] border-[var(--p-black)]' : 'border border-[var(--system-green)]'}`}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="font-bold text-sm">
+                            Replace {pendingRun.label ? `"${pendingRun.label}"` : 'the unnamed PCA'}?
+                        </div>
+                        <p className="opacity-80">
+                            A previous run with this label exists — running again replaces its
+                            column{pendingRun.replaces.length > 1 ? 's' : ''} ({pendingRun.replaces.join(', ')}).
+                            Use a different label to keep both.
+                        </p>
+                        <label className="flex items-center gap-2 cursor-pointer select-none opacity-70">
+                            <input
+                                type="checkbox"
+                                onChange={e => localStorage.setItem('scatterlab.pca.confirmReplace', e.target.checked ? 'off' : 'on')}
+                            />
+                            Don't ask again
+                        </label>
+                        <div className="flex gap-2 justify-end">
+                            <button
+                                onClick={() => setPendingRun(null)}
+                                className="px-3 py-1.5 border border-[var(--border)] hover:bg-[var(--border)] cursor-pointer"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => { onRun(pendingRun.vars, pendingRun.k, pendingRun.standardize, pendingRun.label); setPendingRun(null); }}
+                                className={`px-3 py-1.5 font-bold cursor-pointer ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--system-green)]/20 border border-[var(--system-green)] text-[var(--system-green)]'}`}
+                            >
+                                Replace
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {lastRun && (
                 <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
                     <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">Variance explained</div>
@@ -1861,30 +1962,51 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       setPinnedViews(pinnedViews.filter(v => v.id !== id));
   };
 
-  const handleRunPCA = (vars: string[], k: number, standardize: boolean): string => {
+  const handleRunPCA = (vars: string[], k: number, standardize: boolean, label = ''): string => {
       const t = freshTableRef.current ?? processedData;
       if (!t || !activeDataset) return 'No dataset loaded.';
       try {
-          const res = runPCA(t, vars, { k, standardize });
+          const res = runPCA(t, vars, { k, standardize, label });
           freshTableRef.current = res.table;
           const topContributors = Object.fromEntries(
               Object.entries(res.loadings).map(([pc, rows]) => [pc, rows.slice(0, 5)])
           );
-          setDatasets(prev => prev.map(d => d.id === activeId
-              ? {
+          const cols = res.columns;
+          const run: PcaRun = {
+              label: res.label, columns: cols, variables: vars, k: res.k, standardize,
+              savedAt: new Date().toISOString(), varianceExplained: res.varianceExplained,
+          };
+          setDatasets(prev => prev.map(d => {
+              if (d.id !== activeId) return d;
+              // A single kept component (a composite score) lands on the X axis and
+              // leaves the rest of the framing alone — the workflow is "build several
+              // composites, then plot them against each other", so wiping Y/Z on each
+              // run would fight the user. Multi-component runs re-frame fully.
+              const inTable = (c: string | null) => (c && res.table.columns.includes(c) ? c : null);
+              const axes = res.k === 1
+                  ? { x: cols[0], y: inTable(d.axes.y) ?? cols[0], z: inTable(d.axes.z) }
+                  : { x: cols[0], y: cols[1], z: res.k >= 3 ? cols[2] : null };
+              const axes2d = res.k === 1
+                  ? { x: cols[0], y: inTable(d.axes2d.y) ?? cols[0] }
+                  : { x: cols[0], y: cols[1] };
+              return {
                   ...d,
                   table: res.table,
-                  summary: { ...(d.summary ?? {}), top_contributors: topContributors },
-                  axes: { x: 'PC1', y: 'PC2', z: res.k >= 3 ? 'PC3' : null },
-                  labels: { x: 'PC1', y: 'PC2', z: res.k >= 3 ? 'PC3' : 'Z' },
-                  axes2d: { x: 'PC1', y: 'PC2' },
-                  labels2d: { x: 'PC1', y: 'PC2' },
-                }
-              : d));
+                  summary: { ...(d.summary ?? {}), top_contributors: { ...(d.summary?.top_contributors ?? {}), ...topContributors } },
+                  axes, labels: { x: axes.x, y: axes.y, z: axes.z ?? 'Z' },
+                  axes2d, labels2d: { ...axes2d },
+                  pcaRuns: [...(d.pcaRuns ?? []).filter(r => r.label !== res.label), run],
+              };
+          }));
           if (res.k < 3) setViewMode('2D');
           setPcaInfo({ varianceExplained: res.varianceExplained, cumulative: res.cumulative });
-          const pct = res.varianceExplained.map((v, i) => `PC${i + 1} ${(v * 100).toFixed(0)}%`).join(', ');
-          const msg = `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%). Scores added as PC columns and plotted.`;
+          const pct = res.varianceExplained.map((v, i) => `${cols[i] ?? `PC${i + 1}`} ${(v * 100).toFixed(0)}%`).join(', ');
+          const replacedNote = res.replaced.length
+              ? ` Replaced the previous ${res.label ? `"${res.label}"` : 'unnamed'} run (${res.replaced.join(', ')}).`
+              : '';
+          const msg = res.k === 1
+              ? `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept the top component as composite "${cols[0]}" — ${pct} of variance.${replacedNote} It is plotted on the X axis.`
+              : `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%).${replacedNote} Scores added as ${res.label ? `${res.label}-labeled` : 'PC'} columns and plotted.`;
           setUploadStatus(msg);
           return msg;
       } catch (err: any) {
@@ -1947,6 +2069,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           viewMode,
           pinnedViews: pinnedViews.length,
           clusterSettings: { method: clusterMethod, eps, minSamples, k, standardize },
+          pcaRuns: (activeDataset?.pcaRuns ?? []).map(r => ({
+              label: r.label || '(unnamed)', columns: r.columns, variables: r.variables,
+              standardize: r.standardize, savedAt: r.savedAt,
+              varianceExplained: r.varianceExplained.map(v => Math.round(v * 1000) / 1000),
+          })),
       }),
 
       setPlot: (opts) => {
@@ -2081,11 +2208,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       runPCA: (opts) => {
           const t = latestTable();
           if (!t) return 'No dataset loaded.';
-          const numeric = numericColumns(t).filter(c => !/^PC\d+$/.test(c) && c !== 'Cluster');
+          const numeric = numericColumns(t).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster');
           const vars = (opts.variables?.length ? opts.variables : numeric);
           const bad = vars.filter(v => !numeric.includes(v));
           if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;
-          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 2), 10), opts.standardize ?? true);
+          const label = sanitizeLabel(opts.label ?? '');
+          if (opts.label && !label) return `"${opts.label}" is not usable as a run label — use letters, digits, _ or -.`;
+          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 1), 10), opts.standardize ?? true, label);
       },
 
       correlate: (colA, colB) => {
@@ -2565,8 +2694,10 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 {processedData && (
                   <PCASection
                     table={processedData}
+                    datasetId={activeId ?? -1}
                     theme={theme}
                     lastRun={pcaInfo}
+                    runs={activeDataset?.pcaRuns ?? []}
                     onRun={handleRunPCA}
                   />
                 )}

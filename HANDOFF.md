@@ -176,6 +176,32 @@ keep their native storage; analysis gets one table.
 10. **Possible future directions** discussed but not committed: embeddings-based RAG for
    user-supplied papers (only worth it beyond the curated corpus), OpenRouter spend-limit
    note in settings, silhouette/elbow charts in the Cluster section UI.
+   Also discussed 2026-08-02 (design agreed, not yet started): assistant **provenance
+   tags** — every methods claim labeled with its source (methods reference / web / model
+   knowledge), parsed into the feedback rows so calibration becomes measurable against
+   thumbs data; **web lookups** via OpenRouter's `:online` model suffix as an opt-in
+   settings toggle (no backend needed; preferred over verbalized confidence scores,
+   which are known to be poorly calibrated).
+12. **PCA run naming (2026-08-02, replaces the "PCs clobber each other" bug).** Corina's
+   workflow is per-subset PCAs on one dataset (Big 5 → top PC, sensation seeking → top
+   PC, then per-trait subsets) — and `runPCA` used to delete every `^PC\d+$` column on
+   each run, eating earlier subsets. Now: runs carry a **label** (auto-suggested from
+   shared variable-name affixes via `deriveRunLabel`; the field invites naming when
+   underivable). Naming: `COMP_<label>` for k=1 (composite-score workflow; k=1 newly
+   allowed everywhere), `PC1_<label>`… for k>1, bare `PC1..PCk` when unlabeled.
+   **Identity = label**: re-running a label replaces exactly its own columns (both
+   shapes, in case k changed) after a confirm dialog with "don't ask again"
+   (`scatterlab.pca.confirmReplace`); different labels coexist; the assistant path
+   skips the dialog but reports replacements in the tool result. Provenance lives in
+   a per-dataset `pcaRuns` registry (variables, k, standardize, timestamp, variance
+   explained) — in workspaces automatically, exposed via `get_app_state`. Detection
+   regexes widened to `^PC\d+(_|$)` (PCA input exclusion, standardize heuristic);
+   COMP_ columns stay selectable as PCA inputs (second-order PCA) and are treated as
+   ordinary variables by the standardize default — deliberately, since composites
+   from different decompositions have no shared variance ordering. k=1 runs land on
+   the X axis and leave Y/Z alone (build several composites, then plot them against
+   each other). Tests in `pca.test.ts` cover label derivation, coexistence,
+   scoped replacement, and sanitization.
 11. **Feedback queue robustness — RESOLVED (2026-08-02); the "incident" was a
    misdiagnosis.** The originally reported duplication incident did not happen:
    inspection of the live table (all rows, pre-deploy) found zero byte-identical

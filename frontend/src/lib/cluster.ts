@@ -31,7 +31,11 @@ export const zscoreCellColumns = (cols: (number | null)[][]): (number | null)[][
 // - heterogeneous scales → on: otherwise Euclidean distance is effectively
 //   just the widest column.
 export const suggestStandardize = (cols: (number | null)[][], names: string[]): boolean => {
-  if (names.length > 0 && names.every(nm => /^PC\d+$/i.test(nm))) return false;
+  // Bare or labeled component sets (PC1, PC2_openness) both count as PC scores.
+  // COMP_ composites deliberately do NOT: each comes from a different
+  // decomposition, so across-composite scale differences are back to the
+  // ordinary range heuristic below.
+  if (names.length > 0 && names.every(nm => /^PC\d+(_|$)/i.test(nm))) return false;
   const ranges: number[] = [];
   for (const col of cols) {
     let min = Infinity, max = -Infinity;

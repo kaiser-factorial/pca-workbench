@@ -37,6 +37,10 @@ export type AppBridge = {
     viewMode: '2D' | '3D';
     pinnedViews: number;
     clusterSettings: { method: string; eps: number; minSamples: number; k: number; standardize: boolean };
+    pcaRuns: {
+      label: string; columns: string[]; variables: string[];
+      standardize: boolean; savedAt: string; varianceExplained: number[];
+    }[];
   };
   setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
   runClustering: (method: 'DBSCAN' | 'KMEANS', opts: { eps?: number; min_samples?: number; k?: number; standardize?: boolean }) => string;
@@ -44,7 +48,7 @@ export type AppBridge = {
   pinView: () => string;
   loadDemoData: () => Promise<string>;
   // analysis (aggregates only)
-  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean }) => string;
+  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string }) => string;
   correlate: (colA: string, colB: string) => string;
   compareGroups: (numericCol: string, groupCol: string) => string;
   suggestK: (maxK: number) => string;
@@ -94,7 +98,7 @@ export const TUTORIAL: Record<string, string> = {
   plotting:
     'The View section ("4. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
   pca:
-    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. Scores are added as PC1…PCk columns and plotted immediately; the scree bars show variance explained per component, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
+    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. A run on a variable subset can be given a label (auto-suggested from the item names): its columns become PC1_<label>…, or COMP_<label> when keeping just the top component — the composite-score workflow for building one named score per item group and plotting them against each other. Re-running a label replaces that run\'s columns (confirmed by a dialog); differently-labeled runs coexist. An unlabeled run adds plain PC1…PCk. The scree bars show variance explained, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
     'In "5. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. The "Standardize variables (z-score)" checkbox gives every variable equal weight in the distance — its default follows the data: on for mixed scales, off for PC scores and shared-scale items (where it is a deliberate methodological choice). Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
   compare_pin:
@@ -223,13 +227,17 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'run_pca',
       description:
-        'Run a principal component analysis on numeric variables of the active dataset, entirely in the browser. Adds PC1..PCk score columns, reports variance explained and top loadings, and plots the first components. Defaults: all numeric non-PC variables, 3 components, standardized (correlation PCA).',
+        'Run a principal component analysis on numeric variables of the active dataset, entirely in the browser. Adds score columns, reports variance explained and top loadings, and plots the result. Defaults: all numeric non-component variables, 3 components, standardized (correlation PCA). Runs on a variable SUBSET should carry a `label`: columns become PC1_<label>… (or COMP_<label> when n_components=1 — the composite-score workflow: one PCA per item group, keep each top component as a named score, then plot the composites against each other). Re-running an existing label REPLACES that run\'s columns — mention that when it happens; different labels coexist. Derive the label from the variable names (e.g. openness items → "openness"); if no natural name is apparent, ask the user rather than inventing something opaque. Past runs with their variables and labels are listed in get_app_state under pcaRuns.',
       parameters: {
         type: 'object',
         properties: {
-          variables: { type: 'array', items: { type: 'string' }, description: 'Numeric columns to include (default: all numeric non-PC columns)' },
-          n_components: { type: 'integer', description: '2-10, default 3' },
+          variables: { type: 'array', items: { type: 'string' }, description: 'Numeric columns to include (default: all numeric non-component columns)' },
+          n_components: { type: 'integer', description: '1-10, default 3. 1 = keep only the top component as a COMP_<label> composite score' },
           standardize: { type: 'boolean', description: 'Default true (correlation-based PCA)' },
+          label: {
+            type: 'string',
+            description: 'Short semantic name for a subset run (e.g. "openness"). Letters/digits/underscore. Omit only for a full-variable-set PCA (bare PC1..PCk).',
+          },
         },
         additionalProperties: false,
       },
