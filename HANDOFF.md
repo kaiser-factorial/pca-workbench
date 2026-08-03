@@ -171,37 +171,34 @@ keep their native storage; analysis gets one table.
 10. **Possible future directions** discussed but not committed: embeddings-based RAG for
    user-supplied papers (only worth it beyond the curated corpus), OpenRouter spend-limit
    note in settings, silhouette/elbow charts in the Cluster section UI.
-11. **Feedback queue robustness — FIXED in code (2026-08-02), one console step left.**
-   The review gaps became a live incident the same day: the table filled with duplicate
-   rows. Root cause, confirmed by reading the flush path: delivery is at-least-once
-   (AssistantPanel mount-flushes the SHARED IndexedDB queue in every tab while the
-   `flushing` guard is per-tab → two open tabs double-post every drained row; and a
-   POST that lands right before tab close never gets its queue-delete → re-sent next
-   session), and the insert-only table had no idempotency key, so every redelivery was
-   a visible duplicate. `feedback.ts` is rewritten:
-   - `client_key` (uuid, stamped at enqueue) + `on_conflict=client_key` with
+11. **Feedback queue robustness — RESOLVED (2026-08-02); the "incident" was a
+   misdiagnosis.** The originally reported duplication incident did not happen:
+   inspection of the live table (all rows, pre-deploy) found zero byte-identical
+   duplicates. What the cross-project review had read as dupes was the two-row
+   design itself — each rated event holds a metadata-only row (`reason` NULL) plus,
+   when the user typed into the "why" box, a reason row sharing `event_id` and
+   `rating`, landing seconds-to-minutes later. The dedupe delete in
+   `supabase/dedupe_assistant_feedback.sql` was therefore **never run** (preview
+   matched nothing); the file stays as reference tooling. Its identity columns
+   matter if it's ever used: matching must include `reason` and `user_message`, not
+   just `event_id` + `rating`, or the delete would eat every legitimate
+   metadata+reason pair.
+   The code hardening shipped anyway, and rightly so — the at-least-once races
+   (shared IndexedDB queue behind a per-tab `flushing` guard; POST landing right
+   before tab close losing its queue-delete) are real code paths that simply hadn't
+   fired. All landed 2026-08-02 (`7ac7f03` + `16d016d`, deployed; migration
+   `20260802000000_feedback_idempotency` applied — `client_key` + unique index +
+   `source_app`):
+   - `client_key` stamped at enqueue, `on_conflict=client_key` +
      `Prefer: resolution=ignore-duplicates` → redelivery is a server-side no-op;
-   - a Web Lock serializes flushes across tabs;
-   - `pagehide` flush with `keepalive` so last-moment records don't wait a session;
-   - per-row fallback on batch rejection, attempts counter, drop after 5 rejections
-     (network failures stay queued and cost no attempts), plus a bridge that retries
-     without `on_conflict` against a pre-migration server.
-   Remaining steps, in order (the client has a bridge that keeps working against a
-   pre-migration server, but idempotency — the actual dupe protection — only starts
-   once the index exists, so do the migration first):
-   - [ ] **Run the migration** `supabase/migrations/20260802000000_feedback_idempotency.sql`
-         (adds `client_key` + unique index + `source_app`). Repo is linked:
-         `supabase db push` — or paste it into the dashboard SQL editor.
-   - [ ] **Clear the existing dupes** with `supabase/dedupe_assistant_feedback.sql`:
-         run the preview query, eyeball the groups, then uncomment and run the
-         delete (keeps the earliest copy of each identical row). Destructive — by
-         hand only, deliberately not a migration.
-   - [ ] **Push to `main`** so Vercel ships the new client (idempotent inserts,
-         cross-tab flush lock, pagehide flush, poison-row handling).
-   - [ ] Optional sanity check afterwards: re-run the preview query — new dupes
-         should be structurally impossible now.
-   Verified fine on review: insert-only RLS, the two-row `event_id` pattern with the
-   `distinct on` analysis query, and metadata-only rows without consent.
+   - Web Lock serializes flushes across tabs; `pagehide` flush with `keepalive`;
+   - per-row fallback on batch rejection with attempts counter (drop after 5
+     server rejections; network failures stay queued free), and a pre-migration
+     bridge — note `16d016d`: the bridge must strip `client_key` from the request
+     BODY, not just drop `on_conflict` (PostgREST rejects unknown body columns).
+   Verified fine on review: insert-only RLS (`ON CONFLICT DO NOTHING` needs no
+   SELECT), the two-row `event_id` pattern with the `distinct on` analysis query,
+   and metadata-only rows without consent.
 
 ## Working on it
 
