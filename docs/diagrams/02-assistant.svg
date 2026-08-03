@@ -1,0 +1,239 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1504 1010" font-family="'Courier Prime','Courier New',monospace">
+  <title>Scatter Lab — the assistant</title>
+  <defs>
+    <filter id="hs2" x="-5%" y="-5%" width="115%" height="115%">
+      <feDropShadow dx="5" dy="5" stdDeviation="0" flood-color="#111111" flood-opacity="1"/>
+    </filter>
+    <marker id="bB" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#111111"/>
+    </marker>
+  </defs>
+  <style>
+    text { fill:#111111; }
+    .wt { fill:#ffffff; }
+    .lane { font-size:13px; font-weight:700; letter-spacing:2px; }
+    .bt   { font-size:14px; font-weight:700; }
+    .bt18 { font-size:18px; font-weight:700; }
+    .b12  { font-size:12px; }
+    .b11  { font-size:11px; }
+    .n11  { font-size:11px; fill:#555555; }
+    .n10  { font-size:10.5px; fill:#555555; }
+    .box  { fill:#ffffff; stroke:#111111; stroke-width:2.5; }
+    .flow { stroke:#111111; stroke-width:2.5; fill:none; }
+    .dash { stroke-dasharray:7 5; }
+  </style>
+
+  <rect x="0" y="0" width="1504" height="1010" fill="#ffffff"/>
+
+  <!-- title row -->
+  <rect x="32" y="22" width="22" height="22" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <circle cx="78" cy="33" r="12" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <path d="M106,45 L118,21 L130,45 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="152" y="41" font-size="21" font-weight="700" letter-spacing="2">SCATTER LAB — THE ASSISTANT</text>
+  <text x="1480" y="40" text-anchor="end" class="n11">system diagram 02/02 · 01 = the data pipeline</text>
+
+  <!-- browser boundary -->
+  <rect x="24" y="70" width="1176" height="896" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
+  <rect x="48" y="54" width="700" height="32" fill="#111111"/>
+  <text x="398" y="75" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">IN THE BROWSER — THE ASSISTANT IS THE ONE OPT-IN EXCEPTION TO "NOTHING LEAVES"</text>
+
+  <!-- lane headers -->
+  <text x="56"   y="146" class="lane">CONNECT · BYO-KEY</text>
+  <text x="344"  y="146" class="lane">THE CHAT TURN</text>
+  <text x="688"  y="146" class="lane">BRIDGE + KNOWLEDGE</text>
+  <text x="978"  y="146" class="lane">TOOLS ×19</text>
+  <text x="1240" y="146" class="lane">EXTERNAL · OPT-IN</text>
+  <line x1="56"   y1="156" x2="288"  y2="156" stroke="#111111" stroke-width="2"/>
+  <line x1="344"  y1="156" x2="644"  y2="156" stroke="#111111" stroke-width="2"/>
+  <line x1="688"  y1="156" x2="938"  y2="156" stroke="#111111" stroke-width="2"/>
+  <line x1="978"  y1="156" x2="1184" y2="156" stroke="#111111" stroke-width="2"/>
+  <line x1="1240" y1="156" x2="1480" y2="156" stroke="#111111" stroke-width="2"/>
+
+  <!-- ═══ LANE 1 · CONNECT ═══ -->
+  <rect x="56" y="170" width="232" height="104" class="box" filter="url(#hs2)"/>
+  <text x="70" y="196" class="bt">OPENROUTER OAUTH</text>
+  <text x="70" y="224" class="b12">one-click connect (PKCE)</text>
+  <text x="70" y="244" class="n11">key minted in the browser</text>
+
+  <rect x="56" y="298" width="232" height="110" class="box" filter="url(#hs2)"/>
+  <text x="70" y="324" class="bt">…OR ANY ENDPOINT</text>
+  <text x="70" y="352" class="b12">paste key · any base URL</text>
+  <text x="70" y="372" class="b12">OpenAI-compatible protocol</text>
+  <text x="70" y="392" class="n11">Ollama → fully offline</text>
+
+  <rect x="56" y="432" width="232" height="96" class="box" filter="url(#hs2)"/>
+  <text x="70" y="458" class="bt">MODEL PICKER</text>
+  <text x="70" y="486" class="b12">/models catalog fetch</text>
+  <text x="70" y="506" class="n11">tool-capable models only</text>
+
+  <rect x="56" y="552" width="232" height="96" class="box" filter="url(#hs2)"/>
+  <text x="70" y="578" class="bt">KEY STORAGE</text>
+  <text x="70" y="606" class="b12">localStorage only —</text>
+  <text x="70" y="626" class="b12">never in export files</text>
+
+  <!-- ═══ LANE 2 · THE CHAT TURN ═══ -->
+  <rect x="344" y="170" width="300" height="430" class="box" filter="url(#hs2)"/>
+  <text x="358" y="198" class="bt">runAssistantTurn()</text>
+
+  <rect x="358" y="216" width="16" height="16" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <text x="366" y="228.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">1</text>
+  <text x="384" y="229" class="b12">rebuild system prompt</text>
+  <text x="384" y="247" class="n11">from LIVE app state</text>
+
+  <rect x="358" y="282" width="16" height="16" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <text x="366" y="294.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">2</text>
+  <text x="384" y="295" class="b12">stream completion + tools</text>
+  <text x="384" y="313" class="n11">text deltas render live</text>
+
+  <rect x="358" y="348" width="16" height="16" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="366" y="360.5" text-anchor="middle" font-size="11" font-weight="700">3</text>
+  <text x="384" y="361" class="b12">execute tool_calls</text>
+  <text x="384" y="379" class="n11">through the bridge →</text>
+
+  <rect x="358" y="414" width="16" height="16" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <text x="366" y="426.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">4</text>
+  <text x="384" y="427" class="b12">paint-aware yield (2×rAF)</text>
+  <text x="384" y="445" class="n11">React commits between calls</text>
+
+  <rect x="358" y="480" width="16" height="16" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <text x="366" y="492.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">5</text>
+  <text x="384" y="493" class="b12">loop ≤16 → markdown reply</text>
+  <text x="384" y="511" class="n11">tool chips shown in chat</text>
+
+  <path d="M620,500 V296" class="flow" marker-end="url(#bB)"/>
+  <text x="358" y="546" class="n10">↺ while tool calls remain — back to 2</text>
+  <text x="358" y="564" class="n10">history kept per session ·</text>
+  <text x="358" y="580" class="n10">prompt re-reads state each lap</text>
+
+  <rect x="344" y="630" width="300" height="110" class="box" filter="url(#hs2)"/>
+  <text x="358" y="656" class="bt">UNDO — per mutating turn</text>
+  <text x="358" y="684" class="b12">snapshot() before the turn</text>
+  <text x="358" y="704" class="b12">mutating tools → offer revert</text>
+  <text x="358" y="724" class="n11">excludes workspace saves</text>
+
+  <rect x="344" y="770" width="300" height="110" class="box" filter="url(#hs2)"/>
+  <text x="358" y="796" class="bt">PANEL — AssistantPanel.tsx</text>
+  <text x="358" y="824" class="b12">dock right · bottom · float</text>
+  <text x="358" y="844" class="b12">markdown · streaming chat</text>
+  <text x="358" y="864" class="n11">rate any reply 👍/👎 →</text>
+
+  <!-- ═══ LANE 3 · BRIDGE + KNOWLEDGE ═══ -->
+  <rect x="688" y="170" width="250" height="200" fill="#FFD600" stroke="#111111" stroke-width="2.5" filter="url(#hs2)"/>
+  <text x="702" y="200" class="bt18">AppBridge</text>
+  <text x="702" y="220" class="b11">the app's control surface</text>
+  <text x="702" y="248" class="b12">bridgeRef.current re-read</text>
+  <text x="702" y="268" class="b12">per call — fresh closures</text>
+  <text x="702" y="288" class="b12">after every React commit</text>
+  <text x="702" y="314" class="n11">args validated · errors are</text>
+  <text x="702" y="332" class="n11">instructive, not opaque</text>
+
+  <rect x="688" y="410" width="250" height="110" class="box" filter="url(#hs2)"/>
+  <text x="702" y="436" class="bt">THE WORKBENCH</text>
+  <text x="702" y="464" class="b12">plot · table · sidebar</text>
+  <text x="702" y="484" class="n11">the whole of diagram 01</text>
+
+  <rect x="688" y="560" width="250" height="160" class="box" filter="url(#hs2)"/>
+  <text x="702" y="586" class="bt">SHIPPED KNOWLEDGE</text>
+  <text x="702" y="614" class="b12">tutorial — curated UI truth</text>
+  <text x="702" y="634" class="b12">methods — 15 cited chunks</text>
+  <text x="702" y="654" class="n11">Jolliffe · Rousseeuw · Ester…</text>
+  <text x="702" y="672" class="n11">lexical retrieval — small,</text>
+  <text x="702" y="690" class="n11">vetted corpus, no embeddings</text>
+
+  <rect x="688" y="760" width="250" height="130" class="box" filter="url(#hs2)"/>
+  <text x="702" y="786" class="bt">FEEDBACK — feedback.ts</text>
+  <text x="702" y="814" class="b12">rating row + reason row</text>
+  <text x="702" y="834" class="b12">IndexedDB queue · web-lock</text>
+  <text x="702" y="854" class="b12">flush · idempotent client_key</text>
+  <text x="702" y="874" class="n11">consent gate for excerpts</text>
+
+  <!-- ═══ LANE 4 · TOOLS ═══ -->
+  <rect x="978" y="170" width="206" height="84" class="box" filter="url(#hs2)"/>
+  <text x="992" y="196" class="bt">READ</text>
+  <text x="992" y="220" class="b11">get_app_state</text>
+  <text x="992" y="238" class="n11">profiles · axes · pca runs</text>
+
+  <rect x="978" y="278" width="206" height="176" class="box" filter="url(#hs2)"/>
+  <text x="992" y="304" class="bt">ACT</text>
+  <text x="992" y="328" class="b11">set_plot · control_view</text>
+  <text x="992" y="346" class="b11">highlight_ui · pin·remove</text>
+  <text x="992" y="364" class="b11">switch_dataset · visibility</text>
+  <text x="992" y="382" class="b11">transfer_column · save_ws</text>
+  <text x="992" y="400" class="b11">load_demo_data</text>
+  <text x="992" y="424" class="n11">highlight_ui points an</text>
+  <text x="992" y="440" class="n11">ephemeral ring at the UI</text>
+
+  <rect x="978" y="478" width="206" height="150" class="box" filter="url(#hs2)"/>
+  <text x="992" y="504" class="bt">ANALYZE</text>
+  <text x="992" y="528" class="b11">run_pca · run_clustering</text>
+  <text x="992" y="546" class="b11">correlate · compare_groups</text>
+  <text x="992" y="564" class="b11">suggest_k · suggest_eps</text>
+  <text x="992" y="582" class="b11">get_cluster_breakdown</text>
+  <text x="992" y="606" class="n11">aggregates only — by design</text>
+
+  <rect x="978" y="652" width="206" height="90" class="box" filter="url(#hs2)"/>
+  <text x="992" y="678" class="bt">TEACH</text>
+  <text x="992" y="702" class="b11">get_tutorial</text>
+  <text x="992" y="720" class="b11">get_methods_reference</text>
+
+  <!-- ═══ EXTERNAL ═══ -->
+  <rect x="1240" y="170" width="240" height="210" class="box" filter="url(#hs2)"/>
+  <text x="1254" y="196" class="bt">MODEL API — your pick</text>
+  <text x="1254" y="224" class="b12">OpenRouter (default)</text>
+  <text x="1254" y="244" class="b12">any OpenAI-compatible URL</text>
+  <text x="1254" y="264" class="b12">or local Ollama</text>
+  <text x="1254" y="292" class="n11">sees: metadata + tool calls</text>
+  <text x="1254" y="310" class="n11">returns: text + tool_calls</text>
+  <text x="1254" y="328" class="n11">default model: Claude Sonnet</text>
+
+  <rect x="1240" y="780" width="240" height="150" class="box" filter="url(#hs2)"/>
+  <text x="1254" y="806" class="bt">SUPABASE — eval sink</text>
+  <text x="1254" y="834" class="b12">assistant_feedback table</text>
+  <text x="1254" y="854" class="b12">anon key cannot read rows</text>
+  <text x="1254" y="878" class="n11">separate free org · env-gated</text>
+
+  <!-- key -->
+  <text x="1240" y="470" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
+  <line x1="1240" y1="490" x2="1280" y2="490" class="flow" marker-end="url(#bB)"/>
+  <text x="1292" y="494" font-size="11">data flow</text>
+  <line x1="1244" y1="516" x2="1276" y2="516" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+  <text x="1292" y="520" font-size="11">two-way</text>
+  <line x1="1240" y1="542" x2="1280" y2="542" class="flow dash"/>
+  <text x="1292" y="546" font-size="11">browser boundary</text>
+  <rect x="1240" y="562" width="16" height="12" fill="#FFD600" stroke="#111111" stroke-width="1.5"/>
+  <text x="1292" y="572" font-size="11">privacy contract</text>
+
+  <!-- ═══ ARROWS ═══ -->
+  <!-- connect lane → turn -->
+  <path d="M288,222 H336" class="flow" marker-end="url(#bB)"/>
+  <path d="M288,353 H336" class="flow" marker-end="url(#bB)"/>
+  <path d="M288,480 H336" class="flow" marker-end="url(#bB)"/>
+  <!-- turn ⇄ model api, over the boundary -->
+  <path d="M494,170 V110 H1332 V162" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+  <rect x="780" y="99" width="404" height="22" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="982" y="114" text-anchor="middle" font-size="11" font-weight="700">COLUMN NAMES + AGGREGATE STATS — NEVER RAW ROWS</text>
+  <!-- turn ⇄ bridge -->
+  <line x1="648" y1="350" x2="682" y2="350" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+  <!-- turn → undo -->
+  <path d="M494,600 V624" class="flow" marker-end="url(#bB)"/>
+  <!-- panel → feedback -->
+  <path d="M644,825 H682" class="flow" marker-end="url(#bB)"/>
+  <!-- bridge ⇄ workbench -->
+  <line x1="813" y1="374" x2="813" y2="404" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+  <!-- bridge → tool families -->
+  <line x1="938" y1="270" x2="958" y2="270" class="flow"/>
+  <line x1="958" y1="212" x2="958" y2="697" stroke="#111111" stroke-width="3"/>
+  <path d="M958,212 H970" class="flow" marker-end="url(#bB)"/>
+  <path d="M958,366 H970" class="flow" marker-end="url(#bB)"/>
+  <path d="M958,553 H970" class="flow" marker-end="url(#bB)"/>
+  <path d="M958,697 H970" class="flow" marker-end="url(#bB)"/>
+  <!-- teach → corpora -->
+  <path d="M978,714 H952 V676 H946" class="flow" marker-end="url(#bB)"/>
+  <!-- feedback → supabase, over the boundary (insert-only, one way) -->
+  <path d="M938,825 H1232" class="flow" marker-end="url(#bB)"/>
+  <text x="1180" y="812" text-anchor="end" class="n10">insert-only RLS · one-way by design</text>
+
+  <!-- footer -->
+  <text x="32" y="992" class="n10">source: frontend/src — assistant.ts · AssistantPanel.tsx · methods.ts · openrouterAuth.ts · feedback.ts · page.tsx (AppBridge)</text>
+  <text x="1480" y="992" text-anchor="end" class="n10">scatter-lab.vercel.app</text>
+</svg>
