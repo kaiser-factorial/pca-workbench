@@ -148,6 +148,41 @@ body {
   transform: scale(0.88);
 }
 
+/* A shared, restrained action response for buttons that affect the view or
+   create an export. Bauhaus buttons retain their own hard-shadow press. */
+.scatterlab-action-button {
+  cursor: pointer;
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.scatterlab-action-button:disabled {
+  cursor: not-allowed;
+}
+
+.scatterlab-action-button:not(.bauhaus-btn):not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.scatterlab-action-button:not(.bauhaus-btn):not(:disabled):active {
+  transform: translateY(0) scale(0.97);
+}
+
+[data-theme='terminal'] .scatterlab-action-button:not(:disabled):hover {
+  box-shadow: 0 0 10px color-mix(in srgb, currentColor 55%, transparent);
+  filter: brightness(1.13);
+}
+
+.scatterlab-view-divider {
+  width: 100%;
+  margin: 12px 0;
+  border: 0;
+  border-top: 2px dashed var(--p-black, var(--border));
+}
+
+[data-theme='terminal'] .scatterlab-view-divider {
+  border-top-color: color-mix(in srgb, var(--system-green) 55%, transparent);
+}
+
 @keyframes move-scanlines {
   from { transform: translateY(0); }
   to { transform: translateY(100%); }

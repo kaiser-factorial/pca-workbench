@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
-import { Accordion, AccordionItem } from "puxel";
+import { Accordion, AccordionItem, Separator } from "puxel";
 import { readTable } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from "@/lib/cluster";
@@ -2827,11 +2827,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             >
               {showComponents || componentsFile ? '− Remove components file' : '+ Project through a PCA components file'}
             </button>
-            <button data-guide="add-dataset" onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--system-green)]/55 hover:bg-[var(--system-green)]/10 text-[var(--system-green)] cursor-pointer'}`}>
+            <button data-guide="add-dataset" onClick={handleUpload} disabled={!datasetFile || isUploading} className={`scatterlab-action-button w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--system-green)]/55 hover:bg-[var(--system-green)]/10 text-[var(--system-green)] cursor-pointer'}`}>
               {isUploading ? "Processing..." : "Add Dataset"}
             </button>
             {(datasetFile || componentsFile || processedData) && (
-              <button onClick={handleClearData} className={`w-full flex items-center justify-center gap-2 text-sm font-bold py-2 ${theme === 'primary' ? 'bauhaus-btn bg-white text-[var(--p-red)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-red-400'}`}>
+              <button onClick={handleClearData} className={`scatterlab-action-button w-full flex items-center justify-center gap-2 text-sm font-bold py-2 ${theme === 'primary' ? 'bauhaus-btn bg-white text-[var(--p-red)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-red-400'}`}>
                 <Trash2 className="w-4 h-4" /> Clear All Data
               </button>
             )}
@@ -2919,13 +2919,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
               <SidebarSection title="View" step={5} hasBorder theme={theme} guide="view" order={5}>
                 <div className="flex gap-2 mb-2">
-                    <button onClick={() => setViewMode("2D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "2D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>2D</button>
-                    <button onClick={() => setViewMode("3D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "3D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>3D</button>
+                    <button onClick={() => setViewMode("2D")} className={`scatterlab-action-button flex-1 py-1 text-xs font-bold border ${viewMode === "2D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--primary)] border-[var(--primary)] text-white') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>2D</button>
+                    <button onClick={() => setViewMode("3D")} className={`scatterlab-action-button flex-1 py-1 text-xs font-bold border ${viewMode === "3D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--primary)] border-[var(--primary)] text-white') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>3D</button>
                 </div>
 
                 <button
                     onClick={() => setShowAxes({ ...showAxes, [viewMode]: !showAxes[viewMode] })}
-                    className={`w-full py-1 mb-2 text-xs font-bold border ${showAxes[viewMode] ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}
+                    className={`scatterlab-action-button w-full py-1 mb-2 text-xs font-bold border ${showAxes[viewMode] ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--system-green)] border-[var(--system-green)] text-black') : (theme==='primary'?'border-[var(--border)] bg-[var(--input)] opacity-60':'bg-[var(--primary)] border-[var(--primary)] text-white')}`}
                 >
                     {showAxes[viewMode] ? "Axes: On" : "Axes: Off"}
                 </button>
@@ -2957,8 +2957,12 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                     })}
                 </div>
 
-                <button onClick={() => setIsRotating(!isRotating)} disabled={viewMode === '2D'} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold transition-colors disabled:opacity-30 ${isRotating ? (theme==='primary'?'bauhaus-btn bg-[var(--p-red)] text-white':'bg-[var(--border)] text-[var(--primary)] border border-[var(--primary)]') : (theme==='primary'?'bauhaus-btn bg-[var(--p-black)] text-white':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)]')}`}>
+                <button onClick={() => setIsRotating(!isRotating)} disabled={viewMode === '2D'} className={`scatterlab-action-button w-full flex items-center justify-center gap-2 py-2 text-sm font-bold transition-colors disabled:opacity-30 ${isRotating ? (theme==='primary'?'bauhaus-btn bg-[var(--p-red)] text-white':'bg-[var(--primary)] text-white border border-[var(--primary)]') : (theme==='primary'?'bauhaus-btn bg-[var(--p-black)] text-white':'bg-[var(--system-green)] text-black border border-[var(--system-green)]')}`}>
                     {isRotating ? <><Square className="w-4 h-4" /> Stop Rotation</> : <><Play className="w-4 h-4" /> Start Rotation</>}
+                </button>
+                <Separator dashed className="scatterlab-view-divider" />
+                <button onClick={pinCurrentView} className={`scatterlab-action-button w-full flex items-center justify-center gap-2 py-2 text-sm font-bold ${theme==='primary'?'bauhaus-btn bg-[var(--p-red)] text-white':'bg-[var(--primary)] border border-[var(--primary)] text-white'}`}>
+                    <Pin className="w-4 h-4" /> Pin View
                 </button>
               </SidebarSection>
 
@@ -3010,26 +3014,23 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
                   </SidebarSection>
 
-              <SidebarSection title="Export & Pin" step={6} hasBorder theme={theme} guide="export" order={6}>
-                  <button onClick={pinCurrentView} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)]'}`}>
-                      <Pin className="w-4 h-4" /> Pin View
-                  </button>
+              <SidebarSection title="Export" step={6} hasBorder theme={theme} guide="export" order={6}>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={exportPNG} disabled={!!isExporting} title="Save PNG of the active view" className={`scatterlab-action-button flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-blue)] text-white':'bg-[var(--input)] border border-[var(--primary)] text-[var(--primary)]'}`}>
+                      <Download className="h-4 w-4" /> PNG
+                    </button>
+                    <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} title="Save rotating GIF (3D only)" className={`scatterlab-action-button flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]':'bg-[var(--input)] border border-[var(--primary)] text-[var(--primary)]'}`}>
+                      <Download className="h-4 w-4" /> GIF
+                    </button>
+                    <button onClick={exportHTML} disabled={!!isExporting} title="Save interactive HTML" className={`scatterlab-action-button flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-red)] text-white':'bg-[var(--input)] border border-[var(--primary)] text-[var(--primary)]'}`}>
+                      <Download className="h-4 w-4" /> HTML
+                    </button>
+                  </div>
                   <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
                       <input type="checkbox" checked={includeExportInfo} onChange={e => setIncludeExportInfo(e.target.checked)} />
                       <span className="opacity-80">Add title & legend to exports</span>
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button onClick={exportPNG} disabled={!!isExporting} title="Save PNG of the active view" className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-blue)] text-white':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                      <Download className="h-4 w-4" /> PNG
-                    </button>
-                    <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} title="Save rotating GIF (3D only)" className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                      <Download className="h-4 w-4" /> GIF
-                    </button>
-                    <button onClick={exportHTML} disabled={!!isExporting} title="Save interactive HTML" className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                      <Download className="h-4 w-4" /> HTML
-                    </button>
-                  </div>
-                  <button onClick={exportDatasetCsv} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                  <button onClick={exportDatasetCsv} disabled={!!isExporting} className={`scatterlab-action-button w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--system-green)] border border-[var(--system-green)] text-black'}`}>
                       <Download className="w-4 h-4" /> Save Dataset CSV
                   </button>
               </SidebarSection>
