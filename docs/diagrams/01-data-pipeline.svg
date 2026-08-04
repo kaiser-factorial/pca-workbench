@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1504 1010" font-family="'Courier Prime','Courier New',monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 880" font-family="'Courier Prime','Courier New',monospace">
   <title>Scatter Lab — data pipeline</title>
   <defs>
     <filter id="hs" x="-5%" y="-5%" width="115%" height="115%">
@@ -16,241 +16,271 @@
     .wt { fill:#ffffff; }
     .lane { font-size:13px; font-weight:700; letter-spacing:2px; }
     .bt   { font-size:14px; font-weight:700; }
+    .bt12 { font-size:12px; font-weight:700; }
     .bt18 { font-size:18px; font-weight:700; }
     .b12  { font-size:12px; }
+    .c10  { font-size:10.5px; }
     .n11  { font-size:11px; fill:#555555; }
     .n10  { font-size:10.5px; fill:#555555; }
     .red12{ font-size:12px; font-weight:700; fill:#EB1A26; }
+    .red10{ font-size:10.5px; font-weight:700; fill:#EB1A26; }
     .box  { fill:#ffffff; stroke:#111111; stroke-width:2.5; }
     .flow { stroke:#111111; stroke-width:2.5; fill:none; }
     .dash { stroke-dasharray:7 5; }
   </style>
 
-  <rect x="0" y="0" width="1504" height="1010" fill="#ffffff"/>
+  <rect x="0" y="0" width="1720" height="880" fill="#ffffff"/>
 
   <!-- title row -->
-  <rect x="32" y="22" width="22" height="22" fill="#0045AD" stroke="#111111" stroke-width="2"/>
-  <circle cx="78" cy="33" r="12" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
-  <path d="M106,45 L118,21 L130,45 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="152" y="41" font-size="21" font-weight="700" letter-spacing="2">SCATTER LAB — DATA PIPELINE</text>
-  <text x="1480" y="40" text-anchor="end" class="n11">system diagram 01/03 · 02–03 = the assistant</text>
+  <rect x="32" y="10" width="20" height="20" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <circle cx="74" cy="20" r="11" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <path d="M100,30 L111,8 L122,30 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="142" y="27" font-size="20" font-weight="700" letter-spacing="2">SCATTER LAB — DATA PIPELINE</text>
+  <text x="1696" y="26" text-anchor="end" class="n11">system diagram 01/03 · 02–03 = the assistant</text>
 
   <!-- browser boundary -->
-  <rect x="24" y="70" width="1464" height="896" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
-  <rect x="48" y="54" width="612" height="32" fill="#111111"/>
-  <text x="354" y="75" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">ALL COMPUTE IN THE BROWSER — NO BACKEND · DATA NEVER LEAVES THE MACHINE</text>
+  <rect x="24" y="56" width="1680" height="772" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
+  <rect x="48" y="42" width="700" height="30" fill="#111111"/>
+  <text x="398" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">A STATIC SITE — ALL COMPUTE IN THE BROWSER · YOUR DATASET NEVER LEAVES THE MACHINE</text>
 
   <!-- lane headers -->
-  <text x="56"   y="146" class="lane">IMPORT</text>
-  <text x="316"  y="146" class="lane">INGEST</text>
-  <text x="608"  y="146" class="lane">THE TABLE</text>
-  <text x="924"  y="146" class="lane">WORKBENCH · SIDEBAR 2–6</text>
-  <text x="1264" y="146" class="lane">RENDER</text>
-  <line x1="56"   y1="156" x2="274"  y2="156" stroke="#111111" stroke-width="2"/>
-  <line x1="316"  y1="156" x2="568"  y2="156" stroke="#111111" stroke-width="2"/>
-  <line x1="608"  y1="156" x2="884"  y2="156" stroke="#111111" stroke-width="2"/>
-  <line x1="924"  y1="156" x2="1224" y2="156" stroke="#111111" stroke-width="2"/>
-  <line x1="1264" y1="156" x2="1480" y2="156" stroke="#111111" stroke-width="2"/>
+  <text x="48"   y="112" class="lane">IMPORT</text>
+  <text x="298"  y="112" class="lane">INGEST</text>
+  <text x="568"  y="112" class="lane">THE TABLE</text>
+  <text x="858"  y="112" class="lane">WORKBENCH · RENDER</text>
+  <text x="1148" y="112" class="lane">INSIDE THE WORKBENCH</text>
+  <text x="1696" y="112" text-anchor="end" class="n11">the sidebar · steps 2–6</text>
+  <line x1="48"   y1="122" x2="258"  y2="122" stroke="#111111" stroke-width="2"/>
+  <line x1="298"  y1="122" x2="528"  y2="122" stroke="#111111" stroke-width="2"/>
+  <line x1="568"  y1="122" x2="818"  y2="122" stroke="#111111" stroke-width="2"/>
+  <line x1="858"  y1="122" x2="1108" y2="122" stroke="#111111" stroke-width="2"/>
+  <line x1="1148" y1="122" x2="1696" y2="122" stroke="#111111" stroke-width="2"/>
 
-  <!-- ═══ LANE 1 · IMPORT ═══ -->
-  <rect x="56" y="170" width="218" height="100" class="box" filter="url(#hs)"/>
-  <rect x="70" y="184" width="20" height="20" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
-  <text x="80" y="199" text-anchor="middle" class="wt" font-size="12" font-weight="700">1</text>
-  <text x="100" y="199" class="bt">FILE DROP</text>
-  <text x="70" y="226" class="b12">.csv · .xlsx · .parquet</text>
-  <text x="70" y="245" class="n11">sidebar step 1 — Data</text>
-
-  <rect x="56" y="298" width="218" height="84" class="box" filter="url(#hs)"/>
-  <text x="70" y="322" class="bt">DEMO DATA</text>
-  <text x="70" y="345" class="b12">fetch /demo/*.csv</text>
-  <text x="70" y="364" class="n11">synthetic survey · 300 rows</text>
-
-  <rect x="56" y="410" width="218" height="94" class="box" filter="url(#hs)"/>
-  <text x="70" y="434" class="bt">WORKSPACE FILE</text>
-  <text x="70" y="457" class="b12">.scatterlab.json</text>
-  <text x="70" y="476" class="n11">full snapshot incl. tables</text>
-
-  <!-- ═══ LANE 2 · INGEST ═══ -->
-  <rect x="316" y="170" width="252" height="190" class="box" filter="url(#hs)"/>
-  <text x="330" y="196" class="bt">PARSE — parse.ts</text>
-  <text x="330" y="224" class="b12">PapaParse → .csv</text>
-  <text x="330" y="244" class="b12">SheetJS   → .xlsx</text>
-  <text x="330" y="264" class="b12">hyparquet → .parquet</text>
-  <text x="330" y="292" class="n11">parsers lazy-loaded on demand</text>
-  <text x="330" y="310" class="n11">typed cells · BigInt → number</text>
-
-  <rect x="316" y="390" width="252" height="128" class="box" filter="url(#hs)"/>
-  <text x="330" y="416" class="bt">NORMALIZE — table.ts</text>
-  <text x="330" y="444" class="b12">'' · NaN · ±Inf → null</text>
-  <text x="330" y="464" class="b12">bool → 0|1 · Date → ISO</text>
-  <text x="330" y="484" class="b12">rows → one array per column</text>
-
-  <rect x="316" y="558" width="252" height="160" class="box" filter="url(#hs)"/>
-  <rect x="488" y="546" width="68" height="20" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="522" y="560" text-anchor="middle" font-size="10" font-weight="700">OPTIONAL</text>
-  <text x="330" y="584" class="bt">PROJECT — engine.ts</text>
-  <text x="330" y="612" class="b12">components file supplied?</text>
-  <text x="330" y="632" class="b12">vars ∩ loadings → impute</text>
-  <text x="330" y="652" class="b12">→ z-score → scores = X·L</text>
-  <text x="330" y="674" class="n11">adds PC1–PC3 · top loadings</text>
-  <text x="330" y="692" class="n11">(the demo takes this path)</text>
-
-  <!-- ═══ LANE 3 · THE TABLE ═══ -->
-  <rect x="608" y="170" width="276" height="280" fill="#FFD600" stroke="#111111" stroke-width="2.5" filter="url(#hs)"/>
-  <text x="630" y="204" class="bt18">DataTable</text>
-  <text x="630" y="224" font-size="11">the shared columnar object</text>
-  <text x="630" y="254" class="b12">{ columns: string[]</text>
-  <text x="630" y="274" class="b12">  data: { col → cells[] }</text>
-  <text x="630" y="294" class="b12">  nRows: number }</text>
-  <g stroke="#111111" stroke-width="1.5">
-    <rect x="650" y="316" width="14" height="12" fill="#ffffff"/><rect x="650" y="331" width="14" height="12" fill="#ffffff"/><rect x="650" y="346" width="14" height="12" fill="#ffffff"/><rect x="650" y="361" width="14" height="12" fill="#ffffff"/>
-    <rect x="672" y="316" width="14" height="12" fill="#ffffff"/><rect x="672" y="331" width="14" height="12" fill="#ffffff"/><rect x="672" y="346" width="14" height="12" fill="#ffffff"/><rect x="672" y="361" width="14" height="12" fill="#ffffff"/>
-    <rect x="694" y="316" width="14" height="12" fill="#ffffff"/><rect x="694" y="331" width="14" height="12" fill="#ffffff"/><rect x="694" y="346" width="14" height="12" fill="#ffffff"/><rect x="694" y="361" width="14" height="12" fill="#ffffff"/>
-    <rect x="716" y="316" width="14" height="12" fill="#ffffff"/><rect x="716" y="331" width="14" height="12" fill="#ffffff"/><rect x="716" y="346" width="14" height="12" fill="#ffffff"/><rect x="716" y="361" width="14" height="12" fill="#ffffff"/>
-    <rect x="738" y="316" width="14" height="12" fill="#EB1A26"/><rect x="738" y="331" width="14" height="12" fill="#EB1A26"/><rect x="738" y="346" width="14" height="12" fill="#EB1A26"/><rect x="738" y="361" width="14" height="12" fill="#EB1A26"/>
+  <!-- ═══ IMPORT ═══ -->
+  <g id="node-filedrop">
+    <rect x="48" y="140" width="210" height="96" class="box" filter="url(#hs)"/>
+    <rect x="62" y="154" width="20" height="20" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+    <text x="72" y="169" text-anchor="middle" class="wt" font-size="12" font-weight="700">1</text>
+    <text x="92" y="169" class="bt">FILE DROP</text>
+    <text x="62" y="196" class="b12">.csv · .xlsx · .parquet</text>
+    <text x="62" y="215" class="n11">sidebar step 1 — Data</text>
   </g>
-  <text x="630" y="396" font-size="11">new columns append in place —</text>
-  <text x="630" y="414" font-size="11">scores become plottable vars</text>
 
-  <rect x="608" y="490" width="276" height="150" class="box" filter="url(#hs)"/>
-  <text x="622" y="516" class="bt">SESSION STATE — page.tsx</text>
-  <text x="622" y="544" class="b12">datasets[] · one active</text>
-  <text x="622" y="564" class="b12">axes auto-pick (PCs first)</text>
-  <text x="622" y="584" class="b12">colorBy · shapeBy · camera</text>
-  <text x="622" y="604" class="b12">transfer cols ⇄ datasets</text>
-  <text x="622" y="624" class="n11">pins ≤3 · notes · 2 themes</text>
-
-  <rect x="608" y="680" width="276" height="120" class="box" filter="url(#hs)"/>
-  <text x="622" y="706" class="bt">PERSIST — workspaces.ts</text>
-  <text x="622" y="734" class="b12">IndexedDB 'scatter-lab'</text>
-  <text x="622" y="754" class="b12">tables deduped by identity</text>
-  <text x="622" y="774" class="b12">export ⇄ import .json file</text>
-
-  <!-- ═══ LANE 4 · WORKBENCH ═══ -->
-  <rect x="924" y="170" width="300" height="112" class="box" filter="url(#hs)"/>
-  <rect x="938" y="184" width="20" height="20" fill="#0045AD" stroke="#111111" stroke-width="2"/>
-  <text x="948" y="199" text-anchor="middle" class="wt" font-size="12" font-weight="700">2</text>
-  <text x="968" y="199" class="bt">VARIABLES</text>
-  <text x="938" y="226" class="b12">every column profiled:</text>
-  <text x="938" y="246" class="b12">kind · range · NA · histogram</text>
-  <text x="938" y="266" class="b12">one-click X·Y·Z·color·shape</text>
-
-  <rect x="924" y="310" width="300" height="148" class="box" filter="url(#hs)"/>
-  <rect x="938" y="324" width="20" height="20" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="948" y="339" text-anchor="middle" font-size="12" font-weight="700">3</text>
-  <text x="968" y="339" class="bt">PCA — pca.ts</text>
-  <text x="938" y="366" class="b12">impute → standardize →</text>
-  <text x="938" y="386" class="b12">corr matrix → Jacobi eigen</text>
-  <text x="938" y="406" class="b12">scores·loadings·scree·labels</text>
-  <text x="938" y="432" class="red12">+PC1_‹label›… +COMP_‹label›</text>
-
-  <rect x="924" y="486" width="300" height="92" class="box" filter="url(#hs)"/>
-  <rect x="938" y="500" width="20" height="20" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
-  <text x="948" y="515" text-anchor="middle" class="wt" font-size="12" font-weight="700">4</text>
-  <text x="968" y="515" class="bt">VIEW</text>
-  <text x="938" y="542" class="b12">2D/3D · camera · auto-rotate</text>
-  <text x="938" y="562" class="b12">axis labels · zoom window</text>
-
-  <rect x="924" y="606" width="300" height="152" class="box" filter="url(#hs)"/>
-  <rect x="938" y="620" width="20" height="20" fill="#0045AD" stroke="#111111" stroke-width="2"/>
-  <text x="948" y="635" text-anchor="middle" class="wt" font-size="12" font-weight="700">5</text>
-  <text x="968" y="635" class="bt">CLUSTER — cluster.ts</text>
-  <text x="938" y="662" class="b12">runs on the plotted axes</text>
-  <text x="938" y="682" class="b12">z-score? → DBSCAN | k-means++</text>
-  <text x="938" y="702" class="b12">seeded → deterministic runs</text>
-  <text x="938" y="722" class="n11">silhouette-by-k · k-distance</text>
-  <text x="938" y="746" class="red12">+Cluster</text>
-
-  <rect x="924" y="784" width="300" height="104" class="box" filter="url(#hs)"/>
-  <rect x="938" y="798" width="20" height="20" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="948" y="813" text-anchor="middle" font-size="12" font-weight="700">6</text>
-  <text x="968" y="813" class="bt">EXPORT &amp; PIN</text>
-  <text x="938" y="840" class="b12">pin ≤3 + live → compare grid</text>
-  <text x="938" y="860" class="b12">PNG 2× · GIF · offline HTML</text>
-
-  <!-- ═══ LANE 5 · RENDER ═══ -->
-  <rect x="1264" y="170" width="216" height="280" class="box" filter="url(#hs)"/>
-  <text x="1278" y="196" class="bt">PLOT — Plotly WebGL</text>
-  <rect x="1284" y="212" width="176" height="140" fill="#ffffff" stroke="#111111" stroke-width="1.5"/>
-  <g stroke="#dddddd" stroke-width="1">
-    <line x1="1328" y1="212" x2="1328" y2="352"/><line x1="1372" y1="212" x2="1372" y2="352"/><line x1="1416" y1="212" x2="1416" y2="352"/>
-    <line x1="1284" y1="247" x2="1460" y2="247"/><line x1="1284" y1="282" x2="1460" y2="282"/><line x1="1284" y1="317" x2="1460" y2="317"/>
+  <g id="node-workspacefile">
+    <rect x="48" y="264" width="210" height="90" class="box" filter="url(#hs)"/>
+    <text x="62" y="288" class="bt">WORKSPACE FILE</text>
+    <text x="62" y="311" class="b12">.scatterlab.json</text>
+    <text x="62" y="330" class="n11">full snapshot incl. tables</text>
   </g>
-  <g fill="#0045AD" stroke="#111111" stroke-width="1.25">
-    <rect x="1294" y="302" width="8" height="8"/><rect x="1308" y="312" width="8" height="8"/><rect x="1302" y="288" width="8" height="8"/><rect x="1318" y="296" width="8" height="8"/><rect x="1312" y="326" width="8" height="8"/>
-  </g>
-  <g fill="#EB1A26" stroke="#111111" stroke-width="1.25">
-    <circle cx="1355" cy="238" r="4.5"/><circle cx="1367" cy="232" r="4.5"/><circle cx="1361" cy="252" r="4.5"/><circle cx="1377" cy="244" r="4.5"/><circle cx="1349" cy="246" r="4.5"/>
-  </g>
-  <g fill="#FFD600" stroke="#111111" stroke-width="1.25">
-    <path d="M1411,324 L1416,315 L1421,324 Z"/><path d="M1423,334 L1428,325 L1433,334 Z"/><path d="M1417,308 L1422,299 L1427,308 Z"/><path d="M1433,318 L1438,309 L1443,318 Z"/><path d="M1405,338 L1410,329 L1415,338 Z"/>
-  </g>
-  <text x="1456" y="348" text-anchor="end" font-size="9" fill="#555555">PC1</text>
-  <text x="1288" y="224" font-size="9" fill="#555555">PC2</text>
-  <text x="1278" y="380" class="b12">position x·y·z</text>
-  <text x="1278" y="400" class="b12">color: palette|viridis</text>
-  <text x="1278" y="420" class="b12">shape: ≤6 symbols</text>
-  <text x="1278" y="440" class="n11">mute/hide via legend</text>
 
-  <rect x="1264" y="540" width="216" height="150" class="box" filter="url(#hs)"/>
-  <text x="1278" y="566" class="bt">ARTIFACTS</text>
-  <rect x="1278" y="582" width="52" height="24" fill="#ffffff" stroke="#111111" stroke-width="2"/>
-  <text x="1304" y="598" text-anchor="middle" font-size="11" font-weight="700">.png</text>
-  <rect x="1338" y="582" width="52" height="24" fill="#ffffff" stroke="#111111" stroke-width="2"/>
-  <text x="1364" y="598" text-anchor="middle" font-size="11" font-weight="700">.gif</text>
-  <rect x="1398" y="582" width="58" height="24" fill="#ffffff" stroke="#111111" stroke-width="2"/>
-  <text x="1427" y="598" text-anchor="middle" font-size="11" font-weight="700">.html</text>
-  <text x="1278" y="634" class="n11">png 2× res · gif rotates</text>
-  <text x="1278" y="652" class="n11">html: self-contained,</text>
-  <text x="1278" y="670" class="n11">interactive, offline</text>
+  <g id="note-demo">
+    <line x1="50" y1="386" x2="50" y2="452" stroke="#111111" stroke-width="2"/>
+    <text x="62" y="400" class="n10">n.b. — a synthetic 300-row</text>
+    <text x="62" y="416" class="n10">demo ships in-app; it loads</text>
+    <text x="62" y="432" class="n10">through this same path</text>
+    <text x="62" y="448" class="n10">(file drop, with loadings)</text>
+  </g>
 
-  <!-- key -->
-  <text x="1264" y="744" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
-  <line x1="1264" y1="764" x2="1304" y2="764" class="flow" marker-end="url(#aB)"/>
-  <text x="1316" y="768" font-size="11">data flow</text>
-  <line x1="1268" y1="790" x2="1302" y2="790" stroke="#EB1A26" stroke-width="2.5" marker-start="url(#aR)" marker-end="url(#aR)"/>
-  <text x="1316" y="794" font-size="11">derived cols ⇄ table</text>
-  <line x1="1264" y1="816" x2="1304" y2="816" class="flow dash"/>
-  <text x="1316" y="820" font-size="11">optional / sideload</text>
+  <!-- ═══ INGEST ═══ -->
+  <g id="node-parse">
+    <rect x="298" y="140" width="230" height="170" class="box" filter="url(#hs)"/>
+    <text x="312" y="166" class="bt">PARSE — parse.ts</text>
+    <text x="312" y="192" class="b12">PapaParse → .csv</text>
+    <text x="312" y="212" class="b12">SheetJS   → .xlsx</text>
+    <text x="312" y="232" class="b12">hyparquet → .parquet</text>
+    <text x="312" y="258" class="n11">parsers lazy-loaded on demand</text>
+    <text x="312" y="276" class="n11">typed cells · BigInt → number</text>
+  </g>
+
+  <g id="node-normalize">
+    <rect x="298" y="338" width="230" height="112" class="box" filter="url(#hs)"/>
+    <text x="312" y="364" class="bt">NORMALIZE — table.ts</text>
+    <text x="312" y="390" class="b12">'' · NaN · ±Inf → null</text>
+    <text x="312" y="409" class="b12">bool → 0|1 · Date → ISO</text>
+    <text x="312" y="428" class="b12">rows → 1 array per column</text>
+  </g>
+
+  <g id="node-projection">
+    <rect x="298" y="486" width="230" height="126" fill="#ffffff" stroke="#111111" stroke-width="2.5" stroke-dasharray="8 5"/>
+    <rect x="440" y="474" width="68" height="20" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+    <text x="474" y="488" text-anchor="middle" font-size="10" font-weight="700">OPTIONAL</text>
+    <text x="312" y="512" class="bt">PCA PROJECTION</text>
+    <text x="312" y="530" class="n10">engine.ts</text>
+    <text x="312" y="554" class="b12">impute → z-score → X·L</text>
+    <text x="312" y="573" class="b12">adds PC1–3 from loadings</text>
+    <text x="312" y="597" class="n11">skipped without a file</text>
+  </g>
+
+  <!-- ═══ THE TABLE ═══ -->
+  <g id="node-hub">
+    <rect x="568" y="140" width="250" height="250" fill="#FFD600" stroke="#111111" stroke-width="2.5" filter="url(#hs)"/>
+    <text x="590" y="172" class="bt18">DataTable</text>
+    <text x="590" y="192" font-size="11">the shared columnar object</text>
+    <text x="590" y="220" class="b12">{ columns: string[]</text>
+    <text x="590" y="240" class="b12">  data: { col → cells[] }</text>
+    <text x="590" y="260" class="b12">  nRows: number }</text>
+    <g stroke="#111111" stroke-width="1.5">
+      <rect x="590" y="278" width="14" height="12" fill="#ffffff"/><rect x="590" y="293" width="14" height="12" fill="#ffffff"/><rect x="590" y="308" width="14" height="12" fill="#ffffff"/><rect x="590" y="323" width="14" height="12" fill="#ffffff"/>
+      <rect x="612" y="278" width="14" height="12" fill="#ffffff"/><rect x="612" y="293" width="14" height="12" fill="#ffffff"/><rect x="612" y="308" width="14" height="12" fill="#ffffff"/><rect x="612" y="323" width="14" height="12" fill="#ffffff"/>
+      <rect x="634" y="278" width="14" height="12" fill="#ffffff"/><rect x="634" y="293" width="14" height="12" fill="#ffffff"/><rect x="634" y="308" width="14" height="12" fill="#ffffff"/><rect x="634" y="323" width="14" height="12" fill="#ffffff"/>
+      <rect x="656" y="278" width="14" height="12" fill="#ffffff"/><rect x="656" y="293" width="14" height="12" fill="#ffffff"/><rect x="656" y="308" width="14" height="12" fill="#ffffff"/><rect x="656" y="323" width="14" height="12" fill="#ffffff"/>
+      <rect x="678" y="278" width="14" height="12" fill="#EB1A26"/><rect x="678" y="293" width="14" height="12" fill="#EB1A26"/><rect x="678" y="308" width="14" height="12" fill="#EB1A26"/><rect x="678" y="323" width="14" height="12" fill="#EB1A26"/>
+    </g>
+    <text x="590" y="356" font-size="11">new columns append in place —</text>
+    <text x="590" y="374" font-size="11">scores become plottable vars</text>
+  </g>
+
+  <g id="node-state">
+    <rect x="568" y="420" width="250" height="140" class="box" filter="url(#hs)"/>
+    <text x="582" y="446" class="bt">SESSION STATE — page.tsx</text>
+    <text x="582" y="472" class="b12">datasets[] · one active</text>
+    <text x="582" y="492" class="b12">axes auto-pick (PCs first)</text>
+    <text x="582" y="512" class="b12">color·shape·camera·transfer</text>
+    <text x="582" y="536" class="n11">views ≤4 (3 pins + live) · notes</text>
+  </g>
+
+  <g id="node-persist">
+    <rect x="568" y="590" width="250" height="112" class="box" filter="url(#hs)"/>
+    <text x="582" y="616" class="bt">PERSIST — workspaces.ts</text>
+    <text x="582" y="642" class="b12">IndexedDB 'scatter-lab'</text>
+    <text x="582" y="662" class="b12">tables deduped by identity</text>
+    <text x="582" y="682" class="b12">export ⇄ import .json file</text>
+  </g>
+
+  <!-- ═══ WORKBENCH · RENDER ═══ -->
+  <g id="node-workbench">
+    <rect x="858" y="140" width="250" height="140" class="box" filter="url(#hs)"/>
+    <text x="872" y="166" class="bt">THE WORKBENCH</text>
+    <text x="872" y="184" class="n11">steps 2–6 — detailed at right</text>
+    <text x="872" y="210" class="b12">assign → analyze → view →</text>
+    <text x="872" y="230" class="b12">cluster → export</text>
+    <text x="872" y="258" class="red12">+PC · +Cluster → the table</text>
+  </g>
+
+  <g id="node-plot">
+    <rect x="858" y="330" width="250" height="270" class="box" filter="url(#hs)"/>
+    <text x="872" y="356" class="bt">PLOT — Plotly WebGL</text>
+    <rect x="878" y="370" width="200" height="120" fill="#ffffff" stroke="#111111" stroke-width="1.5"/>
+    <g stroke="#dddddd" stroke-width="1">
+      <line x1="928" y1="370" x2="928" y2="490"/><line x1="978" y1="370" x2="978" y2="490"/><line x1="1028" y1="370" x2="1028" y2="490"/>
+      <line x1="878" y1="400" x2="1078" y2="400"/><line x1="878" y1="430" x2="1078" y2="430"/><line x1="878" y1="460" x2="1078" y2="460"/>
+    </g>
+    <g fill="#0045AD" stroke="#111111" stroke-width="1.25">
+      <rect x="891" y="451" width="8" height="8"/><rect x="904" y="459" width="8" height="8"/><rect x="898" y="438" width="8" height="8"/><rect x="914" y="446" width="8" height="8"/><rect x="908" y="468" width="8" height="8"/>
+    </g>
+    <g fill="#EB1A26" stroke="#111111" stroke-width="1.25">
+      <circle cx="975" cy="392" r="4.5"/><circle cx="987" cy="386" r="4.5"/><circle cx="981" cy="404" r="4.5"/><circle cx="997" cy="398" r="4.5"/><circle cx="969" cy="400" r="4.5"/>
+    </g>
+    <g fill="#FFD600" stroke="#111111" stroke-width="1.25">
+      <path d="M1035,464 L1040,455 L1045,464 Z"/><path d="M1047,472 L1052,463 L1057,472 Z"/><path d="M1041,448 L1046,439 L1051,448 Z"/><path d="M1055,456 L1060,447 L1065,456 Z"/><path d="M1029,476 L1034,467 L1039,476 Z"/>
+    </g>
+    <text x="1074" y="486" text-anchor="end" font-size="9" fill="#555555">PC1</text>
+    <text x="882" y="382" font-size="9" fill="#555555">PC2</text>
+    <text x="872" y="516" class="b12">position x·y·z</text>
+    <text x="872" y="536" class="b12">color: palette|viridis</text>
+    <text x="872" y="556" class="b12">shape: ≤6 symbols</text>
+    <text x="872" y="578" class="n11">mute/hide via legend</text>
+  </g>
+
+  <g id="node-key">
+    <rect x="48" y="690" width="210" height="110" fill="#ffffff" stroke="#0045AD" stroke-width="3.5"/>
+    <text x="62" y="714" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
+    <line x1="62" y1="734" x2="96" y2="734" class="flow" marker-end="url(#aB)"/>
+    <text x="108" y="738" font-size="10.5">data flow</text>
+    <line x1="96" y1="758" x2="70" y2="758" stroke="#EB1A26" stroke-width="2.5" marker-end="url(#aR)"/>
+    <text x="108" y="762" font-size="10.5">derived cols write back</text>
+    <line x1="62" y1="782" x2="96" y2="782" class="flow dash"/>
+    <text x="108" y="786" font-size="10.5">optional / sideload</text>
+  </g>
+
+  <!-- ═══ INSIDE THE WORKBENCH · detail panel ═══ -->
+  <g id="node-detail">
+    <rect x="1148" y="140" width="548" height="520" class="box" filter="url(#hs)"/>
+    <rect x="1154" y="146" width="536" height="508" fill="none" stroke="#111111" stroke-width="1"/>
+
+    <rect x="1168" y="160" width="20" height="20" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+    <text x="1178" y="175" text-anchor="middle" class="wt" font-size="12" font-weight="700">2</text>
+    <text x="1198" y="175" class="bt12">VARIABLES</text>
+    <text x="1198" y="195" class="c10">every column profiled — kind · range · NA · mini-histogram</text>
+    <text x="1198" y="211" class="c10">one-click assign to X · Y · Z · colour · shape</text>
+
+    <rect x="1168" y="232" width="20" height="20" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+    <text x="1178" y="247" text-anchor="middle" font-size="12" font-weight="700">3</text>
+    <text x="1198" y="247" class="bt12">PCA</text>
+    <text x="1238" y="247" class="n10">pca.ts</text>
+    <text x="1198" y="267" class="c10">impute → corr matrix → Jacobi eigensolver → scores · scree</text>
+    <text x="1198" y="283" class="red10">+PC1_‹label›… +COMP_‹label› — appended to the table</text>
+
+    <rect x="1168" y="304" width="20" height="20" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+    <text x="1178" y="319" text-anchor="middle" class="wt" font-size="12" font-weight="700">4</text>
+    <text x="1198" y="319" class="bt12">VIEW</text>
+    <text x="1198" y="339" class="c10">2D/3D · camera · auto-rotate · axis labels · zoom window</text>
+
+    <rect x="1168" y="360" width="20" height="20" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+    <text x="1178" y="375" text-anchor="middle" class="wt" font-size="12" font-weight="700">5</text>
+    <text x="1198" y="375" class="bt12">CLUSTER</text>
+    <text x="1270" y="375" class="n10">cluster.ts</text>
+    <text x="1198" y="395" class="c10">on the plotted axes — z-score? → DBSCAN | k-means++ (seeded)</text>
+    <text x="1198" y="411" class="c10">silhouette-by-k · k-distance diagnostics</text>
+    <text x="1460" y="411" class="red10">+Cluster → table</text>
+
+    <rect x="1168" y="432" width="20" height="20" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+    <text x="1178" y="447" text-anchor="middle" font-size="12" font-weight="700">6</text>
+    <text x="1198" y="447" class="bt12">EXPORT &amp; PIN</text>
+    <text x="1198" y="467" class="c10">compare ≤4 views — 3 pins + the live plot, tiled in a grid</text>
+    <rect x="1198" y="478" width="64" height="22" fill="#ffffff" stroke="#111111" stroke-width="1.5"/>
+    <text x="1206" y="493" font-size="10">.png 2×</text>
+    <rect x="1270" y="478" width="48" height="22" fill="#ffffff" stroke="#111111" stroke-width="1.5"/>
+    <text x="1278" y="493" font-size="10">.gif</text>
+    <rect x="1326" y="478" width="56" height="22" fill="#ffffff" stroke="#111111" stroke-width="1.5"/>
+    <text x="1334" y="493" font-size="10">.html</text>
+    <text x="1400" y="486" class="n10">captures the live plot ·</text>
+    <text x="1400" y="500" class="n10">html = interactive, offline</text>
+
+    <line x1="1168" y1="524" x2="1676" y2="524" stroke="#111111" stroke-width="1"/>
+    <text x="1168" y="550" class="n11">the write-backs (red) are why a fresh PC score or cluster</text>
+    <text x="1168" y="568" class="n11">label can immediately be plotted, coloured by, re-clustered,</text>
+    <text x="1168" y="586" class="n11">or fed into a second-order PCA — one table, no copies</text>
+    <text x="1168" y="618" class="n10">variables panel = data profile + plot control in one surface;</text>
+    <text x="1168" y="634" class="n10">clustering's feature selection is the plotted axes themselves</text>
+  </g>
+
+  <!-- ═══ THE ASSISTANT · opt-in mention ═══ -->
+  <g id="node-assistant">
+    <rect x="1148" y="700" width="548" height="72" fill="#ffffff" stroke="#111111" stroke-width="2.5" stroke-dasharray="8 5"/>
+    <text x="1162" y="726" class="bt">THE ASSISTANT — OPT-IN COPILOT</text>
+    <text x="1162" y="748" class="n11">drives all of this through tool calls · sees metadata only — diagrams 02–03</text>
+  </g>
+  <line x1="1422" y1="664" x2="1422" y2="696" class="flow dash" marker-start="url(#aB)" marker-end="url(#aB)"/>
 
   <!-- ═══ ARROWS ═══ -->
-  <!-- sources → parse -->
-  <path d="M274,220 H308" class="flow" marker-end="url(#aB)"/>
-  <path d="M274,340 H308" class="flow" marker-end="url(#aB)"/>
-  <!-- workspace file → persist (sideload) -->
-  <path d="M165,504 V938 H746 V810" class="flow dash" marker-end="url(#aB)"/>
-  <text x="200" y="930" class="n10">workspace import — rehydrates tables straight into IndexedDB + state</text>
+  <!-- file drop → parse -->
+  <path d="M258,188 H290" class="flow" marker-end="url(#aB)"/>
+  <!-- workspace file → persist (sideload, clean bottom corridor) -->
+  <path d="M258,320 H278 V810 H693 V710" class="flow dash" marker-end="url(#aB)"/>
+  <text x="300" y="802" class="n10">workspace import → IndexedDB + state</text>
   <!-- parse → normalize -->
-  <path d="M442,360 V382" class="flow" marker-end="url(#aB)"/>
-  <!-- normalize → hub -->
-  <path d="M568,455 H586 V310 H600" class="flow" marker-end="url(#aB)"/>
-  <!-- normalize → project (optional) -->
-  <path d="M442,518 V550" class="flow dash" marker-end="url(#aB)"/>
-  <text x="452" y="542" class="n10">if components</text>
-  <!-- project → hub -->
-  <path d="M568,638 H594 V400 H600" class="flow" marker-end="url(#aB)"/>
+  <path d="M413,310 V330" class="flow" marker-end="url(#aB)"/>
+  <!-- normalize → hub (the default path) -->
+  <path d="M528,394 H540 V250 H560" class="flow" marker-end="url(#aB)"/>
+  <!-- normalize → projection (dashed detour) → hub -->
+  <path d="M413,450 V478" class="flow dash" marker-end="url(#aB)"/>
+  <text x="425" y="470" class="n10">components file</text>
+  <path d="M528,549 H552 V330 H560" class="flow dash" marker-end="url(#aB)"/>
   <!-- hub ↔ state ↔ persist -->
-  <line x1="746" y1="458" x2="746" y2="482" class="flow" marker-start="url(#aB)" marker-end="url(#aB)"/>
-  <text x="756" y="474" class="n10">lives in</text>
-  <line x1="746" y1="648" x2="746" y2="672" class="flow" marker-start="url(#aB)" marker-end="url(#aB)"/>
-  <text x="756" y="664" class="n10">save/load</text>
-  <!-- hub → workbench spine -->
-  <line x1="884" y1="310" x2="904" y2="310" class="flow"/>
-  <line x1="904" y1="226" x2="904" y2="836" stroke="#111111" stroke-width="3"/>
-  <path d="M904,226 H914" class="flow" marker-end="url(#aB)"/>
-  <line x1="888" y1="384" x2="918" y2="384" stroke="#EB1A26" stroke-width="2.5" marker-start="url(#aR)" marker-end="url(#aR)"/>
-  <path d="M904,532 H914" class="flow" marker-end="url(#aB)"/>
-  <line x1="888" y1="682" x2="918" y2="682" stroke="#EB1A26" stroke-width="2.5" marker-start="url(#aR)" marker-end="url(#aR)"/>
-  <path d="M904,836 H914" class="flow" marker-end="url(#aB)"/>
+  <line x1="693" y1="394" x2="693" y2="416" class="flow" marker-start="url(#aB)" marker-end="url(#aB)"/>
+  <text x="703" y="410" class="n10">lives in</text>
+  <line x1="693" y1="564" x2="693" y2="586" class="flow" marker-start="url(#aB)" marker-end="url(#aB)"/>
+  <text x="703" y="580" class="n10">save/load</text>
+  <!-- table → workbench (reads) · workbench → table (writes back, red) -->
+  <path d="M818,210 H850" class="flow" marker-end="url(#aB)"/>
+  <path d="M850,246 H826" stroke="#EB1A26" stroke-width="2.5" fill="none" marker-end="url(#aR)"/>
   <!-- workbench → plot -->
-  <path d="M1224,226 H1256" class="flow" marker-end="url(#aB)"/>
-  <path d="M1224,532 H1244 V420 H1256" class="flow" marker-end="url(#aB)"/>
-  <!-- plot → artifacts -->
-  <path d="M1372,450 V532" class="flow" marker-end="url(#aB)"/>
-  <text x="1382" y="488" class="n10">step 6</text>
-  <text x="1382" y="502" class="n10">captures</text>
+  <path d="M983,284 V322" class="flow" marker-end="url(#aB)"/>
+  <!-- workbench → detail panel -->
+  <path d="M1108,210 H1140" class="flow dash" marker-end="url(#aB)"/>
 
   <!-- footer -->
-  <text x="32" y="992" class="n10">source: frontend/src — parse.ts · table.ts · engine.ts · pca.ts · cluster.ts · workspaces.ts · page.tsx</text>
-  <text x="1480" y="992" text-anchor="end" class="n10">scatter-lab.vercel.app</text>
+  <text x="32" y="860" class="n10">source: frontend/src — parse.ts · table.ts · engine.ts · pca.ts · cluster.ts · workspaces.ts · page.tsx</text>
+  <text x="1696" y="860" text-anchor="end" class="n10">scatter-lab.vercel.app</text>
 </svg>
