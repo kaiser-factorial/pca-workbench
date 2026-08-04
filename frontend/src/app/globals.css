@@ -156,7 +156,7 @@ body {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 8px 10px;
+    padding: 7px 8px;
     border: 0;
     background: var(--p-white);
     color: var(--p-black);
@@ -189,7 +189,7 @@ body {
   }
 
   [data-theme='primary'] .scatterlab-primary-accordion .px-accordion-content {
-    padding: 12px;
+    padding: 10px 9px;
     border-top: 2px dashed var(--p-black);
     background: var(--p-white);
     color: var(--p-black);

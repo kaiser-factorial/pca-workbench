@@ -1203,21 +1203,46 @@ const STEP_COLORS = [
     { bg: 'var(--p-yellow)', fg: '#111111' },
 ];
 
+// Keep an opened sidebar section in view without turning every accordion click
+// into a distracting recenter. Extra-tall sections align their header instead:
+// no scroll position can make an oversized panel fully visible at once.
+const revealOpenedSidebarSection = (event: { target: EventTarget | null }, section: HTMLElement) => {
+    const trigger = event.target instanceof Element ? event.target.closest('button') : null;
+    if (!trigger) return;
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+        const expanded = trigger.getAttribute('aria-expanded') === 'true' || trigger.textContent?.trim() === '▾';
+        if (!expanded) return;
+        const sidebar = section.closest('aside');
+        if (!sidebar) return;
+        const frame = sidebar.getBoundingClientRect();
+        const box = section.getBoundingClientRect();
+        const inset = 12;
+        const top = frame.top + inset;
+        const bottom = frame.bottom - inset;
+        const availableHeight = bottom - top;
+        let delta = 0;
+        if (box.height > availableHeight) delta = box.top - top;
+        else if (box.bottom > bottom) delta = box.bottom - bottom;
+        else if (box.top < top) delta = box.top - top;
+        if (Math.abs(delta) > 1) sidebar.scrollBy({ top: delta, behavior: 'smooth' });
+    }));
+};
+
 const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide, order }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined, guide?: string, order?: number }) => {
+    const sectionId = guide ?? title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     if (theme === 'terminal') {
         return (
-            <div data-guide={guide} style={{ order }}>
-                <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any}>
+            <div data-guide={guide} data-scatter-section={sectionId} style={{ order }} onClick={event => revealOpenedSidebarSection(event, event.currentTarget)}>
+                <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any} className="[&>header]:!px-2 [&>div]:!px-2">
                     {children}
                 </CyberContainer>
             </div>
         );
     }
     const c = step != null ? STEP_COLORS[(step - 1) % STEP_COLORS.length] : null;
-    const sectionId = guide ?? title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     if (theme === 'primary') {
         return (
-            <div data-scatter-section={sectionId} style={{ order }}>
+            <div data-scatter-section={sectionId} style={{ order }} onClick={event => revealOpenedSidebarSection(event, event.currentTarget)}>
                 <AccordionItem
                     value={sectionId}
                     title={
@@ -2982,17 +3007,19 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                       <input type="checkbox" checked={includeExportInfo} onChange={e => setIncludeExportInfo(e.target.checked)} />
                       <span className="opacity-80">Add title & legend to exports</span>
                   </label>
-                  <button onClick={exportPNG} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-blue)] text-white':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                      <Download className="w-4 h-4" /> Save PNG (active view)
-                  </button>
-                  <button onClick={exportHTML} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                      <Download className="w-4 h-4" /> {isExporting === "Building HTML…" ? isExporting : "Save Interactive HTML"}
-                  </button>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={exportPNG} disabled={!!isExporting} title="Save PNG of the active view" className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-blue)] text-white':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                      <Download className="h-4 w-4" /> PNG
+                    </button>
+                    <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} title="Save rotating GIF (3D only)" className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                      <Download className="h-4 w-4" /> GIF
+                    </button>
+                    <button onClick={exportHTML} disabled={!!isExporting} title="Save interactive HTML" className={`flex h-12 min-w-0 flex-col items-center justify-center gap-0.5 text-[10px] font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                      <Download className="h-4 w-4" /> HTML
+                    </button>
+                  </div>
                   <button onClick={exportDatasetCsv} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                       <Download className="w-4 h-4" /> Save Dataset CSV
-                  </button>
-                  <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
-                      <Layers className="w-4 h-4" /> {(isExporting && isExporting.startsWith("Rendering")) ? isExporting : "Save Rotating GIF (3D)"}
                   </button>
               </SidebarSection>
             </>
