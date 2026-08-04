@@ -40,8 +40,8 @@
 
   <!-- browser boundary -->
   <rect x="24" y="56" width="1680" height="772" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
-  <rect x="48" y="42" width="612" height="30" fill="#111111"/>
-  <text x="354" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">ALL COMPUTE IN THE BROWSER — NO BACKEND · DATA NEVER LEAVES THE MACHINE</text>
+  <rect x="48" y="42" width="700" height="30" fill="#111111"/>
+  <text x="398" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">ALL COMPUTE IN THE BROWSER — NO BACKEND · YOUR DATASET NEVER LEAVES THE MACHINE</text>
 
   <!-- lane headers -->
   <text x="48"   y="112" class="lane">IMPORT</text>
@@ -183,14 +183,14 @@
   </g>
 
   <g id="node-key">
-    <rect x="858" y="632" width="250" height="112" fill="#ffffff" stroke="#111111" stroke-width="1.5"/>
-    <text x="872" y="656" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
-    <line x1="872" y1="676" x2="908" y2="676" class="flow" marker-end="url(#aB)"/>
-    <text x="920" y="680" font-size="11">data flow</text>
-    <line x1="908" y1="700" x2="880" y2="700" stroke="#EB1A26" stroke-width="2.5" marker-end="url(#aR)"/>
-    <text x="920" y="704" font-size="11">derived cols write back</text>
-    <line x1="872" y1="724" x2="908" y2="724" class="flow dash"/>
-    <text x="920" y="728" font-size="11">optional / sideload</text>
+    <rect x="48" y="690" width="210" height="110" fill="#ffffff" stroke="#0045AD" stroke-width="3.5"/>
+    <text x="62" y="714" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
+    <line x1="62" y1="734" x2="96" y2="734" class="flow" marker-end="url(#aB)"/>
+    <text x="108" y="738" font-size="10.5">data flow</text>
+    <line x1="96" y1="758" x2="70" y2="758" stroke="#EB1A26" stroke-width="2.5" marker-end="url(#aR)"/>
+    <text x="108" y="762" font-size="10.5">derived cols write back</text>
+    <line x1="62" y1="782" x2="96" y2="782" class="flow dash"/>
+    <text x="108" y="786" font-size="10.5">optional / sideload</text>
   </g>
 
   <!-- ═══ INSIDE THE WORKBENCH · detail panel ═══ -->
@@ -265,7 +265,7 @@
   <path d="M528,394 H540 V250 H560" class="flow" marker-end="url(#aB)"/>
   <!-- normalize → projection (dashed detour) → hub -->
   <path d="M413,450 V478" class="flow dash" marker-end="url(#aB)"/>
-  <text x="425" y="470" class="n10">with a components file</text>
+  <text x="425" y="470" class="n10">components file</text>
   <path d="M528,549 H552 V330 H560" class="flow dash" marker-end="url(#aB)"/>
   <!-- hub ↔ state ↔ persist -->
   <line x1="693" y1="394" x2="693" y2="416" class="flow" marker-start="url(#aB)" marker-end="url(#aB)"/>
