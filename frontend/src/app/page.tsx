@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
+import { Accordion, AccordionItem } from "puxel";
 import { readTable } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from "@/lib/cluster";
@@ -1143,8 +1144,30 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
 // Ephemeral on-screen pointer: scrolls the target into view, then rings it and
 // bounces an arrow beside it for ~5s. Position is re-read on an interval so it
 // tracks sidebar scrolling and layout shifts while visible.
+const GUIDE_SECTION: Record<string, string> = {
+    workspace: 'workspace',
+    'upload-dropzone': 'data',
+    'add-dataset': 'data',
+    'components-toggle': 'data',
+    'datasets-list': 'data',
+    variables: 'variables',
+    pca: 'pca',
+    cluster: 'cluster',
+    view: 'view',
+    export: 'export',
+};
+
 const flashGuide = (target: string, color: string): boolean => {
-    const el = document.querySelector(`[data-guide="${target}"]`) as HTMLElement | null;
+    let el = document.querySelector(`[data-guide="${target}"]`) as HTMLElement | null;
+    // Puxel's Accordion only mounts an item's body while open. When the
+    // assistant is aiming at a hidden control, open its titled section first
+    // and let the ring move from that header to the actual target on render.
+    if (!el) {
+        const section = GUIDE_SECTION[target];
+        el = section ? document.querySelector(`[data-guide="${section}"]`) as HTMLElement | null : null;
+        const trigger = el?.closest('[data-scatter-section]')?.querySelector<HTMLButtonElement>('.px-accordion-trigger');
+        if (trigger?.getAttribute('aria-expanded') === 'false') trigger.click();
+    }
     if (!el) return false;
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const ring = document.createElement('div');
@@ -1154,7 +1177,8 @@ const flashGuide = (target: string, color: string): boolean => {
     arrow.style.cssText = `position:fixed;z-index:95;pointer-events:none;color:${color};font-size:22px;font-weight:bold;text-shadow:0 1px 3px rgba(0,0,0,.35);`;
     document.body.append(ring, arrow);
     const place = () => {
-        const r = el.getBoundingClientRect();
+        const current = document.querySelector(`[data-guide="${target}"]`) as HTMLElement | null ?? el;
+        const r = current.getBoundingClientRect();
         // generous padding so the target sits fully inside the ring
         const pad = 12;
         ring.style.left = `${r.left - pad}px`;
@@ -1190,6 +1214,24 @@ const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide
         );
     }
     const c = step != null ? STEP_COLORS[(step - 1) % STEP_COLORS.length] : null;
+    const sectionId = guide ?? title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    if (theme === 'primary') {
+        return (
+            <div data-scatter-section={sectionId} style={{ order }}>
+                <AccordionItem
+                    value={sectionId}
+                    title={
+                        <span data-guide={guide ?? sectionId} role="heading" aria-level={2} className="scatterlab-primary-accordion-title">
+                            {c && <span className="bauhaus-step" style={{ backgroundColor: c.bg, color: c.fg }}>{step}</span>}
+                            <span>{title}</span>
+                        </span>
+                    }
+                >
+                    <div className="space-y-3">{children}</div>
+                </AccordionItem>
+            </div>
+        );
+    }
     return (
         <div data-guide={guide} style={{ order }} className={`space-y-3 ${hasBorder ? 'border-t border-[var(--border)] pt-6' : ''}`}>
             <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider">
@@ -1204,6 +1246,17 @@ const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide
 const SidebarGroup = ({ children, theme }: { children: React.ReactNode, theme: string | undefined }) => {
     if (theme === 'terminal') {
         return <CyberStackGroup className="flex-grow flex flex-col !space-y-0 gap-3">{children}</CyberStackGroup>;
+    }
+    if (theme === 'primary') {
+        return (
+            <Accordion
+                multiple
+                defaultOpen={['workspace', 'data', 'variables', 'pca', 'cluster', 'view', 'export']}
+                className="scatterlab-primary-accordion"
+            >
+                {children}
+            </Accordion>
+        );
     }
     return <div className="flex-grow flex flex-col gap-6">{children}</div>;
 };
@@ -2697,7 +2750,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           </SidebarSection>
 
           {/* Section 1: Ingestion */}
-          <SidebarSection title="Data" step={1} theme={theme} order={1}>
+          <SidebarSection title="Data" step={1} theme={theme} guide="data" order={1}>
             {!processedData && (
               <div className="flex justify-center opacity-40 mb-2">
                 <UploadCloud className="w-10 h-10" />
