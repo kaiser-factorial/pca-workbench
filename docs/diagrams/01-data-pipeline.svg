@@ -41,7 +41,7 @@
   <!-- browser boundary -->
   <rect x="24" y="56" width="1680" height="772" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
   <rect x="48" y="42" width="700" height="30" fill="#111111"/>
-  <text x="398" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">ALL COMPUTE IN THE BROWSER — NO BACKEND · YOUR DATASET NEVER LEAVES THE MACHINE</text>
+  <text x="398" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">A STATIC SITE — ALL COMPUTE IN THE BROWSER · YOUR DATASET NEVER LEAVES THE MACHINE</text>
 
   <!-- lane headers -->
   <text x="48"   y="112" class="lane">IMPORT</text>
