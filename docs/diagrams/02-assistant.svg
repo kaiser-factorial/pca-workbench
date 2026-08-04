@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1504 1010" font-family="'Courier Prime','Courier New',monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 880" font-family="'Courier Prime','Courier New',monospace">
   <title>Scatter Lab — the assistant</title>
   <defs>
     <filter id="hs2" x="-5%" y="-5%" width="115%" height="115%">
@@ -26,197 +26,216 @@
     .dash { stroke-dasharray:7 5; }
   </style>
 
-  <rect x="0" y="0" width="1504" height="1010" fill="#ffffff"/>
+  <rect x="0" y="0" width="1720" height="880" fill="#ffffff"/>
 
   <!-- title row -->
-  <rect x="32" y="22" width="22" height="22" fill="#0045AD" stroke="#111111" stroke-width="2"/>
-  <circle cx="78" cy="33" r="12" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
-  <path d="M106,45 L118,21 L130,45 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="152" y="41" font-size="21" font-weight="700" letter-spacing="2">SCATTER LAB — THE ASSISTANT</text>
-  <text x="1480" y="40" text-anchor="end" class="n11">system diagram 02/03 · 01 = the pipeline · 03 = what it can do</text>
+  <rect x="32" y="10" width="20" height="20" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <circle cx="74" cy="20" r="11" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <path d="M100,30 L111,8 L122,30 Z" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="142" y="27" font-size="20" font-weight="700" letter-spacing="2">SCATTER LAB — THE ASSISTANT</text>
+  <text x="1696" y="26" text-anchor="end" class="n11">system diagram 02/03 · 01 = the pipeline · 03 = what it can do</text>
 
   <!-- browser boundary -->
-  <rect x="24" y="70" width="1176" height="896" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
-  <rect x="48" y="54" width="700" height="32" fill="#111111"/>
-  <text x="398" y="75" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">IN THE BROWSER — THE ASSISTANT IS THE ONE OPT-IN EXCEPTION TO "NOTHING LEAVES"</text>
+  <rect x="24" y="56" width="1400" height="772" fill="none" stroke="#111111" stroke-width="2.5" stroke-dasharray="12 7"/>
+  <rect x="48" y="42" width="700" height="30" fill="#111111"/>
+  <text x="398" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">IN THE BROWSER — THE ASSISTANT IS THE ONE OPT-IN EXCEPTION TO "NOTHING LEAVES"</text>
 
   <!-- external zone header -->
-  <text x="1240" y="146" class="lane">EXTERNAL · OPT-IN</text>
-  <line x1="1240" y1="156" x2="1480" y2="156" stroke="#111111" stroke-width="2"/>
+  <text x="1464" y="112" class="lane">EXTERNAL · OPT-IN</text>
+  <line x1="1464" y1="122" x2="1696" y2="122" stroke="#111111" stroke-width="2"/>
 
   <!-- ═══ CONNECT: pick-one cards ═══ -->
-  <rect x="56" y="170" width="470" height="170" class="box" filter="url(#hs2)"/>
-  <text x="70" y="196" class="bt">CONNECT — BRING YOUR OWN MODEL</text>
-  <rect x="70" y="214" width="136" height="86" class="card"/>
-  <text x="80" y="238" class="bt12">OPENROUTER</text>
-  <text x="80" y="258" class="c10">one-click</text>
-  <text x="80" y="274" class="c10">OAuth PKCE key</text>
-  <text x="211" y="262" class="n11">or</text>
-  <rect x="226" y="214" width="136" height="86" class="card"/>
-  <text x="236" y="238" class="bt12">ANY KEY</text>
-  <text x="236" y="258" class="c10">paste key +</text>
-  <text x="236" y="274" class="c10">base URL</text>
-  <text x="357" y="262" class="n11">or</text>
-  <rect x="372" y="214" width="136" height="86" class="card"/>
-  <text x="382" y="238" class="bt12">OLLAMA</text>
-  <text x="382" y="258" class="c10">local runtime</text>
-  <text x="382" y="274" class="c10">→ offline</text>
-  <text x="70" y="324" class="n11">key → localStorage only · picker lists tool-capable models</text>
+  <g id="node-connect">
+    <rect x="48" y="140" width="470" height="170" class="box" filter="url(#hs2)"/>
+    <text x="62" y="166" class="bt">CONNECT — BRING YOUR OWN MODEL</text>
+    <rect x="62" y="184" width="120" height="80" class="card"/>
+    <text x="72" y="208" class="bt12">OPENROUTER</text>
+    <text x="72" y="228" class="c10">one-click</text>
+    <text x="72" y="244" class="c10">OAuth PKCE</text>
+    <text x="190" y="228" class="n11">or</text>
+    <rect x="212" y="184" width="120" height="80" class="card"/>
+    <text x="222" y="208" class="bt12">ANY KEY</text>
+    <text x="222" y="228" class="c10">paste key +</text>
+    <text x="222" y="244" class="c10">base URL</text>
+    <text x="340" y="228" class="n11">or</text>
+    <rect x="362" y="184" width="120" height="80" class="card"/>
+    <text x="372" y="208" class="bt12">OLLAMA</text>
+    <text x="372" y="228" class="c10">local runtime</text>
+    <text x="372" y="244" class="c10">→ offline</text>
+    <text x="62" y="296" class="n11">key → localStorage only · picker lists tool-capable models</text>
+  </g>
+
+  <!-- ═══ PANEL ═══ -->
+  <g id="node-panel">
+    <rect x="48" y="360" width="280" height="170" class="box" filter="url(#hs2)"/>
+    <text x="62" y="386" class="bt">PANEL</text>
+    <text x="128" y="386" class="n10">AssistantPanel.tsx</text>
+    <text x="62" y="412" class="b12">chat in · markdown out</text>
+    <text x="62" y="432" class="b12">dock right · bottom · float</text>
+    <text x="62" y="456" class="n11">streams while it thinks ·</text>
+    <text x="62" y="474" class="n11">tool chips per call ·</text>
+    <text x="62" y="492" class="n11">rate replies 👍/👎 → feedback</text>
+  </g>
+
+  <!-- ═══ WORKBENCH ═══ -->
+  <g id="node-workbench2">
+    <rect x="48" y="560" width="280" height="110" class="box" filter="url(#hs2)"/>
+    <text x="62" y="586" class="bt">THE WORKBENCH</text>
+    <text x="62" y="612" class="b12">plot · table · sidebar</text>
+    <text x="62" y="634" class="n11">the whole of diagram 01 —</text>
+    <text x="62" y="652" class="n11">every change visible live</text>
+  </g>
+
+  <!-- ═══ KEY (bottom-left, blue border, matching 01) ═══ -->
+  <g id="node-key2">
+    <rect x="48" y="684" width="280" height="130" fill="#ffffff" stroke="#0045AD" stroke-width="3.5"/>
+    <text x="62" y="708" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
+    <line x1="62" y1="728" x2="96" y2="728" class="loopw" marker-end="url(#bB)"/>
+    <text x="108" y="732" class="c10">the turn loop</text>
+    <line x1="66" y1="752" x2="92" y2="752" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+    <text x="108" y="756" class="c10">two-way</text>
+    <line x1="62" y1="776" x2="96" y2="776" class="flow dash"/>
+    <text x="108" y="780" class="c10">browser boundary · optional</text>
+    <rect x="62" y="792" width="16" height="12" fill="#FFD600" stroke="#111111" stroke-width="1.5"/>
+    <text x="108" y="802" class="c10">privacy contract</text>
+  </g>
 
   <!-- ═══ THE LOOP · nodes ═══ -->
-  <!-- system prompt (12 o'clock) -->
-  <rect x="560" y="170" width="300" height="130" class="box" filter="url(#hs2)"/>
-  <rect x="574" y="184" width="16" height="16" fill="#0045AD" stroke="#111111" stroke-width="2"/>
-  <text x="582" y="196.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">2</text>
-  <text x="600" y="199" class="bt">SYSTEM PROMPT</text>
-  <text x="574" y="226" class="b12">rebuilt every lap from live</text>
-  <text x="574" y="246" class="b12">column profiles · axes ·</text>
-  <text x="574" y="266" class="b12">cluster settings · pca runs</text>
+  <g id="node-prompt">
+    <rect x="560" y="140" width="300" height="120" class="box" filter="url(#hs2)"/>
+    <rect x="574" y="154" width="16" height="16" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+    <text x="582" y="166.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">2</text>
+    <text x="600" y="169" class="bt">SYSTEM PROMPT</text>
+    <text x="574" y="196" class="b12">rebuilt every lap from live</text>
+    <text x="574" y="216" class="b12">column profiles · axes ·</text>
+    <text x="574" y="236" class="b12">cluster settings · pca runs</text>
+  </g>
 
-  <!-- panel (9 o'clock) -->
-  <rect x="56" y="430" width="260" height="180" class="box" filter="url(#hs2)"/>
-  <text x="70" y="456" class="bt">PANEL</text>
-  <text x="70" y="474" class="n11">AssistantPanel.tsx</text>
-  <text x="70" y="502" class="b12">chat in · markdown out</text>
-  <text x="70" y="522" class="b12">dock right · bottom · float</text>
-  <text x="70" y="546" class="n11">streams while it thinks ·</text>
-  <text x="70" y="564" class="n11">tool chips per call ·</text>
-  <text x="70" y="582" class="n11">rate replies 👍/👎 → feedback</text>
+  <g id="node-execute">
+    <rect x="560" y="420" width="300" height="190" fill="#FFD600" stroke="#111111" stroke-width="2.5" filter="url(#hs2)"/>
+    <rect x="574" y="434" width="16" height="16" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+    <text x="582" y="446.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">4</text>
+    <text x="600" y="449" class="bt">EXECUTE — AppBridge</text>
+    <text x="574" y="476" class="b12">bridgeRef.current re-read</text>
+    <text x="574" y="496" class="b12">per call — fresh closures</text>
+    <text x="574" y="516" class="b12">after every React commit</text>
+    <text x="574" y="540" class="b12">paint-aware yield (2×rAF)</text>
+    <text x="574" y="566" class="n11">args validated · errors are</text>
+    <text x="574" y="584" class="n11">instructive, not opaque</text>
+  </g>
 
-  <!-- execute / bridge (6 o'clock, yellow hub) -->
-  <rect x="560" y="560" width="300" height="200" fill="#FFD600" stroke="#111111" stroke-width="2.5" filter="url(#hs2)"/>
-  <rect x="574" y="574" width="16" height="16" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
-  <text x="582" y="586.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">4</text>
-  <text x="600" y="589" class="bt">EXECUTE — AppBridge</text>
-  <text x="574" y="618" class="b12">bridgeRef.current re-read</text>
-  <text x="574" y="638" class="b12">per call — fresh closures</text>
-  <text x="574" y="658" class="b12">after every React commit</text>
-  <text x="574" y="684" class="b12">paint-aware yield (2×rAF)</text>
-  <text x="574" y="710" class="n11">args validated · errors are</text>
-  <text x="574" y="728" class="n11">instructive, not opaque</text>
+  <!-- ═══ TOOLS + KNOWLEDGE ═══ -->
+  <g id="node-tools">
+    <rect x="1176" y="380" width="216" height="300" class="box" filter="url(#hs2)"/>
+    <text x="1190" y="406" class="bt">TOOLS ×19</text>
+    <text x="1190" y="432" class="bt12">READ</text>
+    <text x="1190" y="450" class="c10">get_app_state</text>
+    <text x="1190" y="474" class="bt12">ACT</text>
+    <text x="1190" y="492" class="c10">set_plot · control_view</text>
+    <text x="1190" y="508" class="c10">highlight_ui · pins</text>
+    <text x="1190" y="524" class="c10">switch_dataset · visibility</text>
+    <text x="1190" y="540" class="c10">transfer_column · save_ws</text>
+    <text x="1190" y="556" class="c10">load_demo_data</text>
+    <text x="1190" y="580" class="bt12">ANALYZE</text>
+    <text x="1190" y="598" class="c10">run_pca · run_clustering</text>
+    <text x="1190" y="614" class="c10">correlate · compare_groups</text>
+    <text x="1190" y="630" class="c10">suggest_k/eps · breakdown</text>
+    <text x="1190" y="654" class="bt12">TEACH</text>
+    <text x="1190" y="670" class="c10">get_tutorial · methods_ref</text>
+  </g>
 
-  <!-- workbench -->
-  <rect x="56" y="660" width="260" height="130" class="box" filter="url(#hs2)"/>
-  <text x="70" y="686" class="bt">THE WORKBENCH</text>
-  <text x="70" y="714" class="b12">plot · table · sidebar</text>
-  <text x="70" y="734" class="n11">the whole of diagram 01 —</text>
-  <text x="70" y="752" class="n11">every change visible live</text>
+  <g id="node-knowledge">
+    <rect x="940" y="580" width="220" height="100" class="box" filter="url(#hs2)"/>
+    <text x="954" y="604" class="bt12">SHIPPED KNOWLEDGE</text>
+    <text x="954" y="624" class="b11">tutorial + 15 methods chunks</text>
+    <text x="954" y="642" class="n11">every claim cites its source</text>
+    <text x="954" y="660" class="n10">lexical search · vetted corpus</text>
+  </g>
 
-  <!-- tools -->
-  <rect x="940" y="430" width="240" height="330" class="box" filter="url(#hs2)"/>
-  <text x="954" y="456" class="bt">TOOLS ×19</text>
-  <text x="954" y="482" class="bt12">READ</text>
-  <text x="954" y="500" class="c10">get_app_state</text>
-  <text x="954" y="526" class="bt12">ACT</text>
-  <text x="954" y="544" class="c10">set_plot · control_view</text>
-  <text x="954" y="562" class="c10">highlight_ui · pins</text>
-  <text x="954" y="580" class="c10">switch_dataset · visibility</text>
-  <text x="954" y="598" class="c10">transfer_column · save_ws</text>
-  <text x="954" y="616" class="c10">load_demo_data</text>
-  <text x="954" y="642" class="bt12">ANALYZE</text>
-  <text x="954" y="660" class="c10">run_pca · run_clustering</text>
-  <text x="954" y="678" class="c10">correlate · compare_groups</text>
-  <text x="954" y="696" class="c10">suggest_k/eps · breakdown</text>
-  <text x="954" y="722" class="bt12">TEACH</text>
-  <text x="954" y="740" class="c10">get_tutorial · methods_ref</text>
-
-  <!-- knowledge -->
-  <rect x="940" y="775" width="240" height="90" class="box" filter="url(#hs2)"/>
-  <text x="954" y="799" class="bt12">SHIPPED KNOWLEDGE</text>
-  <text x="954" y="819" class="b11">tutorial + 15 cited chunks</text>
-  <text x="954" y="837" class="n11">Jolliffe · Rousseeuw · Ester…</text>
-  <text x="954" y="855" class="n11">lexical search · vetted corpus</text>
-
-  <!-- after-each-turn strip -->
-  <text x="344" y="820" font-size="11" font-weight="700" letter-spacing="2">AFTER EACH TURN</text>
-  <rect x="344" y="830" width="260" height="100" class="box" filter="url(#hs2)"/>
-  <text x="358" y="856" class="bt">UNDO — mutating turns</text>
-  <text x="358" y="878" class="b11">snapshot before · 1-click revert</text>
-  <text x="358" y="896" class="n11">excludes workspace saves</text>
-
-  <rect x="632" y="830" width="300" height="100" class="box" filter="url(#hs2)"/>
-  <text x="646" y="856" class="bt">FEEDBACK — feedback.ts</text>
-  <text x="646" y="878" class="b11">👍/👎 + reason rows · IndexedDB</text>
-  <text x="646" y="896" class="n11">web-lock flush · client_key</text>
+  <!-- ═══ AFTER EACH TURN ═══ -->
+  <text x="360" y="692" font-size="11" font-weight="700" letter-spacing="2">AFTER EACH TURN</text>
+  <g id="node-undo">
+    <rect x="360" y="700" width="250" height="100" class="box" filter="url(#hs2)"/>
+    <text x="374" y="726" class="bt">UNDO — mutating turns</text>
+    <text x="374" y="748" class="b11">snapshot before · 1-click revert</text>
+    <text x="374" y="766" class="n11">excludes workspace saves</text>
+  </g>
+  <g id="node-feedback">
+    <rect x="640" y="700" width="280" height="100" class="box" filter="url(#hs2)"/>
+    <text x="654" y="726" class="bt">FEEDBACK — feedback.ts</text>
+    <text x="654" y="748" class="b11">👍/👎 + reason rows · IndexedDB</text>
+    <text x="654" y="766" class="n11">web-lock flush · client_key</text>
+  </g>
 
   <!-- ═══ EXTERNAL ═══ -->
-  <rect x="1240" y="190" width="240" height="210" class="box" filter="url(#hs2)"/>
-  <text x="1254" y="216" class="bt">MODEL API</text>
-  <text x="1254" y="244" class="b12">speaks chat.completions</text>
-  <text x="1254" y="264" class="b12">sees: metadata + tool calls</text>
-  <text x="1254" y="284" class="b12">returns: text + tool_calls</text>
-  <text x="1254" y="312" class="n11">whichever endpoint + model</text>
-  <text x="1254" y="330" class="n11">CONNECT picked · default:</text>
-  <text x="1254" y="348" class="n11">Claude Sonnet via OpenRouter</text>
+  <g id="node-modelapi">
+    <rect x="1464" y="140" width="232" height="210" class="box" filter="url(#hs2)"/>
+    <text x="1478" y="166" class="bt">MODEL API</text>
+    <text x="1478" y="194" class="b12">speaks chat.completions</text>
+    <text x="1478" y="214" class="b12">sees: metadata + tool calls</text>
+    <text x="1478" y="234" class="b12">returns: text + tool_calls</text>
+    <text x="1478" y="262" class="n11">whichever endpoint + model</text>
+    <text x="1478" y="280" class="n11">CONNECT picked · default:</text>
+    <text x="1478" y="298" class="n11">Claude Sonnet via OpenRouter</text>
+  </g>
 
-  <rect x="1240" y="830" width="240" height="100" class="box" filter="url(#hs2)"/>
-  <text x="1254" y="856" class="bt">SUPABASE — eval sink</text>
-  <text x="1254" y="878" class="b11">assistant_feedback table</text>
-  <text x="1254" y="896" class="n11">separate free org · env-gated</text>
-
-  <!-- key -->
-  <text x="1240" y="480" font-size="13" font-weight="700" letter-spacing="2">KEY</text>
-  <line x1="1240" y1="500" x2="1280" y2="500" class="loopw" marker-end="url(#bB)"/>
-  <text x="1292" y="504" font-size="11">the turn loop</text>
-  <line x1="1244" y1="526" x2="1276" y2="526" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
-  <text x="1292" y="530" font-size="11">two-way</text>
-  <line x1="1240" y1="552" x2="1280" y2="552" class="flow dash"/>
-  <text x="1292" y="556" font-size="11">browser boundary</text>
-  <rect x="1240" y="572" width="16" height="12" fill="#FFD600" stroke="#111111" stroke-width="1.5"/>
-  <text x="1292" y="582" font-size="11">privacy contract</text>
-  <rect x="1240" y="598" width="12" height="12" class="card"/>
-  <rect x="1256" y="598" width="12" height="12" class="card"/>
-  <text x="1292" y="608" font-size="11">options — pick one</text>
+  <g id="node-supabase">
+    <rect x="1464" y="700" width="232" height="100" class="box" filter="url(#hs2)"/>
+    <text x="1478" y="726" class="bt">SUPABASE — eval sink</text>
+    <text x="1478" y="748" class="b11">assistant_feedback table</text>
+    <text x="1478" y="768" class="n11">the only data scatter lab</text>
+    <text x="1478" y="786" class="n11">ever retains — insert-only</text>
+  </g>
 
   <!-- ═══ WIRES ═══ -->
   <!-- connect → panel (settings live there) -->
-  <path d="M186,340 V422" class="flow dash" marker-end="url(#bB)"/>
-  <text x="198" y="390" class="n10">settings UI in panel</text>
+  <path d="M240,310 V352" class="flow dash" marker-end="url(#bB)"/>
+  <text x="252" y="336" class="n10">settings UI in panel</text>
 
   <!-- 1 · user message: panel → prompt -->
-  <path d="M316,470 H540 V260 H552" class="loopw" marker-end="url(#bB)"/>
-  <rect x="330" y="454" width="16" height="16" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
-  <text x="338" y="466.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">1</text>
-  <text x="354" y="466" class="n10">user message + history</text>
+  <path d="M328,420 H540 V208 H552" class="loopw" marker-end="url(#bB)"/>
+  <rect x="350" y="412" width="16" height="16" fill="#EB1A26" stroke="#111111" stroke-width="2"/>
+  <text x="358" y="424.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">1</text>
+  <text x="376" y="438" class="n10">user message + history</text>
 
   <!-- 3 · request out: prompt → model api (crosses the boundary) -->
-  <path d="M860,235 H1232" class="loopw" marker-end="url(#bB)"/>
-  <rect x="880" y="224" width="340" height="22" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="1050" y="239" text-anchor="middle" font-size="11" font-weight="700">COLUMN NAMES + AGGREGATE STATS — NEVER RAW ROWS</text>
-  <rect x="862" y="209" width="16" height="16" fill="#FFD600" stroke="#111111" stroke-width="2"/>
-  <text x="870" y="221.5" text-anchor="middle" font-size="11" font-weight="700">3</text>
+  <path d="M860,200 H1456" class="loopw" marker-end="url(#bB)"/>
+  <rect x="1040" y="189" width="340" height="22" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="1210" y="204" text-anchor="middle" font-size="11" font-weight="700">COLUMN NAMES + AGGREGATE STATS — NEVER RAW ROWS</text>
+  <rect x="880" y="192" width="16" height="16" fill="#FFD600" stroke="#111111" stroke-width="2"/>
+  <text x="888" y="204.5" text-anchor="middle" font-size="11" font-weight="700">3</text>
 
   <!-- model api → execute -->
-  <path d="M1240,310 H920 V620 H868" class="loopw" marker-end="url(#bB)"/>
-  <text x="940" y="302" class="n10">text deltas + tool_calls</text>
+  <path d="M1464,310 H940 V470 H868" class="loopw" marker-end="url(#bB)"/>
+  <text x="960" y="302" class="n10">text deltas + tool_calls</text>
 
-  <!-- 5 · closing lap: execute → prompt -->
-  <path d="M680,560 V308" class="loopw" marker-end="url(#bB)"/>
-  <text x="694" y="420" class="n10">↺ tool results feed</text>
-  <text x="694" y="436" class="n10">the next lap · ≤16</text>
+  <!-- closing lap: execute → prompt -->
+  <path d="M660,420 V268" class="loopw" marker-end="url(#bB)"/>
+  <text x="674" y="336" class="n10">↺ tool results feed</text>
+  <text x="674" y="352" class="n10">the next lap · ≤16</text>
 
-  <!-- exit: execute → panel (final reply) -->
-  <path d="M560,580 H324" class="loopw" marker-end="url(#bB)"/>
-  <rect x="524" y="564" width="16" height="16" fill="#0045AD" stroke="#111111" stroke-width="2"/>
-  <text x="532" y="576.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">5</text>
-  <text x="352" y="572" class="n10">no tools left → final reply</text>
+  <!-- 5 · exit: execute → panel (final reply) -->
+  <path d="M560,470 H336" class="loopw" marker-end="url(#bB)"/>
+  <rect x="500" y="462" width="16" height="16" fill="#0045AD" stroke="#111111" stroke-width="2"/>
+  <text x="508" y="474.5" text-anchor="middle" class="wt" font-size="11" font-weight="700">5</text>
+  <text x="348" y="490" class="n10">no tools left → final reply</text>
 
   <!-- execute ⇄ workbench -->
-  <line x1="324" y1="700" x2="552" y2="700" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
-  <text x="392" y="692" class="n10">drives · reads state</text>
+  <line x1="336" y1="585" x2="552" y2="585" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+  <text x="390" y="577" class="n10">drives · reads state</text>
 
   <!-- execute ⇄ tools -->
-  <line x1="868" y1="690" x2="932" y2="690" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
-  <text x="870" y="682" class="n10">dispatch</text>
+  <line x1="868" y1="540" x2="1168" y2="540" class="flow" marker-start="url(#bB)" marker-end="url(#bB)"/>
+  <text x="990" y="532" class="n10">dispatch ⇄ result strings</text>
 
-  <!-- tools → knowledge -->
-  <path d="M1060,760 V769" class="flow" marker-end="url(#bB)"/>
+  <!-- teach tools → knowledge -->
+  <path d="M1176,662 H1168" class="flow" marker-end="url(#bB)"/>
 
   <!-- feedback → supabase (one-way, crosses the boundary) -->
-  <path d="M932,885 H1232" class="flow" marker-end="url(#bB)"/>
-  <text x="950" y="905" class="n10">insert-only · anon key writes, never reads</text>
+  <path d="M920,750 H1456" class="flow" marker-end="url(#bB)"/>
+  <text x="946" y="742" class="n10">one-way by design — insert-only RLS</text>
 
   <!-- footer -->
-  <text x="32" y="992" class="n10">source: frontend/src — assistant.ts · AssistantPanel.tsx · methods.ts · openrouterAuth.ts · feedback.ts · page.tsx (AppBridge)</text>
-  <text x="1480" y="992" text-anchor="end" class="n10">scatter-lab.vercel.app</text>
+  <text x="32" y="860" class="n10">source: frontend/src — assistant.ts · AssistantPanel.tsx · methods.ts · openrouterAuth.ts · feedback.ts · page.tsx (AppBridge)</text>
+  <text x="1696" y="860" text-anchor="end" class="n10">scatter-lab.vercel.app</text>
 </svg>
