@@ -42,6 +42,18 @@ colour group; palette indices are keyed to the colour categories alone so nobody
 colour shifts. Legend shows a colour key (clickable: mute → hide) plus a display-only
 shape key — muting stays a colour concept, since `mutedMap` is keyed by colour value.
 
+**Smart first-view defaults:** PC1–3 still win when present. Otherwise automatic axes
+skip explicitly named ID columns (`Id`, `*_id`, `…ID`) whenever two measured numeric
+columns remain. Automatic colour preserves a deliberate shared selection, then prefers
+`Cluster`, then the lowest-cardinality 2–20-level non-ID, non-boolean-like column; a
+binary `0/1` flag counts as boolean-like. IDs remain selectable everywhere—this only
+improves automatic choices. The policy is pure/tested in `src/lib/defaults.ts`.
+
+**Cluster composition export:** the Cluster Info panel can save its selected `% of
+cluster` or `% of group` view as a 2× PNG heatmap (Viridis, Inferno, or Greens), with a
+0–100% colour-scale legend. Cells retain both the normalized percentage and raw count; rendering/download is local
+in `src/lib/clusterBreakdown.ts`.
+
 ## The assistant
 
 Bring-your-own-key via **OpenRouter** (one-click OAuth PKCE, or manual key; any
@@ -50,7 +62,9 @@ never in exported workspaces. Model picker: curated flagship chips + type-to-sea
 tool-capable models only (filtered via `supported_parameters`).
 
 **Tools** (all validated, instructive error strings): `get_app_state`, `set_plot`,
-`run_clustering`, `get_cluster_breakdown`, `pin_view` / `remove_pin`, `load_demo_data`
+`run_clustering`, `get_cluster_breakdown`, `save_cluster_heatmap`, `save_active_view_png`,
+`save_interactive_html`, `save_rotating_gif`, `save_active_dataset_csv`, `pin_view` /
+`remove_pin`, `load_demo_data`
 (idempotent), `run_pca`, `correlate`, `compare_groups`, `suggest_k`, `suggest_eps`,
 `switch_dataset`, `set_category_visibility`, `transfer_column`, `save_workspace`,
 `get_tutorial` (curated tour chunks), `get_methods_reference` (cited interpretation
@@ -102,7 +116,8 @@ keep their native storage; analysis gets one table.
 
 - `LS_pca_workbench_views copy/` holds real participant-derived data — **gitignored,
   never commit** (it has never entered git history).
-- Demo data (synthetic, 300 rows) ships in `frontend/public/demo/`.
+- Demo data is Kaggle's public Iris Species CSV (150 flowers, retrieved 2026-08-04)
+  in `frontend/public/demo/`; its source/checksum live beside it in `iris.SOURCE.md`.
 - Only the Supabase **anon** key is in env/bundle (public by design); `service_role`
   must never appear anywhere.
 

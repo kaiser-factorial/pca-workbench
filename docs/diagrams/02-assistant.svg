@@ -126,8 +126,8 @@
 
   <!-- ═══ TOOLS + KNOWLEDGE ═══ -->
   <g id="node-tools">
-    <rect x="1176" y="380" width="216" height="300" class="box" filter="url(#hs2)"/>
-    <text x="1190" y="406" class="bt">TOOLS ×19</text>
+    <rect x="1176" y="380" width="216" height="326" class="box" filter="url(#hs2)"/>
+    <text x="1190" y="406" class="bt">TOOLS ×24</text>
     <text x="1190" y="432" class="bt12">READ</text>
     <text x="1190" y="450" class="c10">get_app_state</text>
     <text x="1190" y="474" class="bt12">ACT</text>
@@ -136,12 +136,14 @@
     <text x="1190" y="524" class="c10">switch_dataset · visibility</text>
     <text x="1190" y="540" class="c10">transfer_column · save_ws</text>
     <text x="1190" y="556" class="c10">load_demo_data</text>
-    <text x="1190" y="580" class="bt12">ANALYZE</text>
-    <text x="1190" y="598" class="c10">run_pca · run_clustering</text>
-    <text x="1190" y="614" class="c10">correlate · compare_groups</text>
-    <text x="1190" y="630" class="c10">suggest_k/eps · breakdown</text>
-    <text x="1190" y="654" class="bt12">TEACH</text>
-    <text x="1190" y="670" class="c10">get_tutorial · methods_ref</text>
+    <text x="1190" y="572" class="c10">PNG · HTML · GIF · CSV export</text>
+    <text x="1190" y="596" class="bt12">ANALYZE</text>
+    <text x="1190" y="614" class="c10">run_pca · run_clustering</text>
+    <text x="1190" y="630" class="c10">correlate · compare_groups</text>
+    <text x="1190" y="646" class="c10">suggest_k/eps · breakdown</text>
+    <text x="1190" y="662" class="c10">save_cluster_heatmap</text>
+    <text x="1190" y="678" class="bt12">TEACH</text>
+    <text x="1190" y="694" class="c10">get_tutorial · methods_ref</text>
   </g>
 
   <g id="node-knowledge">

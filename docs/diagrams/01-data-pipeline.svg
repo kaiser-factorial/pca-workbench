@@ -75,10 +75,10 @@
 
   <g id="note-demo">
     <line x1="50" y1="386" x2="50" y2="452" stroke="#111111" stroke-width="2"/>
-    <text x="62" y="400" class="n10">n.b. — a synthetic 300-row</text>
-    <text x="62" y="416" class="n10">demo ships in-app; it loads</text>
+    <text x="62" y="400" class="n10">n.b. — the public Iris</text>
+    <text x="62" y="416" class="n10">demo (150 flowers) ships</text>
     <text x="62" y="432" class="n10">through this same path</text>
-    <text x="62" y="448" class="n10">(file drop, with loadings)</text>
+    <text x="62" y="448" class="n10">(file drop, no loadings)</text>
   </g>
 
   <!-- ═══ INGEST ═══ -->

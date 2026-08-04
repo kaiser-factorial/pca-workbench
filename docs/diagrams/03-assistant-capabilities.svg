@@ -79,6 +79,7 @@
     <rect x="778" y="400" width="66" height="22" class="tool"/><text x="786" y="415" class="tc">suggest_k</text>
     <rect x="852" y="400" width="78" height="22" class="tool"/><text x="860" y="415" class="tc">suggest_eps</text>
     <rect x="938" y="400" width="138" height="22" class="tool"/><text x="946" y="415" class="tc">get_cluster_breakdown</text>
+    <rect x="1084" y="400" width="142" height="22" class="tool"/><text x="1092" y="415" class="tc">save_cluster_heatmap</text>
   </g>
 
   <!-- ═══ CARD 3 · ANSWER FROM THE DATA ═══ -->

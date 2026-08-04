@@ -37,6 +37,7 @@ export type AppBridge = {
     viewMode: '2D' | '3D';
     pinnedViews: number;
     clusterSettings: { method: string; eps: number; minSamples: number; k: number; standardize: boolean };
+    clusterBreakdown: { attribute: string; direction: 'cluster' | 'group'; palette: 'Viridis' | 'Inferno' | 'Greens' };
     pcaRuns: {
       label: string; columns: string[]; variables: string[];
       standardize: boolean; savedAt: string; varianceExplained: number[];
@@ -45,6 +46,11 @@ export type AppBridge = {
   setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
   runClustering: (method: 'DBSCAN' | 'KMEANS', opts: { eps?: number; min_samples?: number; k?: number; standardize?: boolean }) => string;
   getClusterBreakdown: (attribute: string) => string;
+  saveClusterHeatmap: (opts: { attribute: string; direction?: 'cluster' | 'group'; palette?: 'Viridis' | 'Inferno' | 'Greens' }) => Promise<string>;
+  saveRotatingGif: () => Promise<string>;
+  saveActiveViewPng: () => Promise<string>;
+  saveInteractiveHtml: () => Promise<string>;
+  saveActiveDatasetCsv: () => string;
   pinView: () => string;
   loadDemoData: () => Promise<string>;
   // analysis (aggregates only)
@@ -90,23 +96,25 @@ export const MUTATING_TOOLS = new Set([
 // from, so tour answers describe the UI as it actually is.
 export const TUTORIAL: Record<string, string> = {
   overview:
-    'Scatter Lab turns tabular data into interactive 2D/3D scatter plots, entirely in the browser — nothing is uploaded anywhere. Typical flow: add a dataset → assign variables to axes and color in the Variables panel → optionally cluster → pin views to compare → export.',
+    'Scatter Lab turns tabular data into interactive 2D/3D scatter plots, entirely in the browser — nothing is uploaded anywhere. Typical flow: add a dataset → assign variables to axes and color in the Variables panel → run PCA or cluster when useful → compare views → export. The built-in Iris demo opens in a species-colored 3D flower view; during a guided tour, demonstrate the marker-shape control by adding Species as the shape encoding after it loads (the initial view intentionally leaves shape unused).',
   load_data:
     'Add data via the dropzone in the sidebar ("1. Data") — drag a CSV, XLSX, or Parquet file in, or click to browse, then press "Add Dataset". Datasets with PC score columns plot immediately. Optionally, "+ Project through a PCA components file" reveals a second dropzone: supply a loadings file and the app median-imputes, standardizes, and computes PC1–PC3 itself. Several datasets can be loaded at once; click one in the list to make it active.',
   variables:
     'The Variables panel ("2. Variables") is both data profile and plot control. Every column shows its type, range or category count, missing values, and a mini-histogram. The small buttons on each row do the plotting: X, Y, Z put a numeric column on that axis; C colors the points by that column; S encodes it as the marker shape (circle, square, diamond, then open variants — offered only for columns with at most 6 distinct values, and pressed again to switch off). Color and shape are independent, so two variables can be read at once, with a shape key under the legend. If a components file was used, "Top PC contributors" shows which variables load on each PC.',
   plotting:
-    'The View section ("4. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
+    'The View section ("5. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
   pca:
     'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. A run on a variable subset can be given a label (auto-suggested from the item names): its columns become PC1_<label>…, or COMP_<label> when keeping just the top component — the composite-score workflow for building one named score per item group and plotting them against each other. Re-running a label replaces that run\'s columns (confirmed by a dialog); differently-labeled runs coexist. An unlabeled run adds plain PC1…PCk. The scree bars show variance explained, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
-    'In "5. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. The "Standardize variables (z-score)" checkbox gives every variable equal weight in the distance — its default follows the data: on for mixed scales, off for PC scores and shared-scale items (where it is a deliberate methodological choice). Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates.',
+    'In "4. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. The "Standardize variables (z-score)" checkbox gives every variable equal weight in the distance — its default follows the data: on for mixed scales, off for PC scores and shared-scale items (where it is a deliberate methodological choice). Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates. Choose Viridis, Inferno, or Greens and use "Save heatmap" to download a PNG with its 0–100% colour scale legend.',
   compare_pin:
     '"Pin View" (section 6) freezes the current plot as a snapshot; the canvas tiles into a grid (up to 4 panes) so different axis choices, colorings, or cluster runs can be compared side by side. The live view keeps updating; pins do not.',
   transfer:
     'With two or more datasets loaded, "Transfer column from another dataset" (bottom of the Data section) copies a column — typically Cluster labels — into the active dataset, aligned by row order (with an automatic identity check) or by a shared key column. This lets you e.g. color one projection space by clusters found in another.',
   export:
-    'Section 6 exports the active view: PNG (2x resolution), a rotating GIF of the 3D view, or a self-contained interactive HTML file that works offline — nice for sending a spinnable 3D plot to a collaborator. "Add title & legend to exports" controls the dressing.',
+    'Section 6 exports the active view: PNG (2x resolution), a rotating GIF of the 3D view, or a self-contained interactive HTML file that works offline — nice for sending a spinnable 3D plot to a collaborator. It can also save the active, derived dataset as a CSV (including PCA scores and Cluster when present). "Add title & legend to exports" controls the dressing. The assistant can save all of these, but should ask before initiating any download.',
+  iris_demo:
+    'Iris demo guide — use this as a flexible, conversational sequence when the user asks for a demo or tour. Treat each numbered item as a separate beat: answer any detour first, then offer to continue rather than rushing through later actions. Do not initiate a PNG, GIF, HTML, or workspace download merely because it is mentioned; offer it and wait for a clear yes. (1) Call load_demo_data and introduce it as the classic Iris dataset. If helpful, mention its history accurately: botanist Edgar Anderson collected the flowers on the Gaspé Peninsula in Québec; Ronald Fisher later used the measurements in his 1936 paper to illustrate linear discriminant analysis. It is often called Fisher\'s Iris dataset, but Fisher did not collect the samples. (2) Call get_app_state and highlight variables. Explain that Id was skipped only for the automatic axes because it is an identifier, not a measurement; it remains selectable. Species was chosen for colour because it is the first suitable low-cardinality, non-boolean grouping. (3) Use the returned column profile to point out one concrete detail, such as SepalWidthCm\'s range or the three Species classes. (4) Highlight PCA, then run_pca with exactly SepalLengthCm, SepalWidthCm, PetalLengthCm, and PetalWidthCm; use 3 components and standardize=true. Never include Id in this demo PCA. Briefly note the reported variance and that the score axes are a measurement summary. (5) Highlight cluster, run_clustering with KMEANS, k=3, standardize=false on those PCA score axes. Cluster becomes colour; call set_plot with shape_by=Species, then get_cluster_breakdown for Species. Explain the result as an exploratory comparison, point to Cluster Info, describe its % of cluster / % of group modes and palette heatmap, and offer to save it rather than saving automatically. (6) Show the 2D PC1 × PC2 view with set_plot; offer to pin it. If the user accepts, call pin_view. Then restore the live 3D flower measurement view (PetalLengthCm × PetalWidthCm × SepalLengthCm), keep Cluster colour and Species shape, and call control_view rotation=start. (7) Highlight export, explain PNG, interactive HTML, and rotating GIF; offer to save the rotating clustered 3D GIF. (8) Invite questions. (9) When the user is done, ask whether they have a dataset to upload.',
   workspaces:
     'The Workspace section saves the entire session — datasets, pins, notes, settings — locally in the browser (IndexedDB). "Export as file" downloads a workspace as a shareable file; "Import file" loads one. Nothing syncs to any server.',
   privacy:
@@ -188,6 +196,60 @@ const TOOLS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'save_cluster_heatmap',
+      description:
+        'Configure and download a PNG heatmap of cluster composition by a categorical attribute. Choose whether each row is a cluster or an attribute group, and choose the Viridis, Inferno, or Greens 0–100% colour scale. The image includes a percentage legend and the raw count in every cell.',
+      parameters: {
+        type: 'object',
+        properties: {
+          attribute: { type: 'string', description: 'Categorical column to cross-tabulate with Cluster' },
+          direction: { type: 'string', enum: ['cluster', 'group'], description: '"cluster" = percent within each cluster; "group" = percent within each attribute group' },
+          palette: { type: 'string', enum: ['Viridis', 'Inferno', 'Greens'], description: 'PNG colour scale; omitted keeps the current selection' },
+        },
+        required: ['attribute'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_rotating_gif',
+      description:
+        'Download a rotating GIF of the active 3D scatter plot. The GIF makes a complete turn around the current plot and includes the current color and marker-shape encodings. It is only available in 3D, and should be called only when the user explicitly asks to save it or accepts an offer.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_active_view_png',
+      description:
+        'Download a 2× PNG of the current active 2D or 3D scatter view, including its current color and marker-shape encodings. Call only when the user explicitly asks to save it or accepts an offer.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_interactive_html',
+      description:
+        'Download a self-contained interactive HTML version of the current active 2D or 3D scatter view. The resulting file works offline; 3D exports include rotation controls. Call only when the user explicitly asks to save it or accepts an offer.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'save_active_dataset_csv',
+      description:
+        'Download the active dataset as CSV, including currently derived columns such as PCA scores and Cluster labels. Call only when the user explicitly asks to save it or accepts an offer.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'pin_view',
       description:
         'Pin the current plot as a snapshot so the user can compare it side-by-side with new views (max 3 pins).',
@@ -218,7 +280,7 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'load_demo_data',
       description:
-        'Load the built-in demo dataset (synthetic survey, 300 rows, with PCA components). Useful during a tour or when the user has no data loaded and wants to see the app in action.',
+        'Load the built-in Iris demo: 150 flowers with four numeric measurements and three species classes. It opens in a 3D petal/sepal view, colored by species, leaving marker shape free for the tour to demonstrate. Useful during a tour or when the user has no data loaded and wants to see the app in action.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -227,7 +289,7 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'run_pca',
       description:
-        'Run a principal component analysis on numeric variables of the active dataset, entirely in the browser. Adds score columns, reports variance explained and top loadings, and plots the result. Defaults: all numeric non-component variables, 3 components, standardized (correlation PCA). Runs on a variable SUBSET should carry a `label`: columns become PC1_<label>… (or COMP_<label> when n_components=1 — the composite-score workflow: one PCA per item group, keep each top component as a named score, then plot the composites against each other). Re-running an existing label REPLACES that run\'s columns — mention that when it happens; different labels coexist. Derive the label from the variable names (e.g. openness items → "openness"); if no natural name is apparent, ask the user rather than inventing something opaque. Past runs with their variables and labels are listed in get_app_state under pcaRuns.',
+        'Run a principal component analysis on numeric variables of the active dataset, entirely in the browser. Adds score columns, reports variance explained and top loadings, and plots the result. Defaults: all numeric non-component, non-identifier variables, 3 components, standardized (correlation PCA). Runs on a variable SUBSET should carry a `label`: columns become PC1_<label>… (or COMP_<label> when n_components=1 — the composite-score workflow: one PCA per item group, keep each top component as a named score, then plot the composites against each other). Re-running an existing label REPLACES that run\'s columns — mention that when it happens; different labels coexist. Derive the label from the variable names (e.g. openness items → "openness"); if no natural name is apparent, ask the user rather than inventing something opaque. Past runs with their variables and labels are listed in get_app_state under pcaRuns.',
       parameters: {
         type: 'object',
         properties: {
@@ -462,7 +524,7 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
   return `You are the built-in assistant of Scatter Lab, a browser-based workbench where researchers explore tabular data as interactive 2D/3D scatter plots, project data through PCA components, run DBSCAN/K-Means clustering, and compare pinned views. The user is typically a survey researcher.
 
-You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
+You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, configure and save a cluster-composition heatmap, save PNG, interactive HTML, rotating GIF, or active-dataset CSV exports, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
 You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
 
@@ -472,7 +534,7 @@ When the user asks you to interpret results or asks a methods question (componen
 
 When explaining where something is in the interface or how to do something manually, call highlight_ui to point an ephemeral highlight at the relevant control while you explain — especially during tours (pair each tour step with its highlight).
 
-Tours: when the user asks for a tour, asks how the app works, or seems new, call get_tutorial and teach from it — never invent UI details. Go step by step, not all at once: pick the sections that match their situation (no data yet → start with load_data), and demonstrate live where it helps — load_demo_data, then set_plot or run_clustering, narrating briefly. End each step by offering the next one.
+Tours: when the user asks for a tour, asks how the app works, or seems new, call get_tutorial and teach from it — never invent UI details. For a built-in demo, fetch iris_demo and follow its conversational beats; for a general tour, pick the sections that match their situation (no data yet → start with load_data). Demonstrate live where it helps, but end each beat by offering the next one. Do not initiate any download just because it is part of a tour: offer it, then wait for a clear user yes.
 
 Keep responses short and concrete. This is a side panel, not a report.
 
@@ -548,6 +610,16 @@ export const runAssistantTurn = async (
           return bridge.runClustering(input.method, input);
         case 'get_cluster_breakdown':
           return bridge.getClusterBreakdown(input.attribute);
+        case 'save_cluster_heatmap':
+          return await bridge.saveClusterHeatmap(input);
+        case 'save_rotating_gif':
+          return await bridge.saveRotatingGif();
+        case 'save_active_view_png':
+          return await bridge.saveActiveViewPng();
+        case 'save_interactive_html':
+          return await bridge.saveInteractiveHtml();
+        case 'save_active_dataset_csv':
+          return bridge.saveActiveDatasetCsv();
         case 'pin_view':
           return bridge.pinView();
         case 'get_tutorial': {

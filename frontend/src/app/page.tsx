@@ -14,6 +14,8 @@ import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
 import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames } from "@/lib/pca";
+import { isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
+import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
 
 
 const Plot = dynamic(() => import('@/components/PlotlyPlot'), { ssr: false });
@@ -254,29 +256,21 @@ type Dataset = {
     pcaRuns?: PcaRun[],
 };
 
+type InitialUploadView = {
+    axes: Axes;
+    colorBy: string;
+    shapeBy?: string;
+    viewMode?: "2D" | "3D";
+};
+
 // The axes a view actually plots, given its mode
 const effectiveAxes = (d: Dataset, mode: "3D" | "2D"): Axes =>
     mode === "2D" ? { x: d.axes2d.x, y: d.axes2d.y, z: null } : d.axes;
 const effectiveLabels = (d: Dataset, mode: "3D" | "2D"): AxisLabels =>
     mode === "2D" ? { x: d.labels2d.x, y: d.labels2d.y, z: 'Z' } : d.labels;
 
-// Keep the color selection when the target dataset shares the column
-const pickColorBy = (columns: string[], current: string) => {
-    if (current && columns.includes(current)) return current;
-    return columns.includes("Cluster") ? "Cluster" : columns[0];
-};
-
 const numericColumns = (table: DataTable) =>
     table.columns.filter(c => (table.data[c] ?? []).some(v => typeof v === 'number'));
-
-// PC columns (from a components run) win; otherwise the first numeric columns
-const pickAxes = (table: DataTable): Axes => {
-    if (['PC1', 'PC2', 'PC3'].every(c => table.columns.includes(c))) {
-        return { x: 'PC1', y: 'PC2', z: 'PC3' };
-    }
-    const nums = numericColumns(table);
-    return { x: nums[0], y: nums[1], z: nums[2] ?? null };
-};
 
 const defaultLabels = (axes: Axes): AxisLabels => ({ x: axes.x, y: axes.y, z: axes.z ?? 'Z' });
 
@@ -320,6 +314,17 @@ const sortCategories = (vals: any[]) => [...vals].sort((a, b) => {
 // also the cap.
 const SHAPE_SYMBOLS = ['circle', 'square', 'diamond', 'circle-open', 'square-open', 'diamond-open'];
 const MAX_SHAPE_CATEGORIES = SHAPE_SYMBOLS.length;
+
+// scatter3d renders square/diamond glyphs with a much smaller footprint than
+// circles at the same marker.size. These calibrated values equalize the visual
+// diameter without inflating ordinary circle markers or 2D plots.
+const markerSizeFor = (mode: "3D" | "2D", symbol?: string) => {
+    if (mode === "2D") return 6;
+    if (symbol?.includes('diamond')) return 8;
+    if (symbol?.includes('square')) return 7;
+    if (symbol === 'circle-open') return 5;
+    return 4;
+};
 
 const shapeCategories = (vals: any[]) =>
     sortCategories(Array.from(new Set(vals.map((v: any) => String(v ?? 'N/A')))));
@@ -393,7 +398,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
                 type: mode === "3D" ? 'scatter3d' : 'scatter',
                 name: g.shape ? `${key} · ${g.shape}` : key,
                 marker: {
-                    size: mode === "3D" ? 4 : 6,
+                    size: markerSizeFor(mode, symbol),
                     ...(symbol ? { symbol } : {}),
                     ...(state === 'muted'
                         ? mutedMarker
@@ -415,8 +420,8 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
                 if (v > cmax) cmax = v;
             }
         }
-        const markerFor = (vals: any[]) => ({
-            size: mode === "3D" ? 4 : 6,
+        const markerFor = (vals: any[], symbol?: string) => ({
+            size: markerSizeFor(mode, symbol),
             opacity: 0.7,
             ...(kind === "continuous"
                 ? { color: vals, colorscale: 'Viridis', showscale: false, cmin, cmax }
@@ -442,7 +447,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
                     ...base,
                     x: b.x, y: b.y, z: mode === "3D" ? b.z : undefined,
                     name: s,
-                    marker: { ...markerFor(b.c), symbol: symbolFor[s] },
+                    marker: { ...markerFor(b.c, symbolFor[s]), symbol: symbolFor[s] },
                 });
             });
         }
@@ -794,6 +799,12 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
         return next;
     });
     const maxK = Math.max(1, Math.min(10, selected.size));
+    const screeMaxBarHeight = lastRun
+        ? Math.max(...lastRun.varianceExplained.map(v => v * 100 * 1.4))
+        : 0;
+    // Reserve the label line too. A high-variance first component should grow
+    // the chart rather than spilling out of a fixed-height bar box.
+    const screeHeight = Math.max(56, Math.ceil(screeMaxBarHeight) + 18);
 
     const submit = () => {
         const vars = Array.from(selected).filter(c => numericVars.includes(c));
@@ -895,7 +906,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             {lastRun && (
                 <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
                     <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">Variance explained</div>
-                    <div className="flex items-end gap-1 h-14">
+                    <div className="flex items-end gap-1" style={{ height: `${screeHeight}px` }}>
                         {lastRun.varianceExplained.map((v, i) => (
                             <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`PC${i + 1}: ${(v * 100).toFixed(1)}% (cumulative ${(lastRun.cumulative[i] * 100).toFixed(1)}%)`}>
                                 <div className="w-full" style={{ height: `${Math.max(2, v * 100 * 1.4)}px`, backgroundColor: theme === 'primary' ? 'var(--p-blue)' : 'var(--system-green)', opacity: 0.85 }} />
@@ -914,46 +925,40 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
 
 // Cluster × attribute cross-tab: per cluster, what share each attribute value
 // holds. Pure client-side compute over the columnar table.
-const ClusterBreakdown = ({ table, attr, onAttrChange }: { table: DataTable, attr: string, onAttrChange: (v: string) => void }) => {
+const ClusterBreakdown = ({ table, attr, onAttrChange, direction, onDirectionChange, palette, onPaletteChange }: {
+    table: DataTable, attr: string, onAttrChange: (v: string) => void,
+    direction: BreakdownDirection, onDirectionChange: (v: BreakdownDirection) => void,
+    palette: HeatmapPalette, onPaletteChange: (v: HeatmapPalette) => void,
+}) => {
     // 'cluster': composition within each cluster (denominator = cluster size).
     // 'group': where each attribute group's members land (denominator = group size) —
     // normalizes away base rates, so dominant groups stop swamping every cluster.
-    const [dir, setDir] = useState<'cluster' | 'group'>('cluster');
+    const [isSaving, setIsSaving] = useState(false);
     const candidates = useMemo(
         () => table.columns.filter(c => c !== 'Cluster' && getColorFieldKind(table.data[c] ?? []) === 'categorical'),
         [table]
     );
     const effAttr = candidates.includes(attr) ? attr : candidates[0];
-    const crosstab = useMemo(() => {
-        const clusterCol = table.data.Cluster;
-        const attrVals = effAttr ? table.data[effAttr] : null;
-        if (!clusterCol || !attrVals) return null;
-        type Section = { total: number, counts: Record<string, number> };
-        const byCluster: Record<string, Section> = {};
-        const byGroup: Record<string, Section> = {};
-        for (let i = 0; i < table.nRows; i++) {
-            const c = String(clusterCol[i] ?? 'N/A');
-            const a = String(attrVals[i] ?? 'N/A');
-            if (!byCluster[c]) byCluster[c] = { total: 0, counts: {} };
-            byCluster[c].total++;
-            byCluster[c].counts[a] = (byCluster[c].counts[a] || 0) + 1;
-            if (!byGroup[a]) byGroup[a] = { total: 0, counts: {} };
-            byGroup[a].total++;
-            byGroup[a].counts[c] = (byGroup[a].counts[c] || 0) + 1;
-        }
-        return { byCluster, byGroup };
-    }, [table, effAttr]);
+    const crosstab = useMemo(() => effAttr ? buildClusterCrosstab(table, effAttr) : null, [table, effAttr]);
 
     if (!crosstab || !effAttr) return null;
-    const clusterSort = (a: string, b: string) => {
-        if (a === 'Noise') return 1;
-        if (b === 'Noise') return -1;
-        return a.localeCompare(b, undefined, { numeric: true });
+    const sections = direction === 'cluster' ? crosstab.byCluster : crosstab.byGroup;
+    const sectionKeys = direction === 'cluster'
+        ? Object.keys(sections).sort(sortClusterLabels)
+        : Object.keys(sections).sort((a, b) => sections[b].total - sections[a].total || a.localeCompare(b));
+    const saveHeatmap = async () => {
+        if (isSaving) return;
+        setIsSaving(true);
+        try {
+            await downloadClusterHeatmapPng({
+                heatmap: buildClusterHeatmap(crosstab, direction),
+                attribute: effAttr,
+                palette,
+            });
+        } finally {
+            setIsSaving(false);
+        }
     };
-    const sections = dir === 'cluster' ? crosstab.byCluster : crosstab.byGroup;
-    const sectionKeys = dir === 'cluster'
-        ? Object.keys(sections).sort(clusterSort)
-        : Object.keys(sections).sort((a, b) => sections[b].total - sections[a].total);
 
     return (
         <div className="space-y-2 text-xs border-t border-[var(--border)] pt-3 mt-1">
@@ -971,12 +976,30 @@ const ClusterBreakdown = ({ table, attr, onAttrChange }: { table: DataTable, att
                 {(['cluster', 'group'] as const).map(d => (
                     <button
                         key={d}
-                        onClick={() => setDir(d)}
-                        className={`flex-1 py-1 text-[10px] font-bold border ${dir === d ? 'bg-[var(--foreground)] text-[var(--background)] border-[var(--foreground)]' : 'bg-[var(--input)] border-[var(--border)] opacity-60 hover:opacity-100'}`}
+                        onClick={() => onDirectionChange(d)}
+                        className={`flex-1 py-1 text-[10px] font-bold border ${direction === d ? 'bg-[var(--foreground)] text-[var(--background)] border-[var(--foreground)]' : 'bg-[var(--input)] border-[var(--border)] opacity-60 hover:opacity-100'}`}
                     >
                         % of {d}
                     </button>
                 ))}
+            </div>
+            <div className="flex gap-1.5">
+                <select
+                    aria-label="Heatmap palette"
+                    className="min-w-0 flex-1 bg-[var(--input)] border border-[var(--border)] p-1 text-[10px] outline-none"
+                    value={palette}
+                    onChange={e => onPaletteChange(e.target.value as HeatmapPalette)}
+                >
+                    {HEATMAP_PALETTES.map(option => <option key={option} value={option}>{option}</option>)}
+                </select>
+                <button
+                    onClick={saveHeatmap}
+                    disabled={isSaving}
+                    className="flex items-center justify-center gap-1 whitespace-nowrap border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-[10px] font-bold hover:bg-[var(--foreground)] hover:text-[var(--background)] disabled:opacity-40"
+                    title="Download the selected cluster composition as a PNG heatmap"
+                >
+                    <Download className="h-3 w-3" /> {isSaving ? 'Saving…' : 'Save heatmap'}
+                </button>
             </div>
             <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
                 {sectionKeys.map(sk => {
@@ -1156,10 +1179,10 @@ const STEP_COLORS = [
     { bg: 'var(--p-yellow)', fg: '#111111' },
 ];
 
-const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined, guide?: string }) => {
+const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide, order }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined, guide?: string, order?: number }) => {
     if (theme === 'terminal') {
         return (
-            <div data-guide={guide}>
+            <div data-guide={guide} style={{ order }}>
                 <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any}>
                     {children}
                 </CyberContainer>
@@ -1168,7 +1191,7 @@ const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide
     }
     const c = step != null ? STEP_COLORS[(step - 1) % STEP_COLORS.length] : null;
     return (
-        <div data-guide={guide} className={`space-y-3 ${hasBorder ? 'border-t border-[var(--border)] pt-6' : ''}`}>
+        <div data-guide={guide} style={{ order }} className={`space-y-3 ${hasBorder ? 'border-t border-[var(--border)] pt-6' : ''}`}>
             <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider">
                 {c && <span className="bauhaus-step" style={{ backgroundColor: c.bg, color: c.fg }}>{step}</span>}
                 <span className="opacity-60">{title}</span>
@@ -1180,7 +1203,7 @@ const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide
 
 const SidebarGroup = ({ children, theme }: { children: React.ReactNode, theme: string | undefined }) => {
     if (theme === 'terminal') {
-        return <CyberStackGroup className="flex-grow">{children}</CyberStackGroup>;
+        return <CyberStackGroup className="flex-grow flex flex-col !space-y-0 gap-3">{children}</CyberStackGroup>;
     }
     return <div className="flex-grow flex flex-col gap-6">{children}</div>;
 };
@@ -1289,6 +1312,8 @@ export default function Home() {
   const [standardize, setStandardize] = useState(false);
   const [isClustering, setIsClustering] = useState(false);
   const [breakdownBy, setBreakdownBy] = useState<string>("");
+  const [breakdownDirection, setBreakdownDirection] = useState<BreakdownDirection>('cluster');
+  const [heatmapPalette, setHeatmapPalette] = useState<HeatmapPalette>('Viridis');
 
   // The standardize toggle defaults by data regime (PC scores or shared-scale
   // columns → off, mixed scales → on; see suggestStandardize). Recomputed when
@@ -1347,7 +1372,11 @@ export default function Home() {
 
   // Everything happens in the browser: parse → (optionally) project → plot.
   // No network round-trip, no server, data never leaves the machine.
-  const uploadFiles = async (dsFile: File, compFile: File | null): Promise<DataTable | null> => {
+  const uploadFiles = async (
+    dsFile: File,
+    compFile: File | null,
+    initialView?: InitialUploadView,
+  ): Promise<DataTable | null> => {
     setIsUploading(true);
     setUploadStatus("Processing…");
     try {
@@ -1361,7 +1390,7 @@ export default function Home() {
       setUploadStatus(result.message);
       const id = Date.now();
       const table = result.table;
-      const axes = pickAxes(table);
+      const axes = initialView?.axes ?? pickDefaultAxes(table);
       const dataset: Dataset = {
         id,
         name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
@@ -1374,8 +1403,11 @@ export default function Home() {
       };
       setDatasets(prev => [...prev, dataset]);
       setActiveId(id);
-      setColorBy(pickColorBy(table.columns, colorBy));
-      if (!axes.z) setViewMode("2D");
+      setColorBy(initialView?.colorBy ?? pickDefaultColorBy(table, colorBy));
+      // Ordinary uploads preserve a compatible shape channel; the demo supplies
+      // an initial view specifically so it can start with shape unassigned.
+      if (initialView) setShapeBy(initialView.shapeBy ?? "");
+      setViewMode(initialView?.viewMode ?? (axes.z ? viewMode : "2D"));
       // Consume the file selections so the slots are free for the next dataset
       setDatasetFile(null);
       setComponentsFile(null);
@@ -1393,18 +1425,22 @@ export default function Home() {
   const handleUpload = () => { if (datasetFile) uploadFiles(datasetFile, componentsFile); };
 
   // Demo data ships with the app (public/demo) so the empty state can offer a
-  // zero-friction first run: synthetic survey + components, nothing sensitive
+  // zero-friction first run: the public Iris CSV, no projection file required.
   const loadDemo = async (): Promise<DataTable | null> => {
     setIsUploading(true);
     setUploadStatus("Loading demo data…");
     try {
-      const [ds, comp] = await Promise.all([
-        fetch('/demo/demo_dataset.csv').then(r => r.blob()),
-        fetch('/demo/demo_components.csv').then(r => r.blob()),
-      ]);
+      const response = await fetch('/demo/iris.csv');
+      if (!response.ok) throw new Error(`Demo data request failed (${response.status})`);
+      const ds = await response.blob();
       return await uploadFiles(
-        new File([ds], 'demo_dataset.csv', { type: 'text/csv' }),
-        new File([comp], 'demo_components.csv', { type: 'text/csv' }),
+        new File([ds], 'iris.csv', { type: 'text/csv' }),
+        null,
+        {
+          axes: { x: 'PetalLengthCm', y: 'PetalWidthCm', z: 'SepalLengthCm' },
+          colorBy: 'Species',
+          viewMode: '3D',
+        },
       );
     } catch {
       setUploadStatus("Demo data failed to load.");
@@ -1417,7 +1453,7 @@ export default function Home() {
       setActiveId(id);
       const ds = datasets.find(d => d.id === id);
       if (ds) {
-          setColorBy(pickColorBy(ds.table.columns, colorBy));
+          setColorBy(pickDefaultColorBy(ds.table, colorBy));
           if (!ds.axes.z) setViewMode("2D");
       }
   };
@@ -1448,7 +1484,7 @@ export default function Home() {
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
           activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
           notes, mutedMap,
-          clusterMethod, eps, minSamples, k, standardize, breakdownBy, includeExportInfo,
+          clusterMethod, eps, minSamples, k, standardize, breakdownBy, breakdownDirection, heatmapPalette, includeExportInfo,
       };
   };
 
@@ -1524,6 +1560,8 @@ export default function Home() {
           skipStdReset.current = true;
           setStandardize(ws.standardize ?? false);
           setBreakdownBy(ws.breakdownBy ?? "");
+          setBreakdownDirection(ws.breakdownDirection === 'group' ? 'group' : 'cluster');
+          setHeatmapPalette(HEATMAP_PALETTES.includes(ws.heatmapPalette) ? ws.heatmapPalette : 'Viridis');
           setIncludeExportInfo(ws.includeExportInfo ?? true);
           setWorkspaceName(name);
           setUploadStatus(`Loaded workspace "${name}".`);
@@ -1591,7 +1629,7 @@ export default function Home() {
       if (activeId === id) {
           const next = remaining[0] ?? null;
           setActiveId(next?.id ?? null);
-          if (next) setColorBy(pickColorBy(next.table.columns, colorBy));
+          if (next) setColorBy(pickDefaultColorBy(next.table, colorBy));
       }
   };
 
@@ -1756,11 +1794,11 @@ export default function Home() {
       }
   };
 
-  const exportPNG = async () => {
-      if (!activeDataset) return;
+  const exportPNG = async (): Promise<string | null> => {
+      if (!activeDataset) return 'No active dataset to export.';
       const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
       const gd = getActivePlotDiv();
-      if (!gd || !gd.data) return;
+      if (!gd || !gd.data) return 'The active plot is not ready to export yet.';
       try {
           await setExportDressing(Plotly, gd, true);
           await Plotly.downloadImage(gd, {
@@ -1770,17 +1808,26 @@ export default function Home() {
               scale: 2,
               filename: `${activeDataset.name}_${colorBy}_${viewMode}`,
           });
+      } catch (err) {
+          console.error(err);
+          const message = 'PNG export failed — see console.';
+          setUploadStatus(message);
+          return message;
       } finally {
-          await setExportDressing(Plotly, gd, false);
+          try { await setExportDressing(Plotly, gd, false); } catch { /* a re-render restores the live plot */ }
       }
+      return null;
   };
 
   const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
       Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what} timed out`)), ms))]);
 
-  const exportGIF = async () => {
+  const exportGIF = async (): Promise<string | null> => {
       const gd = getActivePlotDiv();
-      if (!gd || !activeDataset || viewMode !== "3D" || isExporting) return;
+      if (!gd || !activeDataset) return 'The active plot is not ready to export yet.';
+      if (viewMode !== "3D") return 'A rotating GIF is available only for a 3D view.';
+      if (isExporting) return 'Another export is already in progress.';
+      const wasRotating = isRotating;
       setIsRotating(false);
       const prevEye = { ...camera.eye };
       const FRAMES = 36;
@@ -1834,7 +1881,9 @@ export default function Home() {
           URL.revokeObjectURL(a.href);
       } catch (err) {
           console.error(err);
-          setUploadStatus("GIF export failed — see console.");
+          const message = "GIF export failed — see console.";
+          setUploadStatus(message);
+          return message;
       } finally {
           try {
               const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
@@ -1842,12 +1891,14 @@ export default function Home() {
               if (finalGd && finalGd.data) await setExportDressing(Plotly, finalGd, false);
           } catch { /* a re-render restores the props-driven layout anyway */ }
           setCamera({ eye: prevEye });
+          setIsRotating(wasRotating);
           setIsExporting("");
       }
+      return null;
   };
 
-  const exportHTML = async () => {
-      if (!activeDataset || !processedData) return;
+  const exportHTML = async (): Promise<string | null> => {
+      if (!activeDataset || !processedData) return 'No active dataset to export.';
       setIsExporting("Building HTML…");
       try {
           const labels = effectiveLabels(activeDataset, viewMode);
@@ -1933,10 +1984,38 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           URL.revokeObjectURL(a.href);
       } catch (err) {
           console.error(err);
-          setUploadStatus("HTML export failed — see console.");
+          const message = "HTML export failed — see console.";
+          setUploadStatus(message);
+          return message;
       } finally {
           setIsExporting("");
       }
+      return null;
+  };
+
+  const exportDatasetCsv = (): string | null => {
+      const table = freshTableRef.current ?? processedData;
+      if (!activeDataset || !table) return 'No active dataset to export.';
+      const encode = (value: unknown) => {
+          const text = value == null ? '' : String(value);
+          return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+      };
+      const rows = [
+          table.columns.map(encode).join(','),
+          ...Array.from({ length: table.nRows }, (_, row) =>
+              table.columns.map(column => encode(table.data[column]?.[row])).join(',')
+          ),
+      ];
+      const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${activeDataset.name}_data.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      return null;
   };
 
   const pinCurrentView = () => {
@@ -2069,6 +2148,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           viewMode,
           pinnedViews: pinnedViews.length,
           clusterSettings: { method: clusterMethod, eps, minSamples, k, standardize },
+          clusterBreakdown: { attribute: breakdownBy, direction: breakdownDirection, palette: heatmapPalette },
           pcaRuns: (activeDataset?.pcaRuns ?? []).map(r => ({
               label: r.label || '(unnamed)', columns: r.columns, variables: r.variables,
               standardize: r.standardize, savedAt: r.savedAt,
@@ -2186,6 +2266,49 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           }).join('\n');
       },
 
+      saveClusterHeatmap: async ({ attribute, direction, palette }) => {
+          const t = latestTable();
+          if (!t) return 'No dataset loaded.';
+          if (!t.data.Cluster) return 'No clustering has been run yet — call run_clustering first.';
+          const candidates = t.columns.filter(c => c !== 'Cluster' && getColorFieldKind(t.data[c] ?? []) === 'categorical');
+          if (!candidates.includes(attribute)) {
+              return `"${attribute}" is not available for a cluster heatmap. Categorical columns: ${candidates.join(', ')}.`;
+          }
+          const useDirection = direction === 'group' ? 'group' : 'cluster';
+          const usePalette = HEATMAP_PALETTES.includes(palette as HeatmapPalette) ? palette as HeatmapPalette : heatmapPalette;
+          const crosstab = buildClusterCrosstab(t, attribute);
+          if (!crosstab) return 'No composition values are available to export.';
+          setBreakdownBy(attribute);
+          setBreakdownDirection(useDirection);
+          setHeatmapPalette(usePalette);
+          await downloadClusterHeatmapPng({
+              heatmap: buildClusterHeatmap(crosstab, useDirection),
+              attribute,
+              palette: usePalette,
+          });
+          return `Saved a ${usePalette} cluster-composition heatmap by ${attribute} (% of ${useDirection}); its 0–100% colour scale is included in the PNG.`;
+      },
+
+      saveRotatingGif: async () => {
+          const error = await exportGIF();
+          return error ?? `Saved a rotating GIF of the current 3D view (${colorBy} color${shapeBy ? `, ${shapeBy} marker shape` : ''}).`;
+      },
+
+      saveActiveViewPng: async () => {
+          const error = await exportPNG();
+          return error ?? `Saved a 2× PNG of the current ${viewMode} view.`;
+      },
+
+      saveInteractiveHtml: async () => {
+          const error = await exportHTML();
+          return error ?? `Saved an offline interactive HTML version of the current ${viewMode} view.`;
+      },
+
+      saveActiveDatasetCsv: () => {
+          const error = exportDatasetCsv();
+          return error ?? 'Saved the active dataset as CSV, including any PCA scores and Cluster labels.';
+      },
+
       pinView: () => {
           if (pinnedViews.length >= 3) return 'Pin limit reached (3). Ask the user to remove a pin first.';
           pinCurrentView();
@@ -2193,7 +2316,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       },
 
       loadDemoData: async () => {
-          const existing = datasets.find(d => d.name === 'demo_dataset');
+          const existing = datasets.find(d => d.name === 'iris');
           if (existing) {
               if (existing.id !== activeId) selectDataset(existing.id);
               freshTableRef.current = existing.table;
@@ -2202,14 +2325,14 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const table = await loadDemo();
           if (!table) return 'Demo data failed to load.';
           freshTableRef.current = table;
-          return `Demo dataset loaded: ${table.nRows} rows, columns: ${table.columns.join(', ')}. It is now the active dataset, plotted on PC1/PC2/PC3.`;
+          return `Iris demo loaded: ${table.nRows} flowers, columns: ${table.columns.join(', ')}. It is now active in 3D: petal length × petal width × sepal length, colored by species. Marker shape is available for the tour to demonstrate.`;
       },
 
       runPCA: (opts) => {
           const t = latestTable();
           if (!t) return 'No dataset loaded.';
           const numeric = numericColumns(t).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster');
-          const vars = (opts.variables?.length ? opts.variables : numeric);
+          const vars = (opts.variables?.length ? opts.variables : numeric.filter(c => !isIdentifierColumn(c)));
           const bad = vars.filter(v => !numeric.includes(v));
           if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;
           const label = sanitizeLabel(opts.label ?? '');
@@ -2411,7 +2534,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
       snapshot: () => ({
           datasets, activeId, colorBy, shapeBy, viewMode, showAxes, pinnedViews,
-          clusterMethod, eps, minSamples, k, standardize, breakdownBy, mutedMap,
+          clusterMethod, eps, minSamples, k, standardize, breakdownBy, breakdownDirection, heatmapPalette, mutedMap,
       }),
 
       restore: (snap: any) => {
@@ -2431,6 +2554,8 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           skipStdReset.current = true;
           setStandardize(snap.standardize ?? false);
           setBreakdownBy(snap.breakdownBy);
+          setBreakdownDirection(snap.breakdownDirection === 'group' ? 'group' : 'cluster');
+          setHeatmapPalette(HEATMAP_PALETTES.includes(snap.heatmapPalette) ? snap.heatmapPalette : 'Viridis');
           setMutedMap(snap.mutedMap);
           freshTableRef.current = null;
       },
@@ -2572,7 +2697,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           </SidebarSection>
 
           {/* Section 1: Ingestion */}
-          <SidebarSection title="Data" step={1} theme={theme}>
+          <SidebarSection title="Data" step={1} theme={theme} order={1}>
             {!processedData && (
               <div className="flex justify-center opacity-40 mb-2">
                 <UploadCloud className="w-10 h-10" />
@@ -2657,7 +2782,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
           {processedData && (
             <>
-              <SidebarSection title="Variables" step={2} hasBorder theme={theme} guide="variables">
+              <SidebarSection title="Variables" step={2} hasBorder theme={theme} guide="variables" order={2}>
                 <div className="text-[11px] opacity-60 -mt-1">
                   {processedData.nRows} rows × {processedData.columns.length} columns — click X · Y · Z to plot, C to color, S to shape
                 </div>
@@ -2690,7 +2815,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
               </SidebarSection>
 
-              <SidebarSection title="PCA" step={3} hasBorder theme={theme} guide="pca">
+              <SidebarSection title="PCA" step={3} hasBorder theme={theme} guide="pca" order={3}>
                 {processedData && (
                   <PCASection
                     table={processedData}
@@ -2703,7 +2828,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 )}
               </SidebarSection>
 
-              <SidebarSection title="View" step={4} hasBorder theme={theme} guide="view">
+              <SidebarSection title="View" step={5} hasBorder theme={theme} guide="view" order={5}>
                 <div className="flex gap-2 mb-2">
                     <button onClick={() => setViewMode("2D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "2D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>2D</button>
                     <button onClick={() => setViewMode("3D")} className={`flex-1 py-1 text-xs font-bold border ${viewMode === "3D" ? (theme==='primary'?'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]':'bg-[var(--border)] border-[var(--primary)] text-[var(--primary)]') : 'border-[var(--border)] bg-[var(--input)] opacity-60'}`}>3D</button>
@@ -2748,7 +2873,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 </button>
               </SidebarSection>
 
-              <SidebarSection title="Cluster" step={5} hasBorder theme={theme} guide="cluster">
+              <SidebarSection title="Cluster" step={4} hasBorder theme={theme} guide="cluster" order={4}>
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
                     <option value="DBSCAN">DBSCAN</option>
@@ -2784,11 +2909,19 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                     </button>
                 )}
                 {processedData.columns.includes('Cluster') && (
-                    <ClusterBreakdown table={processedData} attr={breakdownBy} onAttrChange={setBreakdownBy} />
+                    <ClusterBreakdown
+                        table={processedData}
+                        attr={breakdownBy}
+                        onAttrChange={setBreakdownBy}
+                        direction={breakdownDirection}
+                        onDirectionChange={setBreakdownDirection}
+                        palette={heatmapPalette}
+                        onPaletteChange={setHeatmapPalette}
+                    />
                 )}
                   </SidebarSection>
 
-              <SidebarSection title="Export & Pin" step={6} hasBorder theme={theme} guide="export">
+              <SidebarSection title="Export & Pin" step={6} hasBorder theme={theme} guide="export" order={6}>
                   <button onClick={pinCurrentView} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)]'}`}>
                       <Pin className="w-4 h-4" /> Pin View
                   </button>
@@ -2801,6 +2934,9 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                   </button>
                   <button onClick={exportHTML} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                       <Download className="w-4 h-4" /> {isExporting === "Building HTML…" ? isExporting : "Save Interactive HTML"}
+                  </button>
+                  <button onClick={exportDatasetCsv} disabled={!!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-white text-black':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+                      <Download className="w-4 h-4" /> Save Dataset CSV
                   </button>
                   <button ref={gifButtonRef} onClick={exportGIF} disabled={viewMode === "2D" || !!isExporting} className={`w-full flex items-center justify-center gap-2 py-2 text-sm font-bold disabled:opacity-40 ${theme==='primary'?'bauhaus-btn bg-[var(--p-yellow)] text-[#111111]':'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
                       <Layers className="w-4 h-4" /> {(isExporting && isExporting.startsWith("Rendering")) ? isExporting : "Save Rotating GIF (3D)"}

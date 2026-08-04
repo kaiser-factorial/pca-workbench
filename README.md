@@ -10,17 +10,28 @@ survey and questionnaire research, useful for any table of numbers.
 persistence all happen locally — your data never leaves your machine. There is
 no backend; the app deploys as a static site.
 
+## Demo data
+
+The built-in demo uses the classic Iris Species dataset, downloaded from
+Kaggle's [Iris Species](https://www.kaggle.com/datasets/uciml/iris) dataset
+(`uciml/iris`, `Iris.csv`) on 2026-08-04. It is a public 150-row flower
+measurement dataset with three species classes; see
+[`frontend/public/demo/iris.SOURCE.md`](frontend/public/demo/iris.SOURCE.md)
+for the preserved-file checksum and usage note.
+
 ## Features
 
 - **Drop in CSV, XLSX, or Parquet** — every column is profiled automatically
   (type, range, missing values, live mini-histograms) with one-click X/Y/Z/color
-  assignment from the Variables panel
+  assignment from the Variables panel. Smart first-view defaults avoid explicit
+  ID columns and prefer a small non-boolean categorical grouping for colour.
 - **In-app PCA** — pick variables, pick components, run: a browser-side
   eigensolver produces scores, loadings, and a scree chart (correlation- or
   covariance-based). A precomputed components/loadings file works too
 - **Clustering** — DBSCAN and K-Means (k-means++, deterministic) with live
   parameter sliders, per-cluster composition breakdowns, and diagnostics
-  (silhouette-by-k, k-distance percentiles for eps)
+  (silhouette-by-k, k-distance percentiles for eps). Save composition heatmaps
+  as PNGs in Viridis, Inferno, or Greens, with a 0–100% colour-scale legend.
 - **Compare views** — pin up to 4 views in a tiled grid; transfer columns
   (e.g. cluster labels) between datasets by row order or key match, with
   alignment guards
@@ -33,8 +44,8 @@ no backend; the app deploys as a static site.
 ## The assistant (optional, bring-your-own-key)
 
 An in-app AI copilot that drives the workbench through tool calls: assign axes,
-run PCA and clustering, read cluster compositions, compute correlations and
-group comparisons, give a guided tour — and literally point at the interface
+run PCA and clustering, read cluster compositions, configure and save their
+heatmaps, scatter exports, or a rotating 3D GIF, compute correlations and group comparisons, give a guided tour — and literally point at the interface
 with an ephemeral highlight while explaining it. Interpretation questions are
 grounded in a curated, citation-backed methods reference that ships with the
 app.
