@@ -32,8 +32,8 @@
   <text x="142" y="27" font-size="20" font-weight="700" letter-spacing="2">SCATTER LAB — WHAT THE ASSISTANT CAN DO</text>
   <text x="1688" y="26" text-anchor="end" class="n11">system diagram 03/03 · 02 shows how it works</text>
 
-  <rect x="32" y="42" width="690" height="30" fill="#111111"/>
-  <text x="377" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">AN AI COPILOT THAT DRIVES THE WORKBENCH THROUGH TOOL CALLS — ASK IN PLAIN WORDS</text>
+  <rect x="32" y="42" width="520" height="30" fill="#111111"/>
+  <text x="292" y="62" text-anchor="middle" class="wt" font-size="12" font-weight="700" letter-spacing="1">AN AI COPILOT THAT DRIVES THE WORKBENCH THROUGH TOOL CALLS</text>
 
   <!-- ═══ CARD 1 · DRIVE THE PLOT ═══ -->
   <g id="card-drive">
@@ -64,7 +64,7 @@
     <circle cx="627" cy="155" r="14" fill="#EB1A26" stroke="#111111" stroke-width="2.5"/>
     <text x="656" y="163" class="ct">RUN THE ANALYSIS</text>
     <rect x="612" y="182" width="494" height="34" class="chip"/>
-    <text x="624" y="204" class="say">"find the clusters — how many are there?"</text>
+    <text x="624" y="204" class="say">"let's run k-means clustering, choose k by silhouette score"</text>
     <path d="M638,216 L666,216 L638,232 Z" fill="#FFD600" stroke="#111111" stroke-width="2.5"/>
     <rect x="614" y="250" width="7" height="7" fill="#EB1A26"/>
     <text x="628" y="258" class="li">PCA with named subset runs + composites</text>
@@ -150,7 +150,7 @@
     <rect x="1176" y="512" width="16" height="16" fill="#0045AD" stroke="#ffffff" stroke-width="1.5"/>
     <circle cx="1208" cy="520" r="8" fill="#EB1A26" stroke="#ffffff" stroke-width="1.5"/>
     <path d="M1226,528 L1234,512 L1242,528 Z" fill="#FFD600" stroke="#ffffff" stroke-width="1.5"/>
-    <text x="1258" y="533" class="ct wt">THE GROUND RULES</text>
+    <text x="1258" y="533" class="ct wt">PRIVACY &amp; CONTROL</text>
     <rect x="1176" y="562" width="7" height="7" fill="#FFD600"/>
     <text x="1192" y="570" class="say wt">sees column names + aggregates — raw rows never leave</text>
     <rect x="1176" y="594" width="7" height="7" fill="#0045AD"/>
