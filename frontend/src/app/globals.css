@@ -77,7 +77,76 @@ body {
  * Cyber Theme - Scanlines and Glows
  */
 .mauk-glow { text-shadow: 0 0 0px var(--mauk), 0 0 12px var(--mauk); }
+.system-green-glow { text-shadow: 0 0 0px var(--system-green), 0 0 12px var(--system-green); }
 .abaci-glow { text-shadow: 0 0 0px var(--abaci), 0 0 12px var(--abaci); }
+
+/* Terminal controls use one vivid, readable input language. The surrounding
+   copy stays dimmer by design, so editable/drop targets are unambiguous. */
+[data-theme='terminal'] input:not([type='file']):not([type='range']):not([type='checkbox']):not([type='radio']),
+[data-theme='terminal'] textarea,
+[data-theme='terminal'] select {
+  border-color: color-mix(in srgb, var(--system-green) 58%, transparent) !important;
+  color: var(--system-green);
+  caret-color: var(--system-green);
+}
+
+[data-theme='terminal'] input:not([type='file'])::placeholder,
+[data-theme='terminal'] textarea::placeholder {
+  color: color-mix(in srgb, var(--system-green) 62%, transparent);
+  opacity: 1;
+}
+
+[data-theme='terminal'] [data-guide='upload-dropzone'] {
+  border-color: color-mix(in srgb, var(--system-green) 58%, transparent) !important;
+  color: var(--system-green);
+}
+
+/* The CCRU container provides the semantic button; turn the whole header into
+   a generous, visibly interactive toggle while the React wrapper forwards its
+   clicks to that accessible button. */
+[data-theme='terminal'] .scatterlab-terminal-accordion > header {
+  min-height: 38px;
+  cursor: pointer !important;
+  transition: background-color 130ms ease, border-color 130ms ease, box-shadow 130ms ease;
+}
+
+[data-theme='terminal'] .scatterlab-terminal-accordion > header:hover,
+[data-theme='terminal'] .scatterlab-terminal-accordion > header:focus-within {
+  background: color-mix(in srgb, var(--system-green) 9%, transparent);
+  border-color: color-mix(in srgb, var(--system-green) 72%, transparent) !important;
+  box-shadow: inset 3px 0 0 var(--system-green);
+}
+
+[data-theme='terminal'] .scatterlab-terminal-accordion > header > span {
+  color: var(--system-green) !important;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+[data-theme='terminal'] .scatterlab-terminal-accordion > header button[type='button'] {
+  display: grid;
+  width: 34px;
+  min-width: 34px;
+  height: 30px;
+  place-items: center;
+  margin: -6px -5px -6px 4px;
+  border-left: 1px solid color-mix(in srgb, var(--system-green) 48%, transparent);
+  color: var(--system-green) !important;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 130ms ease, color 130ms ease, transform 130ms ease, text-shadow 130ms ease;
+}
+
+[data-theme='terminal'] .scatterlab-terminal-accordion > header button[type='button']:hover {
+  background: color-mix(in srgb, var(--system-green) 18%, transparent);
+  text-shadow: 0 0 8px var(--system-green);
+}
+
+[data-theme='terminal'] .scatterlab-terminal-accordion > header button[type='button']:active {
+  transform: scale(0.88);
+}
 
 @keyframes move-scanlines {
   from { transform: translateY(0); }

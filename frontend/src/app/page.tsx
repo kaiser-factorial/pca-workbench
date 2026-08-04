@@ -663,7 +663,7 @@ const EmptyState = ({ theme, onLoadDemo, onUpload, busy }: { theme: string | und
         return (
             <div className="w-full h-full flex items-center justify-center">
                 <div className="max-w-md w-full mx-6 border border-[var(--system-green)]/40 bg-black/60 p-8 space-y-5">
-                    <div className="text-[var(--system-green)] text-lg font-bold tracking-widest uppercase mauk-glow">Awaiting data_</div>
+                    <div className="text-[var(--system-green)] text-lg font-bold tracking-widest uppercase system-green-glow">Awaiting data_</div>
                     <div className="space-y-2">
                         {steps.map((s, i) => (
                             <div key={i} className="flex gap-3 text-sm text-[var(--foreground)]">
@@ -1228,12 +1228,23 @@ const revealOpenedSidebarSection = (event: { target: EventTarget | null }, secti
     }));
 };
 
+// CyberContainer exposes only its tiny chevron as a toggle. Make the complete
+// header a forgiving pointer target while retaining the package button for
+// keyboard access and its aria-expanded state.
+const toggleTerminalSectionFromHeader = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const header = target?.closest('header');
+    const toggle = header?.querySelector<HTMLButtonElement>('button[type="button"]');
+    if (header && toggle && !target?.closest('button')) toggle.click();
+    revealOpenedSidebarSection(event, event.currentTarget);
+};
+
 const SidebarSection = ({ title, step, children, hasBorder = false, theme, guide, order }: { title: string, step?: number, children: React.ReactNode, hasBorder?: boolean, theme: string | undefined, guide?: string, order?: number }) => {
     const sectionId = guide ?? title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     if (theme === 'terminal') {
         return (
-            <div data-guide={guide} data-scatter-section={sectionId} style={{ order }} onClick={event => revealOpenedSidebarSection(event, event.currentTarget)}>
-                <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any} className="[&>header]:!px-2 [&>div]:!px-2">
+            <div data-guide={guide} data-scatter-section={sectionId} style={{ order }} onClick={toggleTerminalSectionFromHeader}>
+                <CyberContainer title={step != null ? `${step}. ${title}` : title} collapsible defaultOpen width={"100%" as any} className="scatterlab-terminal-accordion [&>header]:!px-2 [&>div]:!px-2">
                     {children}
                 </CyberContainer>
             </div>
@@ -2694,7 +2705,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       {/* Sidebar Controls */}
       <aside className="w-[320px] h-full bg-[var(--card)] border-r border-[var(--border)] flex flex-col p-6 overflow-y-auto relative z-10 flex-shrink-0">
         <div className="flex justify-between items-center mb-2">
-            <h1 className={`flex items-center gap-2 text-xl font-bold tracking-tight ${theme === 'terminal' ? 'text-[var(--mauk)] mauk-glow' : ''}`}>
+            <h1 className={`flex items-center gap-2 text-xl font-bold tracking-tight ${theme === 'terminal' ? 'text-[var(--system-green)] system-green-glow' : ''}`}>
                 {theme === 'primary' && (
                     <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" className="flex-shrink-0">
                         <rect x="3" y="14" width="13" height="13" fill="var(--p-blue)" stroke="#111111" strokeWidth="2" />
@@ -2733,7 +2744,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               <button
                 onClick={saveWorkspace}
                 disabled={!workspaceName.trim() || !!workspaceBusy || datasets.length === 0}
-                className={`px-3 text-xs font-bold disabled:opacity-40 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}
+                className={`px-3 text-xs font-bold disabled:opacity-40 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--system-green)]/55 hover:bg-[var(--system-green)]/10 text-[var(--system-green)] cursor-pointer'}`}
               >
                 Save
               </button>
@@ -2777,7 +2788,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           {/* Section 1: Ingestion */}
           <SidebarSection title="Data" step={1} theme={theme} guide="data" order={1}>
             {!processedData && (
-              <div className="flex justify-center opacity-40 mb-2">
+              <div className={`flex justify-center mb-2 ${theme === 'terminal' ? 'text-[var(--system-green)] opacity-70' : 'opacity-40'}`}>
                 <UploadCloud className="w-10 h-10" />
               </div>
             )}
@@ -2799,7 +2810,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                   const f = e.dataTransfer.files?.[0];
                   if (f) zone.set(f);
                 }}
-                className={`border-2 border-dashed p-3 flex flex-col items-center cursor-pointer transition-colors ${theme === 'primary' ? 'border-[3px] bg-white' : ''} ${dragOver === zone.key
+                className={`border-2 border-dashed p-3 flex flex-col items-center cursor-pointer transition-colors ${theme === 'primary' ? 'border-[3px] bg-white' : theme === 'terminal' ? 'border-[var(--system-green)]/45 text-[var(--system-green)] hover:border-[var(--system-green)] hover:bg-[var(--system-green)]/10' : ''} ${dragOver === zone.key
                   ? (theme === 'primary' ? 'border-[var(--p-blue)] bg-blue-50' : 'border-[var(--system-green)] bg-[var(--system-green)]/10')
                   : 'border-[var(--border)] hover:bg-[var(--foreground)]/5'}`}
               >
@@ -2816,7 +2827,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             >
               {showComponents || componentsFile ? '− Remove components file' : '+ Project through a PCA components file'}
             </button>
-            <button data-guide="add-dataset" onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--primary)]'}`}>
+            <button data-guide="add-dataset" onClick={handleUpload} disabled={!datasetFile || isUploading} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--system-green)]/55 hover:bg-[var(--system-green)]/10 text-[var(--system-green)] cursor-pointer'}`}>
               {isUploading ? "Processing..." : "Add Dataset"}
             </button>
             {(datasetFile || componentsFile || processedData) && (
