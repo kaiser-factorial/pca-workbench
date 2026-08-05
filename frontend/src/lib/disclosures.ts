@@ -85,14 +85,28 @@ export const DISCLOSURES = {
   group_stats: {
     title: 'How group statistics are computed',
     text:
-      'Standard deviations are population values, dividing by n rather than n-1. Eta-squared is the share of variance accounted for by group membership; omega-squared is the same quantity corrected for the upward bias that grows with the number of groups, and is the one to prefer when there are many. Both are descriptive effect sizes, not significance tests, and a sizable value can be driven by one small extreme group — so always read them alongside the per-group means and ns. Comparing by a column with one row per group is refused: eta-squared would be exactly 1.000 by construction.',
+      'Standard deviations here are sample values, dividing by n-1 — the reporting convention, since these are numbers you would put in a manuscript. (The PCA and the components projection use the population form internally, matching scikit-learn; that is a different job.) Eta-squared is the share of variance accounted for by group membership; omega-squared is the same quantity corrected for the upward bias that grows with the number of groups, and is the one to prefer when there are many. Both are descriptive effect sizes, not significance tests, and a sizable value can be driven by one small extreme group — so always read them alongside the per-group means and ns. Comparing by a column with one row per group is refused: eta-squared would be exactly 1.000 by construction.',
     methodsTopic: 'eta_squared',
+  },
+
+  missing_value_codes: {
+    title: 'Numbers that are really missing-value codes',
+    text:
+      'SPSS, Qualtrics and most survey platforms write "refused" or "not applicable" as out-of-range numbers — -99, -999, 9999 — and a CSV carries no sign that they mean anything special. Read as measurements they land in means, correlations, the PCA and the distances used for clustering. This app flags values that are shaped like those codes AND sit far outside the rest of their column, but it never removes them: which code means what is your knowledge, not the app\'s. If a flagged value is a code, replace it with a blank before analysing. Two cases cannot be detected — a code that falls inside the range of real values, and a negative code in a variable that is negative anyway.',
+    methodsTopic: 'survey_data_notes',
+  },
+
+  scree_full_spectrum: {
+    title: 'The scree chart shows every component',
+    text:
+      'All components are drawn, with the ones you kept solid and the rest faded, because the two rules the methods reference describes both need the full spectrum: the Cattell elbow is invisible if the chart stops at the elbow, and the Kaiser eigenvalue-above-1 count needs every eigenvalue. Kaiser is only shown for a standardized run, where each variable contributes exactly 1 and the threshold means something; it tends to over-extract, so read it beside the elbow rather than instead of it.',
+    methodsTopic: 'how_many_components',
   },
 
   diagnostics_sampled: {
     title: 'Diagnostics run on a sample',
     text:
-      'Silhouette-by-k and the k-distance curve are O(n squared), so on large tables they are computed on a capped sample of rows (1,200 and 2,000 respectively) while the clustering itself runs on everything. Treat them as a starting point for choosing parameters rather than an exact answer.',
+      'Silhouette-by-k and the k-distance curve are O(n squared), so on large tables they are computed on a capped sample of rows (1,200 and 2,000 respectively) while the clustering itself runs on everything. The sample is random but seeded, so repeated runs agree — an evenly-spaced sample would land on one stratum of any file ordered by wave, block or condition. Treat them as a starting point for choosing parameters rather than an exact answer.',
     methodsTopic: 'silhouette',
   },
 } as const satisfies Record<string, Disclosure>;
@@ -103,8 +117,8 @@ export const disclosure = (key: DisclosureKey): Disclosure => DISCLOSURES[key];
 
 /** Ordered for an information page; grouped by where they apply in the app. */
 export const DISCLOSURE_SECTIONS: { heading: string; keys: DisclosureKey[] }[] = [
-  { heading: 'Missing data', keys: ['median_imputation'] },
-  { heading: 'PCA', keys: ['standardize_pca', 'pca_loadings', 'variance_explained'] },
+  { heading: 'Missing data', keys: ['median_imputation', 'missing_value_codes'] },
+  { heading: 'PCA', keys: ['standardize_pca', 'pca_loadings', 'variance_explained', 'scree_full_spectrum'] },
   {
     heading: 'Clustering',
     keys: ['clusters_plotted_axes', 'kmeans_deterministic', 'dbscan_parameters', 'standardize_clustering', 'diagnostics_sampled'],

@@ -5,7 +5,7 @@
 assistant integration; (2) the accuracy of the local analytics and whether the UI represents them honestly.
 **Styled version:** https://claude.ai/code/artifact/2e6fb89b-b69a-4ea0-9f78-fbcbbbe3eff0
 
-71 findings. No source files were changed by this review. Severity legend:
+71 findings. Severity legend:
 
 | Mark | Meaning |
 |---|---|
@@ -13,6 +13,32 @@ assistant integration; (2) the accuracy of the local analytics and whether the U
 | **OPAQUE** | Output is right; the app doesn't tell the user what it did |
 | **EDGE** | Edge case, hardening, or scale ceiling |
 | **OK** | Checked and verified correct — do not "fix" |
+| **FIXED** | Remediated on this branch; the entry keeps the original diagnosis and adds what was done |
+
+---
+
+## Status (updated 2026-08-05, end of remediation)
+
+**66 of 71 findings are fixed on this branch.** Five remain open, every one of them
+deliberately:
+
+| Open | Why it is still open |
+|---|---|
+| **E1 follow-on** (`ccru` → `next@14`) | A dependency decision, not a code fix. It is now the only high-severity block left in `npm audit`. |
+| **F7** (2D is SVG, no `scattergl`) | A build decision with a real trade — `plotly.js-dist-min` roughly doubles the vendored bundle *and* the HTML export that F3 just cut by 43%. A custom bundle is the better answer and is pipeline work. |
+| **F19 / F23** (CSV parse + worker) | `header: true` is what produces the `TooManyFields` / `renamedHeaders` data the C1/C2 warnings are built on. Trading the silent-data-loss machinery for import speed is not a change to make unsupervised. |
+| **F16 (large half)** | Dropping 36 hard-coded 500 ms sleeps needs `_fullLayout.scene._scene` + `gl.readPixels`. Private API. The palette-reuse half is done. |
+| **D7, E6** | Context growth and O(n²) scale cliffs. Real, but neither is reachable at survey scale, and both want a design decision (truncation policy, row-count guard) rather than a patch. |
+
+Two entries below are **corrections to this review's own claims**, kept in place rather
+than quietly edited:
+
+- The Verdict said "all 24 assistant tools were traced and none can put a raw row in a
+  request." That was wrong — see **D8**. Auditing whether a tool *returns* aggregates was
+  the wrong question; the right one is whether an aggregate can **degenerate into rows**
+  on some input.
+- **F17** was filed as "worth one browser check, probably inert either way". It was
+  measured, and the theme-aware plot chrome had never applied at all.
 
 ---
 
@@ -33,6 +59,9 @@ chunk, and zero user-visible strings. `grep -i imput` is the same story. Since u
 documentation currently serves only readers with the source open — or a model that happens to retrieve the right
 chunk.
 
+*(Since remediation: it does now. `disclosures.ts` is the single source behind the `(i)`
+markers, the About dialog and the assistant's system prompt — see B1–B6 and D1.)*
+
 ### Fix these ten first
 
 1. ~~**A3** — `suggest_eps` is off by one, and contradicts the app's own methods reference.~~ **FIXED**
@@ -41,10 +70,10 @@ chunk.
 4. ~~**B1–B3** — the four disclosures (deterministic k-means, median imputation, plotted-axes-only clustering, population sd).~~ **FIXED** — delivered as `disclosures.ts` + `InfoTip`.
 5. ~~**A4** — cluster diagnostics subsample by stride, not at random.~~ **FIXED**
 6. ~~**E1** — `xlsx@0.18.5` has an unfixable-on-npm high-severity advisory, and it parses untrusted user files.~~ **FIXED**
-7. **F1** — the OpenAI SDK and markdown stack ship in the initial bundle.
-8. **F9 + F10** — the rotation loop: drive the camera with `Plotly.relayout` instead of React state, and memoize the assistant panel. Dataset-size-independent.
-9. **F7** — 2D scatter is SVG; the bundle has no `scattergl` module.
-10. **F18, F20, F21** — three near-free wins that change no behaviour.
+7. ~~**F1** — the OpenAI SDK and markdown stack ship in the initial bundle.~~ **FIXED** — initial JS 349 KB → 311 KB.
+8. ~~**F9 + F10** — the rotation loop.~~ **FIXED** — three seconds of rotation now produces zero `plotly_redraw` events.
+9. **F7** — 2D scatter is SVG; the bundle has no `scattergl` module. **Still open** — see Status above.
+10. ~~**F18, F20, F21** — three near-free wins that change no behaviour.~~ **FIXED** — F18 measured 19.8× at 200k × 30, output proven identical.
 
 ---
 
