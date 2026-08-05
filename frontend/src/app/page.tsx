@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2 } from "lucide-react";
 import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
@@ -955,7 +956,12 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                 Missing values are filled with the column median before the decomposition.
                 <InfoTip topic="median_imputation" />
             </p>
-            {pendingRun && (
+            {/* Portalled to <body>: the sidebar is a positioned, scrolling
+                stacking context, so a z-100 backdrop rendered inside it still
+                sits BELOW the plot canvas in <main>. elementFromPoint at the
+                Replace button returned the canvas, and neither Replace nor
+                Cancel could be clicked once a plot was on screen. */}
+            {pendingRun && typeof document !== 'undefined' && createPortal(
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setPendingRun(null)}>
                     <div
                         className={`max-w-sm w-full mx-4 p-4 space-y-3 text-xs bg-[var(--card)] text-[var(--foreground)] ${theme === 'primary' ? 'border-[3px] border-[var(--p-black)]' : 'border border-[var(--system-green)]'}`}
@@ -991,7 +997,8 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                             </button>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body,
             )}
             {lastRun && (
                 <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
