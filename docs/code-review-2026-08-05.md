@@ -175,15 +175,45 @@ catching in the editorial pass queued as HANDOFF Outstanding #2.)
 
 `pca.ts:203-208` · `methods.ts:12, 20` · `page.tsx:2878-2892`
 
-### A9 · OPAQUE — mean and sd are computed *after* median imputation, with no report of how much was imputed
+### A9 · FIXED (2026-08-05) — mean and sd are computed *after* median imputation, with no report of how much was imputed
 
 Imputed cells are pulled to the centre and then counted in the mean and sd, so sd is understated and correlations
 attenuated in proportion to missingness. Standard simple-imputation behaviour, and `pca_caveats` warns about it —
-but the app never states the magnitude. A PCA over a column that is 40% missing looks identical to one over a
-complete column. Report imputed-cell counts per run in the `PcaRun` registry, surfaced in the run message and
-`get_app_state`.
+but the app never stated the magnitude. A PCA over a column that was 40% missing looked identical to one over a
+complete column.
 
-`pca.ts:130-154` · `engine.ts:227-241` · `page.tsx:2143-2146`
+**Resolved.** `runPCA` returns a `MissingReport`, and `countImputed` in `cluster.ts` does the same for the
+clustering axes — one shared shape rather than two counts that could drift. All four result paths report it: both
+Run buttons and both assistant tools. It is stored in the `PcaRun` registry and exposed through `get_app_state`,
+so the assistant can weigh it rather than guess. The wording gives the fraction and names the worst variables,
+because a bare percentage is not actionable:
+
+> …Scores added as PC columns and plotted. **32 of 360 cells (8.9%) were missing and filled with the column
+> median — q2 24/120, q1 8/120.**
+
+Nothing is said when nothing was imputed, so a complete dataset stays quiet.
+
+**Extended: complete-case as an alternative.** `pca_caveats` tells users to check results against complete cases;
+the app previously made that impossible. `runPCA` now takes `missing: 'median' | 'complete'`. Complete-case drops
+any row with a gap across the selected variables and leaves those rows **unscored (null)** rather than fabricating
+a score, so the columnar table keeps its shape; mean, sd and covariance are computed over the survivors only.
+
+Mean imputation was deliberately *not* added: it is the same compromise as median in a different hat, differs in
+the third decimal on Likert items, and would add a parameter users must justify without changing their answer.
+Median is also the better default for skewed and ordinal data. Complete-case answers a genuinely different
+question, which is why it earns a control.
+
+The panel also shows per-variable missing percentages, flags anything over 50% (per `pca_workflow`, where an
+imputed column is mostly one repeated value entering the correlation matrix as a near-constant), and previews how
+many rows complete-case would keep. On a test file with a 90%-missing column that reads *"5 of 100 rows have no
+gaps in this selection — the rest will have no score"* — one badly-covered variable costing 95% of the sample,
+visible before pressing Run rather than after.
+
+Still open: clustering always median-imputes. Complete-case there needs a "not clustered" label plus decisions
+about breakdown denominators and column transfer — a design question rather than a port.
+
+`pca.ts` · `cluster.ts` `countImputed` · `page.tsx` (both run paths, both tools, `get_app_state`) ·
+`disclosures.ts` · tests in `pca.test.ts`, `cluster.test.ts`
 
 ### A10 · EDGE — k is clamped to p but not to rank
 

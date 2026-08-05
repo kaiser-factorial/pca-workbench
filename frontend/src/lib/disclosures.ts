@@ -41,9 +41,9 @@ export const DISCLOSURES = {
   },
 
   median_imputation: {
-    title: 'Missing values are median-imputed',
+    title: 'How missing values are handled',
     text:
-      'Before PCA and clustering, any missing value is replaced with its column median — the row is used rather than dropped. This shrinks variance and attenuates correlations in proportion to how much was imputed, so with substantial missingness check the result against complete cases. Column-by-column missing counts are in the Variables panel.',
+      'Median impute (the default) replaces each gap with that variable\'s median, keeping every row but shrinking variance and attenuating correlations in proportion to how much was filled. Complete cases instead drops any row with a gap in the selected variables, which keeps the covariance structure honest but reduces n and can bias the sample when the missingness is not random. Neither is free — with substantial missingness, run both and compare. Every run reports exactly what it filled or dropped, and in which variables. Clustering always median-imputes.',
     methodsTopic: 'pca_caveats',
   },
 
