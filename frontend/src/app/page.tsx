@@ -11,7 +11,7 @@ import { readTable, listSheets, type SheetInfo } from "@/lib/parse";
 import { asNumber, isNumericColumn } from "@/lib/table";
 import { CSV_BOM, csvCell } from "@/lib/csv";
 import { processUpload } from "@/lib/engine";
-import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed } from "@/lib/cluster";
+import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed, nonNumericAxes } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
@@ -1885,8 +1885,16 @@ export default function Home() {
           const ax = effectiveAxes(activeDataset!, viewMode);
           const rawCols = [processedData.data[ax.x], processedData.data[ax.y]];
           if (ax.z) rawCols.push(processedData.data[ax.z]);
-          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
           const axNames = [ax.x, ax.y, ...(ax.z ? [ax.z] : [])];
+          // Refuse before running: a text axis used to be filled with zeros and
+          // clustered on silently, reporting a full set of sizes (A11).
+          const unusable = nonNumericAxes(rawCols, axNames);
+          if (unusable.length) {
+              setUploadStatus(`Error: ${unusable.map(c => `"${c}"`).join(', ')} ${unusable.length === 1 ? 'has' : 'have'} no numeric values, so ${unusable.length === 1 ? 'it cannot' : 'they cannot'} be used as ${unusable.length === 1 ? 'an axis' : 'axes'} for clustering. Assign a numeric column to each axis first.`);
+              setIsClustering(false);
+              return;
+          }
+          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
           const imp = countImputed(rawCols, axNames);
           const labels = clusterMethod === "DBSCAN"
               ? dbscan(cols, eps, minSamples)
@@ -2491,8 +2499,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (ax.z) rawCols.push(t.data[ax.z]);
           const useEps = opts.eps ?? eps, useMin = opts.min_samples ?? minSamples, useK = opts.k ?? k;
           const useStd = opts.standardize ?? standardize;
+          const axNames = [ax.x, ax.y, ...(ax.z ? [ax.z] : [])];
+          const unusable = nonNumericAxes(rawCols, axNames);
+          if (unusable.length) {
+              return `${unusable.map(c => `"${c}"`).join(', ')} ${unusable.length === 1 ? 'has' : 'have'} no numeric values, so clustering on the current axes would describe nothing. Set the axes to numeric columns first (set_plot), then re-run.`;
+          }
           const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
-          const imp = countImputed(rawCols, [ax.x, ax.y, ...(ax.z ? [ax.z] : [])]);
+          const imp = countImputed(rawCols, axNames);
           const labels = method === 'DBSCAN' ? dbscan(cols, useEps, useMin) : kmeans(cols, useK);
           const newTable: DataTable = {
               columns: t.columns.includes('Cluster') ? t.columns : [...t.columns, 'Cluster'],
@@ -2663,11 +2676,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               return `"${groupCol}" has ${res.nGroups} distinct values across only ${res.overall.n} observations (smallest group n=${res.minGroupN}). Group means are not estimable at that granularity and eta-squared would be inflated to near 1 by construction. Pick a coarser grouping.`;
           }
 
-          const lines = res.groups.map(g => `${g.group}: mean=${g.mean.toFixed(2)}, sd=${g.sd.toFixed(2)}, n=${g.n}`);
+          const lines = res.groups.map(g => `${g.group}: mean=${g.mean.toFixed(2)}, sd=${g.sd == null ? 'n/a' : g.sd.toFixed(2)}, n=${g.n}`);
           // Caveats the number cannot carry on its own.
           const caveats: string[] = [];
           if (res.singletonGroups) {
-              caveats.push(`${res.singletonGroups} group${res.singletonGroups === 1 ? ' has' : 's have'} a single observation, so their sd is 0 by construction rather than by finding`);
+              caveats.push(`${res.singletonGroups} group${res.singletonGroups === 1 ? ' has' : 's have'} a single observation, so no standard deviation exists for ${res.singletonGroups === 1 ? 'it' : 'them'}`);
           }
           if (res.minGroupN < 30) {
               caveats.push(`the smallest group has n=${res.minGroupN}, so its mean is unstable`);
@@ -2675,7 +2688,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (res.etaSquared != null && res.omegaSquared != null && res.etaSquared - res.omegaSquared > 0.05) {
               caveats.push(`eta-squared is inflated here by the number of groups — omega-squared is the corrected figure`);
           }
-          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd.toFixed(2)} [population], n=${res.overall.n}, ${res.nGroups} groups):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'}, omega-squared=${res.omegaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group; descriptive effect sizes, not significance tests).${caveats.length ? ` Note: ${caveats.join('; ')}.` : ''}`;
+          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd == null ? 'n/a' : res.overall.sd.toFixed(2)} [sample, n-1], n=${res.overall.n}, ${res.nGroups} groups):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'}, omega-squared=${res.omegaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group; descriptive effect sizes, not significance tests).${caveats.length ? ` Note: ${caveats.join('; ')}.` : ''}`;
       },
 
       suggestK: (maxK) => {

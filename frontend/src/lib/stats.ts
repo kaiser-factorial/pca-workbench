@@ -58,11 +58,11 @@ export const correlation = (a: Cell[], b: Cell[]): { n: number; pearson: number 
   return { n: pairs.length, pearson, spearman };
 };
 
-export type GroupStat = { group: string; n: number; mean: number; sd: number };
+export type GroupStat = { group: string; n: number; mean: number; /** Sample sd (n-1); null when n = 1. */ sd: number | null };
 
 export type GroupComparison = {
   groups: GroupStat[];
-  overall: { n: number; mean: number; sd: number };
+  overall: { n: number; mean: number; sd: number | null };
   etaSquared: number | null;
   /**
    * Omega-squared: eta² corrected for the upward bias that grows with the
@@ -75,13 +75,13 @@ export type GroupComparison = {
   nGroups: number;
   /** Size of the smallest group, for judging whether the numbers are stable. */
   minGroupN: number;
-  /** Groups with a single observation — their sd is 0 by construction, not by finding. */
+  /** Groups with a single observation — no sample sd exists for them. */
   singletonGroups: number;
 };
 
 // Per-group mean/sd of a numeric column plus eta²/omega² — the standard effect
-// sizes for "does this differ by group". Note sd is the POPULATION sd (divide
-// by n), consistent with the rest of the app.
+// sizes for "does this differ by group". sd here is the SAMPLE sd (n-1); see
+// the note on `stats` below for why this one differs from the rest of the app.
 export const compareGroups = (
   numeric: Cell[], groups: Cell[],
 ): GroupComparison => {
@@ -96,13 +96,24 @@ export const compareGroups = (
     byGroup.get(g)!.push(v);
     all.push(v);
   }
+  // SAMPLE sd (÷ n-1), unlike the rest of the app.
+  //
+  // Everything else here uses the population form, matching sklearn, and that is
+  // right for numbers feeding further computation — the PCA covariance matrix,
+  // z-scoring. These numbers are different: they are a descriptive summary a
+  // researcher copies into a manuscript, where n-1 is the reporting convention,
+  // and they were labelled only "sd" so nobody could tell which they had
+  // (finding A6). n = 1 has no sample sd, so it is null rather than a
+  // conveniently zero-looking 0.
   const stats = (vals: number[]) => {
     const m = vals.reduce((s, v) => s + v, 0) / vals.length;
-    const sd = Math.sqrt(vals.reduce((s, v) => s + (v - m) ** 2, 0) / vals.length);
+    const sd = vals.length > 1
+      ? Math.sqrt(vals.reduce((s, v) => s + (v - m) ** 2, 0) / (vals.length - 1))
+      : null;
     return { n: vals.length, mean: m, sd };
   };
   if (all.length === 0) {
-    return { groups: [], overall: { n: 0, mean: NaN, sd: NaN }, etaSquared: null, omegaSquared: null, nGroups: 0, minGroupN: 0, singletonGroups: 0 };
+    return { groups: [], overall: { n: 0, mean: NaN, sd: null }, etaSquared: null, omegaSquared: null, nGroups: 0, minGroupN: 0, singletonGroups: 0 };
   }
   const overall = stats(all);
   const groupStats: GroupStat[] = Array.from(byGroup.entries())
@@ -178,7 +189,11 @@ export const meanSilhouette = (D: Float64Array, labels: number[]): number => {
   let total = 0, counted = 0;
   for (let i = 0; i < n; i++) {
     const own = clusters.get(labels[i])!;
-    if (own.length <= 1) continue;
+    // Rousseeuw (1987) assigns a singleton s = 0, and that is not a technicality
+    // here: skipping them instead RAISED the mean, most at high k and with
+    // outliers — exactly where suggest_k should be discouraging the user rather
+    // than rewarding them for splitting off one-point clusters (finding A5).
+    if (own.length <= 1) { counted++; continue; }
     let a = 0;
     for (const j of own) if (j !== i) a += D[i * n + j];
     a /= own.length - 1;

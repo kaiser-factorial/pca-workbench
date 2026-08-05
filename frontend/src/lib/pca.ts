@@ -116,11 +116,22 @@ const jacobiEigen = (A: number[][]): { values: number[]; vectors: number[][] } =
   const V: number[][] = Array.from({ length: n }, (_, i) =>
     Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
 
+  // Convergence is measured RELATIVE to the matrix's own scale. The absolute
+  // `sqrt(off) < 1e-12` this replaces is unreachable for a covariance PCA on
+  // large-magnitude columns — income in dollars, reaction times in
+  // milliseconds — so those runs burned all 100 sweeps every time, which at
+  // p ≈ 200 is on the order of 10⁹ operations on the main thread for a result
+  // that had converged in a handful (finding A13). Results were correct, just
+  // paid for many times over.
+  let scale = 0;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) scale += a[i][j] * a[i][j];
+  const tolerance = Math.max(Math.sqrt(scale) * 1e-14, Number.MIN_VALUE);
+
   for (let sweep = 0; sweep < 100; sweep++) {
     let off = 0;
     for (let i = 0; i < n; i++)
       for (let j = i + 1; j < n; j++) off += a[i][j] * a[i][j];
-    if (Math.sqrt(off) < 1e-12) break;
+    if (Math.sqrt(off) <= tolerance) break;
 
     for (let p = 0; p < n - 1; p++) {
       for (let q = p + 1; q < n; q++) {
@@ -293,8 +304,15 @@ export const runPCA = (
   const n = table.nRows;
   if (n < 3) throw new Error('Too few rows for a PCA.');
   // k = 1 is legitimate: it keeps only the first component, the composite-score
-  // workflow (run per item subset, keep the top PC of each as a named score)
-  const k = Math.max(1, Math.min(opts.k ?? 3, p));
+  // workflow (run per item subset, keep the top PC of each as a named score).
+  //
+  // Clamped to the RANK, min(p, n-1), not just to p. With n = 3 and p = 5 the
+  // covariance matrix has rank 2, so components 3 to 5 have numerically-zero
+  // eigenvalues and their scores are floating-point noise — but they were
+  // produced, plotted and reported with a variance-explained figure like any
+  // other (finding A10).
+  const maxRank = Math.max(1, Math.min(p, n - 1));
+  const k = Math.max(1, Math.min(opts.k ?? 3, maxRank));
 
   // Coerce every selected variable once: null marks "not observed as a number",
   // which is what both strategies key off.

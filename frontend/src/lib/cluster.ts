@@ -85,6 +85,18 @@ export const countImputed = (
   };
 };
 
+/**
+ * Refuse to cluster on an axis that holds no numbers at all.
+ *
+ * `median([])` is 0, so `imputeColumns` filled such a column entirely with
+ * zeros: it contributed nothing to any distance, and the run still reported
+ * success with a full set of cluster sizes. A text axis produced six confident
+ * labels and not one word of warning (finding A11). Returns the offending
+ * column names, or [] when everything is usable.
+ */
+export const nonNumericAxes = (cols: (number | string | null)[][], names: string[]): string[] =>
+  names.filter((_, j) => !(cols[j] ?? []).some(v => asNumber(v) !== null));
+
 // Column-wise median imputation so missing axis values don't break distance math.
 //
 // asNumber rather than a typeof check: this used to treat a text-formatted
@@ -184,8 +196,23 @@ export const kmeans = (colData: (number | string | null)[][], k: number): string
         for (let d = 0; d < dim; d++) sums[labels[i]][d] += X[i][d];
       }
       for (let c = 0; c < k; c++) {
-        if (!counts[c]) continue; // empty cluster keeps its center
-        for (let d = 0; d < dim; d++) centers[c][d] = sums[c][d] / counts[c];
+        if (counts[c]) {
+          for (let d = 0; d < dim; d++) centers[c][d] = sums[c][d] / counts[c];
+          continue;
+        }
+        // Empty cluster: relocate to the point furthest from its own centre,
+        // as sklearn does. Keeping the centre instead meant a k = 8 run could
+        // return six labels with gaps in the numbering, and a size list quietly
+        // shorter than k (finding A12). Relocating keeps the promise that k
+        // clusters means k clusters.
+        let worst = 0, worstD = -1;
+        for (let i = 0; i < n; i++) {
+          const d = dist2(X[i], centers[labels[i]]);
+          if (d > worstD) { worstD = d; worst = i; }
+        }
+        centers[c] = X[worst].slice();
+        labels[worst] = c;
+        moved = true;   // the assignment changed, so another pass is owed
       }
       if (!moved) break;
     }

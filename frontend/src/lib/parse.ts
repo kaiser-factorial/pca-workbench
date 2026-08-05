@@ -1,5 +1,6 @@
 import Papa from 'papaparse';
-import { DataTable, rowsToTable, sanitizeCell } from './table';
+import { DataTable, asNumber, rowsToTable, sanitizeCell } from './table';
+import { detectSentinels, describeSentinels } from './sentinels';
 // Types only — importing the worker module for its values would pull SheetJS
 // back into the page bundle and undo the isolation it exists to provide.
 import type { SheetInfo, WorkbookExtract, XlsxRequest, XlsxResponse } from './xlsx.worker';
@@ -318,6 +319,13 @@ export const readTable = async (file: File, opts: { sheet?: string } = {}): Prom
   };
 
   const parsed = await read();
+
+  // Applied here rather than per-format, so CSV, XLSX and Parquet all get it —
+  // an SPSS export is as likely to arrive as a saved .xlsx as a .csv (A14).
+  const sentinelNotes = parsed.table.columns
+    .map(c => describeSentinels(c, detectSentinels((parsed.table.data[c] ?? []).map(asNumber))))
+    .filter((w): w is string => w !== null);
+  if (sentinelNotes.length) parsed.warnings.push(...sentinelNotes);
   // Said afterwards on purpose: it explains a wait the user has just sat
   // through, and warns them off the interactions that will be slow next.
   if (file.size > LARGE_FILE_BYTES) {
