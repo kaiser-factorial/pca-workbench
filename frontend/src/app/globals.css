@@ -364,3 +364,22 @@ body {
     flex-shrink: 0;
   }
 }
+
+/* Methods disclosure popover (InfoTip). Chrome is themed here rather than in
+   the component so it follows the same convention as the puxel accordion:
+   Bauhaus gets the hard offset shadow, Terminal gets a thin green rule and the
+   green glow. The component itself stays theme-agnostic. */
+[data-theme='primary'] .scatterlab-infotip {
+  border-color: var(--p-black);
+  border-width: 2px;
+  box-shadow: 3px 3px 0 var(--p-black);
+}
+
+[data-theme='terminal'] .scatterlab-infotip {
+  border-color: color-mix(in srgb, var(--system-green) 58%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--system-green) 22%, transparent);
+}
+
+[data-theme='terminal'] .scatterlab-infotip > span:first-child {
+  color: var(--system-green);
+}
