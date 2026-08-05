@@ -35,12 +35,12 @@ chunk.
 
 ### Fix these ten first
 
-1. **A3** — `suggest_eps` is off by one, and contradicts the app's own methods reference.
-2. **C1** — PapaParse errors are discarded; ragged rows, unterminated quotes and Qualtrics title rows destroy data silently.
+1. ~~**A3** — `suggest_eps` is off by one, and contradicts the app's own methods reference.~~ **FIXED**
+2. ~~**C1** — PapaParse errors are discarded; ragged rows, unterminated quotes and Qualtrics title rows destroy data silently.~~ **FIXED**
 3. ~~**A7** — `compare_groups` reports η² = 1.000 on an ID column.~~ **FIXED**
-4. **B1–B3** — the four disclosures (deterministic k-means, median imputation, plotted-axes-only clustering, population sd). All four are already written down elsewhere in the repo.
+4. ~~**B1–B3** — the four disclosures (deterministic k-means, median imputation, plotted-axes-only clustering, population sd).~~ **FIXED** — delivered as `disclosures.ts` + `InfoTip`.
 5. ~~**A4** — cluster diagnostics subsample by stride, not at random.~~ **FIXED**
-6. **E1** — `xlsx@0.18.5` has an unfixable-on-npm high-severity advisory, and it parses untrusted user files.
+6. ~~**E1** — `xlsx@0.18.5` has an unfixable-on-npm high-severity advisory, and it parses untrusted user files.~~ **FIXED**
 7. **F1** — the OpenAI SDK and markdown stack ship in the initial bundle.
 8. **F9 + F10** — the rotation loop: drive the camera with `Plotly.relayout` instead of React state, and memoize the assistant panel. Dataset-size-independent.
 9. **F7** — 2D scatter is SVG; the bundle has no `scattergl` module.
@@ -537,6 +537,36 @@ A PNG saved mid-rotation can capture a moving camera.
 
 `page.tsx:1886-1909` vs `1919-1920`
 
+### C14 · FIXED (2026-08-05) — a corrupt XLSX was reported as a problem with the user's data
+
+Found while verifying E1, not by reading the code. SheetJS does not throw on input that is not a spreadsheet:
+handed 4 KB of random bytes it returns a plausible workbook — `SheetNames: ["Sheet1"]`, 28 rows — whose column
+names are the bytes decoded as text. Every downstream check then passed until the plot did not, and the user was
+told:
+
+> Error: Dataset needs at least two numeric columns to plot (or provide a components file).
+
+Which is true, and useless: it sends someone to inspect columns that were never real. A truncated download, a
+file saved as `.xlsx` by something that wrote a different format, a partially-synced cloud file — all land here.
+
+**Resolved.** `xlsxExtractToTable` checks headers for C0 control characters, DEL and U+FFFD, none of which occur
+in a header a human typed in any script. Half or more of the columns matching means the file is not readable, and
+is refused by name:
+
+> Error: "Sheet1" does not contain readable spreadsheet data — most of its column names are binary rather than
+> text. The file is probably corrupt, incompletely downloaded, or not really an XLSX. Try re-exporting it, or
+> save it as CSV.
+
+Below that threshold it warns and still loads, since one damaged header is not a reason to refuse the file. Tab,
+newline and carriage return are excluded from the check — Excel puts all three in wrapped headers — and the
+tests cover CJK, Cyrillic, parenthesised and wrapped headers to hold that line. Confirmed in the browser, and
+confirmed to *fail* against the pre-fix code before being trusted.
+
+Worth noting what is not a bug: a CSV renamed `.xlsx` parses correctly, because SheetJS sniffs the format rather
+than trusting the extension.
+
+`parse.ts` `BINARY_JUNK` / `xlsxExtractToTable` · tests in `parse.test.ts`
+
 ### OK — what the import/export path gets right
 
 BOM and CRLF handled; semicolon, tab and pipe delimiters auto-detected; Parquet BigInt downcast for plotting; the
@@ -617,15 +647,53 @@ actually ran it.
 
 ## E. Dependencies, consistency, coverage
 
-### E1 · WRONG — `xlsx@0.18.5` carries a high-severity advisory with no npm fix
+### E1 · FIXED (2026-08-05) — `xlsx@0.18.5` carries a high-severity advisory with no npm fix
 
-`npm audit` on the pinned version reports prototype pollution (`GHSA-4r6h-8v6p-xvw6`) and ReDoS
-(`GHSA-5pgg-2g8v-p4x9`), severity high, *"No fix available"* — because the npm `xlsx` package is abandoned and
-SheetJS now publishes 0.20.x only from its own registry. This library parses untrusted user-supplied files in the
-browser, which is the exposure these advisories describe. Either move to the SheetJS tarball or document the
-accepted risk explicitly.
+`npm audit` on the pinned version reported prototype pollution (`GHSA-4r6h-8v6p-xvw6`, CVSS 7.8, fixed in 0.19.3)
+and ReDoS (`GHSA-5pgg-2g8v-p4x9`, 7.5, fixed in 0.20.2), both *"No fix available"* — the npm `xlsx` package is
+frozen at 0.18.5 because SheetJS publishes 0.20.x only from its own CDN.
 
-`frontend/package.json` — `"xlsx": "^0.18.5"`
+**Why this one was worth more than a version bump.** The generic advisory says "parses untrusted files". The
+specific exposure here is that `parseXLSX` ran SheetJS on the main thread, in the same origin where
+`AssistantPanel` keeps the user's API key *and* `baseURL` in `localStorage`. Prototype pollution in that realm
+reaches the OpenAI SDK's option handling, and `baseURL` is already a string read from storage — so a polluted
+default is a plausible route to sending the key somewhere else. The ReDoS is self-inflicted only: it hangs the
+user's own tab, and there is no shared server to take down.
+
+**Resolved, in two layers.**
+
+*The version.* `package.json` now points at `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` — the vendor's
+own build, which clears both advisories (`npm audit` no longer lists `xlsx`). The lockfile records the resolved
+URL plus a `sha512` integrity hash, so `npm ci` still verifies the bytes. Verified as a drop-in by running our
+exact call path on both versions and diffing: identical output, including the `__EMPTY` signature the title-row
+warning depends on. It also *removed* 8 transitive packages, since 0.20.x bundles what 0.18.5 split out.
+
+`@e965/xlsx`, the popular npm workaround, was rejected: it is a third-party republish untouched since July 2024,
+and trading the vendor's CDN plus an integrity hash for a stranger's build is a worse supply-chain posture.
+
+*The isolation.* A version bump only closes the bugs we know about. SheetJS is a large parser for a genuinely
+complex format, it will produce another advisory, and because it is off-registry `npm audit` will not be what
+tells us. Workbook parsing therefore moved into a Web Worker (`xlsx.worker.ts`), which is the only module allowed
+to import `xlsx`. A worker realm has no DOM and no `localStorage`, so pollution there corrupts nothing worth
+stealing; the worker is terminated in a `finally` once the parse returns, discarding the realm. What crosses back
+is structured-cloned plain data, which copies own properties as own properties — a poisoned prototype does not
+travel with it. There is deliberately **no main-thread fallback**: a silent one would drop the isolation exactly
+when the environment is unusual. Workers are more widely supported than the WebGL this app already requires.
+
+Verified in a real browser rather than by reading the bundle, since the isolation *is* the deliverable. On upload
+Playwright observes a worker created whose chunk list contains the 348 KB SheetJS chunk, while the page realm
+reports **zero** resources matching `/xlsx|sheet/i` both before and after the parse (worker fetches do not enter
+the page's resource timeline) and no SheetJS global. The workbook itself loaded correctly — 60 rows × 5 columns,
+with the multi-sheet warning intact.
+
+Free side effect: a large workbook no longer blocks the main thread (part of F23).
+
+`package.json` · `package-lock.json` · `xlsx.worker.ts` (new) · `parse.ts` · tests in `parse.test.ts`
+
+**Not fixed, and now the largest remaining audit item:** the `ccru` git dependency pulls in `next@14.2.35`, which
+carries most of the repo's remaining high-severity advisories (plus `postcss`, `sharp`, `undici`). The app itself
+runs `next@16.2.10`, so this is a transitive dev-surface issue rather than shipped code — but it is what
+`npm audit` will keep reporting. Worth its own decision.
 
 ### E2 · OPAQUE — PC-column detection uses three different conventions
 

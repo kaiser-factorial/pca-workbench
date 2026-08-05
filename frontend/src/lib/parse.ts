@@ -1,5 +1,8 @@
 import Papa from 'papaparse';
 import { DataTable, rowsToTable, sanitizeCell } from './table';
+// Types only — importing the worker module for its values would pull SheetJS
+// back into the page bundle and undo the isolation it exists to provide.
+import type { WorkbookExtract, XlsxRequest, XlsxResponse } from './xlsx.worker';
 
 export const SUPPORTED_EXTENSIONS = ['.csv', '.xlsx', '.parquet'];
 
@@ -131,26 +134,47 @@ export const parseCSVText = (text: string): ParsedTable => {
 
 const parseCSV = async (file: File): Promise<ParsedTable> => parseCSVText(await file.text());
 
-const parseXLSX = async (file: File): Promise<ParsedTable> => {
-  const XLSX = await import('xlsx');
-  const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-  const sheetName = wb.SheetNames[0];
-  const sheet = wb.Sheets[sheetName];
-  if (!sheet) throw new Error('Workbook has no sheets');
-  const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet, { defval: null });
-  const columns = Object.keys(rows[0] ?? {});
+// C0 control characters, DEL, and the Unicode replacement character. None of
+// these occur in a header a human typed, in any script — so they are the
+// signature of bytes being read as text that were never text. Tab, newline and
+// carriage return are deliberately excluded: Excel puts them in wrapped headers.
+// eslint-disable-next-line no-control-regex
+const BINARY_JUNK = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/;
+
+// Everything below operates on the plain data the worker sends back, never on
+// SheetJS objects — see xlsx.worker.ts for why that boundary exists. Split out
+// as a pure function for the same reason parseCSVText is: the warnings are the
+// part worth testing, and they should not need a Worker to exercise.
+export const xlsxExtractToTable = ({ sheetNames, sheetName, rows, columns }: WorkbookExtract): ParsedTable => {
+  // SheetJS does not throw on a file that is not a spreadsheet: handed random
+  // bytes it returns a plausible-looking workbook whose headers are binary
+  // garbage. The failure then surfaced downstream as "needs at least two
+  // numeric columns", which sends the user to check their data when the real
+  // problem is that the file is corrupt, truncated, or not an XLSX at all.
+  const junk = columns.filter(c => BINARY_JUNK.test(c));
+  if (junk.length && junk.length >= columns.length / 2) {
+    throw new Error(
+      `"${sheetName}" does not contain readable spreadsheet data — most of its column names are binary rather than text. The file is probably corrupt, incompletely downloaded, or not really an XLSX. Try re-exporting it, or save it as CSV.`
+    );
+  }
+
   if (!columns.length) {
     // Naming the other sheets matters: a Readme-then-Data workbook is common,
     // and "First sheet is empty" alone sends the user looking in the wrong place.
-    const others = wb.SheetNames.slice(1);
+    const others = sheetNames.slice(1);
     throw new Error(
       `Sheet "${sheetName}" is empty.${others.length ? ` This workbook also contains ${others.map(s => `"${s}"`).join(', ')} — only the first sheet is read, so move the data there or save it as its own file.` : ''}`
     );
   }
 
   const warnings: string[] = [];
-  if (wb.SheetNames.length > 1) {
-    warnings.push(`Only the first sheet ("${sheetName}") was read. This workbook also contains ${wb.SheetNames.slice(1).map(s => `"${s}"`).join(', ')}.`);
+  if (sheetNames.length > 1) {
+    warnings.push(`Only the first sheet ("${sheetName}") was read. This workbook also contains ${sheetNames.slice(1).map(s => `"${s}"`).join(', ')}.`);
+  }
+  // Below the refusal threshold, say it rather than silently keeping a column
+  // the user cannot match to anything in their sheet.
+  if (junk.length) {
+    warnings.push(`${plural(junk.length, 'column name')} contains characters that are not readable text, which usually means the header row was misread. Check that the columns line up with your sheet.`);
   }
   // SheetJS invents __EMPTY / __EMPTY_1 keys for header cells that are blank,
   // which is the signature of a title line sitting above the real header.
@@ -161,6 +185,34 @@ const parseXLSX = async (file: File): Promise<ParsedTable> => {
 
   const table = rowsToTable(rows, columns);
   return { table, warnings: [...warnings, ...numericTextWarnings(table)] };
+};
+
+// Parse the workbook in a worker and terminate it, so SheetJS never executes in
+// the realm holding the assistant's API key. There is deliberately NO
+// main-thread fallback: a silent one would drop the isolation exactly when the
+// environment is unusual, which is the wrong direction to fail. Workers are more
+// widely supported than the WebGL this app already requires, so a browser that
+// cannot run one cannot run the app either.
+const parseXLSX = async (file: File): Promise<ParsedTable> => {
+  if (typeof Worker === 'undefined') {
+    throw new Error('This browser cannot read XLSX files (no Web Worker support). Save the sheet as CSV instead.');
+  }
+  const worker = new Worker(new URL('./xlsx.worker.ts', import.meta.url), { type: 'module' });
+  try {
+    const buffer = await file.arrayBuffer();
+    const res = await new Promise<XlsxResponse>((resolve, reject) => {
+      worker.onmessage = (e: MessageEvent<XlsxResponse>) => resolve(e.data);
+      // A worker that dies mid-parse resolves nothing; without this the caller
+      // waits forever on a spinner rather than seeing the failure.
+      worker.onerror = (e) => reject(new Error(e.message || 'The XLSX reader crashed.'));
+      worker.onmessageerror = () => reject(new Error('The XLSX reader returned data that could not be read.'));
+      worker.postMessage({ buffer } satisfies XlsxRequest, [buffer]);
+    });
+    if (!res.ok) throw new Error(res.error);
+    return xlsxExtractToTable(res.extract);
+  } finally {
+    worker.terminate();
+  }
 };
 
 const parseParquet = async (file: File): Promise<ParsedTable> => {

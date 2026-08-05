@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCSVText, readTable } from '../parse';
+import { parseCSVText, readTable, xlsxExtractToTable } from '../parse';
 
 // parse.ts had no tests, which is why every silent-data-loss path in the review
 // (C1–C3, C7) went unnoticed. These assert the WARNINGS, not just the table:
@@ -130,5 +130,55 @@ describe('readTable — dispatch', () => {
 
   it('rejects input with no usable header', () => {
     expect(() => parseCSVText('\n\n')).toThrow(/No columns found/);
+  });
+});
+
+// SheetJS does not throw on non-spreadsheet input: given random bytes it
+// returns a workbook whose headers are decoded binary, and the app then
+// reported "needs at least two numeric columns" — pointing the user at their
+// data when the real problem was the file. These use the extract shape the
+// worker posts back, so neither a Worker nor SheetJS is needed to exercise them.
+describe('xlsxExtractToTable — a corrupt workbook is named as corrupt (finding C14)', () => {
+  const extract = (columns: string[], sheetNames = ['Sheet1']) => ({
+    sheetNames,
+    sheetName: sheetNames[0],
+    columns,
+    rows: [Object.fromEntries(columns.map(c => [c, 1]))],
+  });
+
+  it('refuses a sheet whose headers are mostly binary', () => {
+    expect(() => xlsxExtractToTable(extract(['{\x01\xe70', '\x1d\xfa[', 'a', '\x00\x07'])))
+      .toThrow(/does not contain readable spreadsheet data/);
+  });
+
+  it('names the file rather than the data as the problem', () => {
+    expect(() => xlsxExtractToTable(extract(['\x02\x03', '��'])))
+      .toThrow(/corrupt, incompletely downloaded, or not really an XLSX/);
+  });
+
+  it('warns rather than refuses when only one header is damaged', () => {
+    const { warnings, table } = xlsxExtractToTable(extract(['height', 'weight', 'sc\x00re']));
+    expect(warnsAbout(warnings, 'not readable text')).toBe(true);
+    expect(table.columns).toHaveLength(3);   // still loaded, just flagged
+  });
+
+  it('leaves ordinary headers alone, including non-Latin and wrapped ones', () => {
+    // Excel puts newlines and tabs in wrapped headers, and plenty of real files
+    // are not in Latin script — none of that is corruption.
+    const { warnings } = xlsxExtractToTable(
+      extract(['身長', 'вес', 'score (kg)', 'line one\nline two', 'a\tb']),
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  it('still reports the other things it silently did', () => {
+    const { warnings } = xlsxExtractToTable(extract(['a', 'b'], ['Data', 'Readme']));
+    expect(warnsAbout(warnings, 'only the first sheet')).toBe(true);
+    expect(warnsAbout(warnings, 'readme')).toBe(true);
+  });
+
+  it('names the other sheets when the first one is empty', () => {
+    expect(() => xlsxExtractToTable({ sheetNames: ['Empty', 'Actual'], sheetName: 'Empty', columns: [], rows: [] }))
+      .toThrow(/also contains "Actual"/);
   });
 });
