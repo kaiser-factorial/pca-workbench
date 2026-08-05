@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from '../cluster';
+import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed } from '../cluster';
 
 describe('zscoreCellColumns', () => {
   it('produces mean ≈ 0, sd ≈ 1 and preserves nulls', () => {
@@ -101,5 +101,23 @@ describe('dbscan', () => {
     // The UI slider maxes at eps=5, which is meaningless on income-scale axes.
     const income = Array.from({ length: 60 }, (_, i) => 20000 + i * 900);
     expect(dbscan([income], 5, 5).every(l => l === 'Noise')).toBe(true);
+  });
+});
+
+describe('countImputed (finding A9)', () => {
+  it('counts missing coordinates per axis and in total', () => {
+    const imp = countImputed([[1, 2, null, 4], [1, null, null, 4]], ['X', 'Y']);
+    expect(imp.cells).toBe(3);
+    expect(imp.total).toBe(8);
+    expect(imp.byVariable).toEqual([{ var: 'Y', n: 2 }, { var: 'X', n: 1 }]);
+  });
+
+  it('counts non-numeric cells, not just nulls — they are imputed the same way', () => {
+    const imp = countImputed([[1, 'n/a', 3]], ['X']);
+    expect(imp.cells).toBe(1);
+  });
+
+  it('says nothing about complete axes', () => {
+    expect(countImputed([[1, 2, 3], [4, 5, 6]], ['X', 'Y'])).toMatchObject({ cells: 0, byVariable: [] });
   });
 });

@@ -48,6 +48,30 @@ export const suggestStandardize = (cols: (number | null)[][], names: string[]): 
   return hi / lo > 3;
 };
 
+// What imputeColumns below will have to fill in, per column and in total.
+// Exported so the call sites can report it: clustering silently substitutes the
+// median for every missing coordinate, which pulls those rows toward the centre
+// of the cloud and can decide which cluster they land in.
+export const countImputed = (
+  // Deliberately wider than (number | null)[]: call sites pass raw DataTable
+  // columns, whose cells are number | string | null. Anything not a finite
+  // number is what imputeColumns will replace, so that is what gets counted.
+  cols: (number | string | null)[][], names: string[],
+): { cells: number; total: number; byVariable: { var: string; n: number }[] } => {
+  const n = cols[0]?.length ?? 0;
+  const byVariable: { var: string; n: number }[] = [];
+  cols.forEach((col, j) => {
+    let have = 0;
+    for (const v of col) if (typeof v === 'number') have++;
+    if (have < n) byVariable.push({ var: names[j] ?? `column ${j + 1}`, n: n - have });
+  });
+  return {
+    cells: byVariable.reduce((s, m) => s + m.n, 0),
+    total: n * cols.length,
+    byVariable: byVariable.sort((a, b) => b.n - a.n),
+  };
+};
+
 // Column-wise median imputation so missing axis values don't break distance math
 const imputeColumns = (cols: (number | null)[][]): number[][] => {
   const meds = cols.map(c => median(numericValues(c)));

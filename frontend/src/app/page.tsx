@@ -8,7 +8,7 @@ import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { Accordion, AccordionItem, Separator } from "puxel";
 import { readTable } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
-import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from "@/lib/cluster";
+import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
 import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
@@ -246,6 +246,20 @@ type PcaRun = {
     standardize: boolean;
     savedAt: string;
     varianceExplained: number[];
+    imputed?: { cells: number; total: number; byVariable: { var: string; n: number }[] };
+};
+
+// One sentence naming how much of the input was filled in rather than observed.
+// Returns '' when nothing was, so a complete dataset says nothing at all.
+const imputationNote = (
+    imp: { cells: number; total: number; byVariable: { var: string; n: number }[] } | undefined,
+    nRows: number,
+): string => {
+    if (!imp || imp.cells === 0) return '';
+    const pct = (imp.cells / Math.max(imp.total, 1)) * 100;
+    const worst = imp.byVariable.slice(0, 3).map(m => `${m.var} ${m.n}/${nRows}`).join(', ');
+    const more = imp.byVariable.length > 3 ? `, +${imp.byVariable.length - 3} more` : '';
+    return ` ${imp.cells} of ${imp.total} cells (${pct < 0.1 ? '<0.1' : pct.toFixed(1)}%) were missing and filled with the column median — ${worst}${more}.`;
 };
 
 // A cached upload: processed table, upload-time profile, and its plot-axis choices.
@@ -1764,6 +1778,8 @@ export default function Home() {
           const rawCols = [processedData.data[ax.x], processedData.data[ax.y]];
           if (ax.z) rawCols.push(processedData.data[ax.z]);
           const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          const axNames = [ax.x, ax.y, ...(ax.z ? [ax.z] : [])];
+          const imp = countImputed(rawCols, axNames);
           const labels = clusterMethod === "DBSCAN"
               ? dbscan(cols, eps, minSamples)
               : kmeans(cols, k);
@@ -1776,6 +1792,11 @@ export default function Home() {
           // The pre-cluster coloring is the natural default for composition breakdowns
           if (colorBy !== "Cluster") setBreakdownBy(colorBy);
           setColorBy("Cluster");
+          const sizes = new Map<string, number>();
+          for (const l of labels) sizes.set(l, (sizes.get(l) ?? 0) + 1);
+          setUploadStatus(
+              `${clusterMethod} on ${axNames.join(' · ')} — ${sortCategories(Array.from(sizes.keys())).map(l => `${l}: ${sizes.get(l)}`).join(', ')}.`
+              + imputationNote(imp, processedData.nRows));
       } catch (err: any) {
           setUploadStatus(`Clustering failed: ${err?.message ?? err}`);
       } finally {
@@ -2159,6 +2180,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const run: PcaRun = {
               label: res.label, columns: cols, variables: vars, k: res.k, standardize,
               savedAt: new Date().toISOString(), varianceExplained: res.varianceExplained,
+              imputed: res.imputed,
           };
           setDatasets(prev => prev.map(d => {
               if (d.id !== activeId) return d;
@@ -2188,9 +2210,10 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const replacedNote = res.replaced.length
               ? ` Replaced the previous ${res.label ? `"${res.label}"` : 'unnamed'} run (${res.replaced.join(', ')}).`
               : '';
+          const impNote = imputationNote(res.imputed, t.nRows);
           const msg = res.k === 1
-              ? `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept the top component as composite "${cols[0]}" — ${pct} of variance.${replacedNote} It is plotted on the X axis.`
-              : `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%).${replacedNote} Scores added as ${res.label ? `${res.label}-labeled` : 'PC'} columns and plotted.`;
+              ? `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept the top component as composite "${cols[0]}" — ${pct} of variance.${replacedNote} It is plotted on the X axis.${impNote}`
+              : `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%).${replacedNote} Scores added as ${res.label ? `${res.label}-labeled` : 'PC'} columns and plotted.${impNote}`;
           setUploadStatus(msg);
           return msg;
       } catch (err: any) {
@@ -2258,6 +2281,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               label: r.label || '(unnamed)', columns: r.columns, variables: r.variables,
               standardize: r.standardize, savedAt: r.savedAt,
               varianceExplained: r.varianceExplained.map(v => Math.round(v * 1000) / 1000),
+              imputedCells: r.imputed?.cells ?? 0,
           })),
       }),
 
@@ -2321,6 +2345,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const useEps = opts.eps ?? eps, useMin = opts.min_samples ?? minSamples, useK = opts.k ?? k;
           const useStd = opts.standardize ?? standardize;
           const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
+          const imp = countImputed(rawCols, [ax.x, ax.y, ...(ax.z ? [ax.z] : [])]);
           const labels = method === 'DBSCAN' ? dbscan(cols, useEps, useMin) : kmeans(cols, useK);
           const newTable: DataTable = {
               columns: t.columns.includes('Cluster') ? t.columns : [...t.columns, 'Cluster'],
@@ -2342,7 +2367,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const stdNote = useStd
               ? ` Variables were z-scored first${method === 'DBSCAN' ? ' (eps is in SD units)' : ''}.`
               : ' Variables were used on their raw scales.';
-          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote} Points are now colored by cluster.`;
+          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote}${imputationNote(imp, t.nRows)} Points are now colored by cluster.`;
       },
 
       getClusterBreakdown: (attribute) => {

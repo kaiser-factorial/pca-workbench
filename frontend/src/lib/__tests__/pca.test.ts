@@ -173,3 +173,47 @@ describe('runPCA — labeled runs and composites', () => {
     expect(res.columns).toEqual(['COMP_sensation_seeking']);
   });
 });
+
+describe('runPCA — imputation accounting (finding A9)', () => {
+  const table: DataTable = {
+    columns: ['a', 'b', 'c'],
+    data: {
+      a: [1, 2, null, 4, 5, 6],          // 1 missing
+      b: [2, 4, 6, null, 10, null],      // 2 missing
+      c: [1, 2, 3, 4, 5, 6],             // complete
+    },
+    nRows: 6,
+  };
+
+  it('counts imputed cells against the full variable x row grid', () => {
+    const res = runPCA(table, ['a', 'b', 'c'], { k: 2 });
+    expect(res.imputed.cells).toBe(3);
+    expect(res.imputed.total).toBe(18); // 3 variables x 6 rows
+  });
+
+  it('names the affected variables worst-first and omits complete ones', () => {
+    const res = runPCA(table, ['a', 'b', 'c'], { k: 2 });
+    expect(res.imputed.byVariable).toEqual([{ var: 'b', n: 2 }, { var: 'a', n: 1 }]);
+  });
+
+  it('reports nothing when the selected variables are complete', () => {
+    const res = runPCA(table, ['c', 'a'], { k: 2 });
+    expect(res.imputed.byVariable.map(m => m.var)).toEqual(['a']);
+    const clean: DataTable = {
+      columns: ['p', 'q'], data: { p: [1, 2, 3, 4], q: [2, 1, 4, 3] }, nRows: 4,
+    };
+    expect(runPCA(clean, ['p', 'q'], { k: 2 }).imputed.cells).toBe(0);
+  });
+
+  it('counts rows past the end of a short column as imputed', () => {
+    const short: DataTable = {
+      columns: ['x', 'y'],
+      data: { x: [1, 2, 3, 4], y: [1, 3] }, // y stops early
+      nRows: 4,
+    };
+    expect(runPCA(short, ['x', 'y'], { k: 2 }).imputed).toMatchObject({
+      cells: 2,
+      byVariable: [{ var: 'y', n: 2 }],
+    });
+  });
+});

@@ -15,6 +15,15 @@ export type PCAResult = {
   cumulative: number[];
   variables: string[];
   k: number;
+  /**
+   * How much of the input was filled in rather than observed. `cells` counts
+   * imputed values across the whole variable x row grid; `byVariable` lists only
+   * the variables that needed any, worst first. Reported because median
+   * imputation shrinks variance and attenuates correlations in proportion to
+   * how much was imputed — "we impute" is a disclaimer, "we imputed 47 of 1,800
+   * cells" is a disclosure the reader can act on.
+   */
+  imputed: { cells: number; total: number; byVariable: { var: string; n: number }[] };
 };
 
 // Run labels become column-name fragments — keep them word-shaped
@@ -129,6 +138,7 @@ export const runPCA = (
 
   // median-impute, center, optionally scale (population sd, sklearn-style)
   const X: number[][] = Array.from({ length: n }, () => new Array(p));
+  const missingByVar: { var: string; n: number }[] = [];
   for (let j = 0; j < p; j++) {
     const raw = (table.data[variables[j]] ?? []).map(v => {
       if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -137,6 +147,9 @@ export const runPCA = (
     });
     const nums = numericValues(raw);
     if (nums.length === 0) throw new Error(`"${variables[j]}" has no numeric values.`);
+    // Anything not observed as a finite number gets the median, including rows
+    // past the end of a short column.
+    if (nums.length < n) missingByVar.push({ var: variables[j], n: n - nums.length });
     const med = median(nums);
     let sum = 0;
     for (let i = 0; i < n; i++) {
@@ -213,5 +226,11 @@ export const runPCA = (
     return acc;
   }, []);
 
-  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k };
+  const imputed = {
+    cells: missingByVar.reduce((s, m) => s + m.n, 0),
+    total: n * p,
+    byVariable: missingByVar.sort((a, b) => b.n - a.n),
+  };
+
+  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k, imputed };
 };
