@@ -359,7 +359,7 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'suggest_eps',
       description:
-        'DBSCAN diagnostics on the currently plotted axes: percentiles of the k-distance curve (distance to each point\'s min_samples-th neighbor). A good eps usually sits near the curve\'s knee, around the 90th-95th percentile. Use before run_clustering with DBSCAN.',
+        'DBSCAN diagnostics on the currently plotted axes: percentiles of the k-distance curve. Because min_samples counts the point itself, the curve is the distance to each point\'s (min_samples - 1)-th nearest neighbour — i.e. the eps at which that point becomes a core point. A good eps usually sits near the curve\'s knee, around the 90th-95th percentile. Requires min_samples >= 2. Computed on up to 2000 sampled rows, so treat it as a starting point rather than an exact answer. Use before run_clustering with DBSCAN.',
       parameters: {
         type: 'object',
         properties: {

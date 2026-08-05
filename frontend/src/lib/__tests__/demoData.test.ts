@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { runPCA } from '../pca';
 import { rowsToTable, type DataTable } from '../table';
+
+// Resolved against this file, not the cwd, so the suite passes wherever vitest
+// is invoked from (CI runs it with working-directory: frontend, but a plain
+// `npx vitest run --root frontend` from the repo root must work too).
+const IRIS_CSV = fileURLToPath(new URL('../../../public/demo/iris.csv', import.meta.url));
 
 // The demo file must stay Fisher's iris, not the UCI/Kaggle mirror.
 //
@@ -17,7 +23,7 @@ import { rowsToTable, type DataTable } from '../table';
 // catch an error shared between the implementation and its own assumptions.
 
 const loadIris = (): DataTable => {
-  const lines = readFileSync('public/demo/iris.csv', 'utf8').replace(/\r\n/g, '\n').trimEnd().split('\n');
+  const lines = readFileSync(IRIS_CSV, 'utf8').replace(/\r\n/g, '\n').trimEnd().split('\n');
   const columns = lines[0].split(',');
   const rows = lines.slice(1).map(line => {
     const cells = line.split(',');

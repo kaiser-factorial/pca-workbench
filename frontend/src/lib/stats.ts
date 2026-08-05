@@ -168,15 +168,28 @@ export const silhouetteByK = (
   return out;
 };
 
-// k-distance curve for DBSCAN eps selection: each point's distance to its
-// k-th nearest neighbor, summarized as percentiles. eps near the "knee"
-// (between the 90th and 95th percentile) is a common starting point.
+// k-distance curve for DBSCAN eps selection, summarized as percentiles: eps
+// near the "knee" (between the 90th and 95th percentile) is a common starting
+// point (Ester et al. 1996).
+//
+// The parameter is DBSCAN's `minSamples`, NOT the neighbor rank, because the
+// two differ by one and getting it wrong makes every suggestion too generous.
+// `dbscan` counts the point itself toward minSamples (matching sklearn), so a
+// point becomes a core point once minSamples - 1 OTHER points lie within eps —
+// which means the curve to read is the distance to the (minSamples - 1)-th
+// nearest neighbor, excluding self. That is the convention the methods
+// reference documents (`standardize_clustering` / `dbscan_interpretation`).
+//
+// minSamples <= 1 has no meaningful curve: every point is its own core point at
+// any eps, so eps stops controlling anything. Returns null rather than guessing.
 export const kDistancePercentiles = (
-  cols: Cell[][], k: number,
-): { n: number; percentiles: Record<string, number> } | null => {
+  cols: Cell[][], minSamples: number,
+): { n: number; kthNeighbor: number; percentiles: Record<string, number> } | null => {
+  const kth = Math.floor(minSamples) - 1;   // neighbor rank, excluding self
+  if (kth < 1) return null;
   const X = toMatrix(cols, 2000);
   const n = X.length;
-  if (n < k + 1) return null;
+  if (n < kth + 1) return null;
   const D = distMatrix(X);
   const kd: number[] = [];
   const row = new Float64Array(n - 1);
@@ -184,12 +197,13 @@ export const kDistancePercentiles = (
     let m = 0;
     for (let j = 0; j < n; j++) if (j !== i) row[m++] = D[i * n + j];
     const sorted = Array.from(row).sort((a, b) => a - b);
-    kd.push(sorted[k - 1]);
+    kd.push(sorted[kth - 1]);
   }
   kd.sort((a, b) => a - b);
   const pct = (p: number) => kd[Math.min(n - 1, Math.floor((p / 100) * n))];
   return {
     n,
+    kthNeighbor: kth,
     percentiles: { p50: pct(50), p75: pct(75), p90: pct(90), p95: pct(95), max: kd[n - 1] },
   };
 };

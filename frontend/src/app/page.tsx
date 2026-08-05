@@ -2471,10 +2471,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const ax = effectiveAxes(activeDataset, viewMode);
           const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
           const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          if (ms < 2) return 'min_samples must be at least 2 for an eps suggestion — at min_samples=1 every point is its own core point, so eps stops affecting the result.';
           const res = kDistancePercentiles(cols, ms);
           if (!res) return 'Too few complete rows on the current axes.';
           const p = res.percentiles;
-          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}, n=${res.n}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise.`;
+          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. These are distances to each point's ${res.kthNeighbor}-nearest neighbour — min_samples counts the point itself, so that is the eps at which a point becomes a core point. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise. Computed on ${res.n} rows${res.n >= 2000 ? ' (an evenly-spaced sample, capped at 2000)' : ''}.`;
       },
 
       switchDataset: (name) => {

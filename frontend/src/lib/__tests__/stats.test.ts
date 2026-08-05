@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { correlation, compareGroups, silhouetteByK, kDistancePercentiles } from '../stats';
-import { kmeans } from '../cluster';
+import { dbscan, kmeans } from '../cluster';
 
 describe('correlation', () => {
   it('is +1 / -1 for perfectly linear data', () => {
@@ -63,5 +63,39 @@ describe('clustering diagnostics', () => {
     expect(p.p75).toBeLessThanOrEqual(p.p90);
     expect(p.p90).toBeLessThanOrEqual(p.p95);
     expect(p.p95).toBeLessThanOrEqual(p.max);
+  });
+});
+
+// The eps suggestion is only useful if the eps it names is the eps at which
+// DBSCAN actually forms clusters. Nothing tied the two together before, which
+// is how an off-by-one survived: the curve was read at the min_samples-th
+// neighbour when min_samples counts the point itself, so every suggested eps
+// was one neighbour too generous.
+describe('kDistancePercentiles agrees with dbscan on what eps means', () => {
+  // Unit-spaced 1-D lattice: an interior point has neighbours at 1, 2, 3, …
+  // so for min_samples=3 (self + 2 others) the answer is exactly 1.0.
+  const lattice = [Array.from({ length: 40 }, (_, i) => i)];
+
+  it('reads the curve at the (min_samples - 1)-th neighbour', () => {
+    expect(kDistancePercentiles(lattice, 3)!.kthNeighbor).toBe(2);
+    expect(kDistancePercentiles(lattice, 3)!.percentiles.p50).toBeCloseTo(1, 9);
+    expect(kDistancePercentiles(lattice, 4)!.percentiles.p50).toBeCloseTo(2, 9);
+  });
+
+  it('the suggested eps is one at which points really do become core points', () => {
+    for (const minSamples of [3, 4, 5, 6]) {
+      const eps = kDistancePercentiles(lattice, minSamples)!.percentiles.p50;
+      // At that eps, at least half the points must be clustered rather than Noise
+      const clustered = dbscan(lattice, eps, minSamples).filter(l => l !== 'Noise').length;
+      expect(clustered).toBeGreaterThanOrEqual(lattice[0].length / 2);
+      // ...and a hair under it must not be enough for the median point
+      const below = dbscan(lattice, eps * 0.99, minSamples).filter(l => l !== 'Noise').length;
+      expect(below).toBeLessThan(clustered);
+    }
+  });
+
+  it('refuses min_samples below 2, where eps stops meaning anything', () => {
+    expect(kDistancePercentiles(lattice, 1)).toBeNull();
+    expect(kDistancePercentiles(lattice, 0)).toBeNull();
   });
 });

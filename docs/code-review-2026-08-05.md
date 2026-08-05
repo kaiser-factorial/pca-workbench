@@ -98,7 +98,7 @@ the implementation and its own assumptions.
 
 `frontend/public/demo/iris.csv` rows 35, 38 · `iris.SOURCE.md` · `frontend/src/lib/__tests__/demoData.test.ts`
 
-### A3 · WRONG — `suggest_eps` is off by one against the app's own DBSCAN core rule
+### A3 · FIXED (2026-08-05) — `suggest_eps` was off by one against the app's own DBSCAN core rule
 
 `neighbors(i)` includes `i` itself, so a point becomes core once `min_samples − 1` *other* points are within eps —
 the sklearn convention. But `kDistancePercentiles` takes `sorted[k-1]` with `k = min_samples`, the distance to the
@@ -110,7 +110,21 @@ that should stay separate. `methods.ts:40` already states the correct rule — *
 k = min_samples − 1"* — so the reference and the implementation disagree, and the tool description matches the
 implementation.
 
-`stats.ts:207-228` (line 220) · `cluster.ts:67-78` · `methods.ts:40` · `assistant.ts:362`
+**Resolved.** `kDistancePercentiles` now takes `minSamples` rather than a neighbour rank and converts internally
+to `minSamples - 1`, so the DBSCAN convention lives in one place and a caller cannot repeat the mistake — it had
+exactly one production caller, whose only purpose was this. It returns the resolved `kthNeighbor` so the tool
+result can state which curve it read, and returns `null` for `minSamples < 2`, where eps stops controlling
+anything because every point is its own core point. The `suggest_eps` result string and the tool description now
+say the same thing the code does, and disclose the 2,000-row sampling cap.
+
+`methods.ts` needed no change: its stated convention — *"the k-distance curve computed at k = min_samples − 1"* —
+was right all along. The implementation now matches the documentation rather than the reverse.
+
+Regression tests were checked against the old behaviour before being trusted: reintroducing the off-by-one fails
+all three. The key one asserts the property whose absence let this survive — that the eps the diagnostic names is
+an eps at which DBSCAN really does form clusters, and that a hair under it does not.
+
+`stats.ts:171-206` · `page.tsx:2467-2479` · `assistant.ts:362` · tests in `stats.test.ts`, `cluster.test.ts`
 
 ### A4 · WRONG — cluster diagnostics subsample by stride, not at random
 
@@ -517,11 +531,20 @@ broken build reaches Vercel before it reaches CI, which matters more than usual 
 
 `.github/workflows/test.yml`
 
-### E4 · EDGE — the untested files are where the confirmed bugs are
+### E4 · PARTLY FIXED (2026-08-05) — the untested files are where the confirmed bugs are
 
 Zero tests for `dbscan`, `parse.ts`, and `engine.ts`'s components-projection path — the three places every
-confirmed correctness bug in this review lives. Spearman's midrank tie handling is also untested. The 45 existing
-tests are good; they cover the parts that turned out to be right.
+confirmed correctness bug in this review lives. Spearman's midrank tie handling is also untested. The 45 original
+tests are good; they covered the parts that turned out to be right.
+
+**`dbscan` now has coverage** (6 cases): that `minSamples` counts the point itself, blob separation with a lone
+outlier labelled Noise, border points being absorbed without expanding through them, determinism, median
+imputation of a missing coordinate, and the raw-scale eps failure from B5. Plus the cross-check tying
+`kDistancePercentiles` to actual `dbscan` behaviour. **`demoData.test.ts`** adds the suite's first external ground
+truth for `runPCA`.
+
+Still open: `parse.ts` and `engine.ts`'s components path — where C1, C3, C4, C5 and C10 live — and Spearman ties.
+Suite is now 59 tests.
 
 `frontend/src/lib/__tests__/`
 

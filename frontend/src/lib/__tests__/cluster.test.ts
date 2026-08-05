@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kmeans, zscoreCellColumns, suggestStandardize } from '../cluster';
+import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from '../cluster';
 
 describe('zscoreCellColumns', () => {
   it('produces mean ≈ 0, sd ≈ 1 and preserves nulls', () => {
@@ -51,5 +51,55 @@ describe('kmeans with pre-scaled columns', () => {
   it('z-scored: the structured small column wins instead', () => {
     // First half vs second half — B's split, unreachable at raw scales
     expect(partition(kmeans(zscoreCellColumns([A, B]), 2))).toBe('aaaabbbb');
+  });
+});
+
+describe('dbscan', () => {
+  // A 1-D unit-spaced lattice: every interior point has exactly two neighbours
+  // at distance 1, so the eps at which it becomes a core point is exactly 1.0
+  // for minSamples=3. Deliberately exact — this is the fixture that pins the
+  // minSamples/neighbour-rank relationship the eps suggestion depends on.
+  const lattice = Array.from({ length: 40 }, (_, i) => i);
+
+  it('counts the point itself toward minSamples, matching sklearn', () => {
+    // minSamples=3 needs self + 2 others, so eps=1 is exactly enough
+    expect(new Set(dbscan([lattice], 1.0, 3))).toEqual(new Set(['Cluster 0']));
+    // ...and one fewer neighbour than that is not
+    expect(dbscan([lattice], 0.99, 3).every(l => l === 'Noise')).toBe(true);
+  });
+
+  it('separates well-separated blobs and labels a lone outlier Noise', () => {
+    const x = [0, 0.1, 0.2, 0.3, 10, 10.1, 10.2, 10.3, 500];
+    const y = x.map(() => 0);
+    const labels = dbscan([x, y], 0.5, 3);
+    expect(new Set(labels.slice(0, 4))).toEqual(new Set(['Cluster 0']));
+    expect(new Set(labels.slice(4, 8))).toEqual(new Set(['Cluster 1']));
+    expect(labels[8]).toBe('Noise');
+  });
+
+  it('assigns border points to a cluster without expanding through them', () => {
+    // 0,1,2 are dense; 3 is within eps of 2 but has too few neighbours itself,
+    // so it joins as a border point and must NOT pull in 4.
+    const x = [0, 0.1, 0.2, 1.2, 2.4];
+    const labels = dbscan([x], 1.0, 3);
+    expect(labels[3]).toBe('Cluster 0');   // border, absorbed
+    expect(labels[4]).toBe('Noise');       // not reached through the border point
+  });
+
+  it('is deterministic — identical input gives identical labels', () => {
+    const x = lattice.map(v => v * 0.37);
+    expect(dbscan([x], 0.5, 3)).toEqual(dbscan([x], 0.5, 3));
+  });
+
+  it('median-imputes a missing coordinate rather than dropping the row', () => {
+    const labels = dbscan([[0, 0.1, 0.2, null, 0.3]], 1.0, 3);
+    expect(labels).toHaveLength(5);
+    expect(labels[3]).not.toBe('Noise'); // imputed to the median, lands in the blob
+  });
+
+  it('labels everything Noise when eps is far too small for the scale', () => {
+    // The UI slider maxes at eps=5, which is meaningless on income-scale axes.
+    const income = Array.from({ length: 60 }, (_, i) => 20000 + i * 900);
+    expect(dbscan([income], 5, 5).every(l => l === 'Noise')).toBe(true);
   });
 });
