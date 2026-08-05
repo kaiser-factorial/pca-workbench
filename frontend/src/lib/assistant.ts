@@ -90,8 +90,8 @@ export type AppBridge = {
   runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string; missing?: 'median' | 'complete' | 'iterative' }) => string;
   correlate: (colA: string, colB: string) => string;
   compareGroups: (numericCol: string, groupCol: string) => string;
-  suggestK: (maxK: number) => string;
-  suggestEps: (minSamples: number) => string;
+  suggestK: (maxK: number, standardize?: boolean) => string;
+  suggestEps: (minSamples: number, standardize?: boolean) => string;
   // app management
   switchDataset: (name: string) => string;
   setCategoryVisibility: (categories: string[], state: 'normal' | 'muted' | 'hidden') => string;
@@ -387,6 +387,7 @@ const TOOLS: ChatCompletionTool[] = [
         type: 'object',
         properties: {
           max_k: { type: 'integer', description: 'Highest k to evaluate (default 8, max 12)' },
+          standardize: { type: 'boolean', description: 'Compute the diagnostic on z-scored axes. Defaults to the current UI toggle. Pass the SAME value you intend to give run_clustering — a recommendation computed on raw scales does not apply to a run performed on z-scores (D2).' },
         },
         additionalProperties: false,
       },
@@ -402,6 +403,7 @@ const TOOLS: ChatCompletionTool[] = [
         type: 'object',
         properties: {
           min_samples: { type: 'integer', description: 'min_samples the user intends to use (default: current setting)' },
+          standardize: { type: 'boolean', description: 'Compute the curve on z-scored axes. Defaults to the current UI toggle. Pass the SAME value you intend to give run_clustering: with standardize on, eps is in standard deviations, and a curve read in raw units names an eps that means something else (D2).' },
         },
         additionalProperties: false,
       },
@@ -566,6 +568,13 @@ You can drive the app with your tools: change plot axes, coloring and marker sha
 
 You see column metadata and aggregate statistics only; you never see raw data rows. Numeric columns come as min/max/mean/sd/quartiles — use those to notice skew, ceiling effects and likely outliers rather than asking for the data. Categorical columns list only values covering at least 5 rows; rareValuesWithheld counts the distinct values held back for being rarer than that, and identifier-like columns list none at all. That is a privacy guarantee, not a gap to work around: never ask the user to paste rows, and if asked about an individual row or participant, explain that you only have access to summaries.
 
+Facts about THIS app that you cannot guess and are likely to get wrong from priors — state them when they come up, without needing to look them up:
+- K-Means here is DETERMINISTIC. It is seeded k-means++ from fixed seeds, best of 10 initialisations, up to 300 iterations, so the same data and the same k always give identical clusters. The usual answer ("no, k-means is randomly initialised") is wrong for this app. Say so, and add that reproducibility is not evidence of stable structure — to test that, vary k and re-run on subsamples.
+- Missing values in CLUSTERING are always median-imputed. In PCA the user chooses: median, regularized iterative PCA (missMDA imputePCA), or complete-case. Every run reports how many cells it filled or how many rows it dropped, and in which variables.
+- Clustering runs on the two or three columns currently on the X, Y and Z axes — nothing else. Choosing the axes IS choosing the features. Good for PC scores, weak for two arbitrary raw columns.
+- compare_groups reports SAMPLE standard deviations (n-1), the reporting convention; the PCA and projection use population (÷n) internally to match scikit-learn. eta-squared is reported alongside omega-squared, which corrects its upward bias — prefer omega-squared when there are many groups.
+- suggest_eps reads the k-distance curve at the (min_samples - 1)-th neighbour, because dbscan counts the point itself toward min_samples. eps is in the units of the plotted axes, or in standard deviations when standardize is on.
+
 Statistical guidance is welcome: help interpret PC loadings, choose sensible eps/min_samples or k, and reason about what cluster compositions suggest — while being clear about the limits of exploratory clustering (results depend on parameters; clusters are descriptive, not proof of latent groups).
 
 When the user asks you to interpret results or asks a methods question (components to keep, whether clusters are meaningful, effect sizes, correlations), call get_methods_reference first and ground your answer in the returned text, mentioning the sources it names. Keep the interpretation tied to their actual numbers.
@@ -678,9 +687,9 @@ export const runAssistantTurn = async (
         case 'compare_groups':
           return bridge.compareGroups(input.numeric_col, input.group_col);
         case 'suggest_k':
-          return bridge.suggestK(Math.min(input?.max_k ?? 8, 12));
+          return bridge.suggestK(Math.min(input?.max_k ?? 8, 12), input?.standardize);
         case 'suggest_eps':
-          return bridge.suggestEps(input?.min_samples);
+          return bridge.suggestEps(input?.min_samples, input?.standardize);
         case 'switch_dataset':
           return bridge.switchDataset(input.name);
         case 'set_category_visibility':

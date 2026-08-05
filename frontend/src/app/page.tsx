@@ -832,7 +832,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     table: DataTable,
     datasetId: number,
     theme: string | undefined,
-    lastRun: { varianceExplained: number[]; cumulative: number[] } | null,
+    lastRun: { varianceExplained: number[]; cumulative: number[]; spectrum?: number[]; eigenvalues?: number[]; standardize?: boolean; k?: number; columns?: string[] } | null,
     runs: PcaRun[],
     onRun: (vars: string[], k: number, standardize: boolean, label: string, missing: MissingStrategy) => void,
 }) => {
@@ -899,9 +899,9 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
         return next;
     });
     const maxK = Math.max(1, Math.min(10, selected.size));
-    const screeMaxBarHeight = lastRun
-        ? Math.max(...lastRun.varianceExplained.map(v => v * 100 * 1.4))
-        : 0;
+    // The full spectrum drives the height, since it is what gets drawn (B4).
+    const screeBars = lastRun ? (lastRun.spectrum ?? lastRun.varianceExplained) : [];
+    const screeMaxBarHeight = screeBars.length ? Math.max(...screeBars.map(v => v * 100 * 1.4)) : 0;
     // Reserve the label line too. A high-variance first component should grow
     // the chart rather than spilling out of a fixed-height bar box.
     const screeHeight = Math.max(56, Math.ceil(screeMaxBarHeight) + 18);
@@ -1056,19 +1056,37 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             {lastRun && (
                 <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
                     <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">
-                        Variance explained<InfoTip topic="variance_explained" />
+                        Scree — all components<InfoTip topic="variance_explained" />
                     </div>
+                    {/* Every component, with the kept ones solid and the rest
+                        faded (B4). Plotting only the kept ones made the chart
+                        useless for the job the methods reference sends people
+                        here to do: the Cattell elbow is invisible if the plot
+                        stops at the elbow. */}
                     <div className="flex items-end gap-1" style={{ height: `${screeHeight}px` }}>
-                        {lastRun.varianceExplained.map((v, i) => (
-                            <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`PC${i + 1}: ${(v * 100).toFixed(1)}% (cumulative ${(lastRun.cumulative[i] * 100).toFixed(1)}%)`}>
-                                <div className="w-full" style={{ height: `${Math.max(2, v * 100 * 1.4)}px`, backgroundColor: theme === 'primary' ? 'var(--p-blue)' : 'var(--system-green)', opacity: 0.85 }} />
-                                <span className="text-[9px] opacity-60">{i + 1}</span>
-                            </div>
-                        ))}
+                        {screeBars.map((v, i) => {
+                            const kept = i < (lastRun.k ?? lastRun.varianceExplained.length);
+                            return (
+                                <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`${lastRun.columns?.[i] ?? `PC${i + 1}`}: ${(v * 100).toFixed(1)}% of variance${lastRun.eigenvalues ? `, eigenvalue ${lastRun.eigenvalues[i].toFixed(2)}` : ''}${kept ? ' — kept' : ' — not kept'}`}>
+                                    <div className="w-full" style={{ height: `${Math.max(2, v * 100 * 1.4)}px`, backgroundColor: theme === 'primary' ? 'var(--p-blue)' : 'var(--system-green)', opacity: kept ? 0.85 : 0.25 }} />
+                                    <span className="text-[9px]" style={{ opacity: kept ? 0.75 : 0.35 }}>{i + 1}</span>
+                                </div>
+                            );
+                        })}
                     </div>
                     <div className="text-[10px] opacity-70">
-                        {lastRun.varianceExplained.map((v, i) => `PC${i + 1} ${(v * 100).toFixed(0)}%`).join(' · ')} — cumulative {(lastRun.cumulative[lastRun.cumulative.length - 1] * 100).toFixed(0)}%
+                        {/* Uses the run's own column names (B6): a COMP_openness
+                            run used to report its bar as "PC1". */}
+                        {lastRun.varianceExplained.map((v, i) => `${lastRun.columns?.[i] ?? `PC${i + 1}`} ${(v * 100).toFixed(0)}%`).join(' · ')} — cumulative {(lastRun.cumulative[lastRun.cumulative.length - 1] * 100).toFixed(0)}%
+                        {screeBars.length > lastRun.varianceExplained.length && (
+                            <> · {screeBars.length - lastRun.varianceExplained.length} more component{screeBars.length - lastRun.varianceExplained.length === 1 ? '' : 's'} shown faded, not kept</>
+                        )}
                     </div>
+                    {lastRun.eigenvalues && lastRun.standardize && (
+                        <div className="text-[10px] opacity-60">
+                            Kaiser criterion (eigenvalue &gt; 1): {lastRun.eigenvalues.filter(e => e > 1).length} component{lastRun.eigenvalues.filter(e => e > 1).length === 1 ? '' : 's'}. A rule of thumb that tends to over-extract — read it beside the elbow, not instead of it.
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -1176,6 +1194,36 @@ const ClusterBreakdown = ({ table, attr, onAttrChange, direction, onDirectionCha
     );
 };
 
+/**
+ * Do these two datasets appear to be the same respondents in the same order?
+ *
+ * The manual panel has always run this and shown "Check (Id): 140/150 agree ⚠"
+ * in red. The assistant path checked only that the row counts matched — and of
+ * everything the assistant can do, an order-mode transfer is the one operation
+ * that silently produces WRONG SCIENCE rather than a wrong-looking picture, so
+ * it should be the best guarded, not the least (finding D3).
+ *
+ * Deliberately avoids PC/axis columns: those are recomputed per dataset and will
+ * legitimately differ even when the respondents really are aligned.
+ */
+const alignmentProbe = (
+  srcTable: DataTable, tgtTable: DataTable,
+): { col: string; agree: number; total: number } | null => {
+  if (srcTable.nRows !== tgtTable.nRows || tgtTable.nRows === 0) return null;
+  const shared = srcTable.columns.filter(c => tgtTable.columns.includes(c));
+  const isAxisLike = (c: string) => /^(PC\d|Axis|Component|COMP_)/i.test(c);
+  const idLike = shared.find(c => /\bid\b/i.test(c) && !isAxisLike(c));
+  const best = idLike ?? shared
+    .filter(c => !isAxisLike(c))
+    .map(c => ({ c, distinct: new Set(srcTable.data[c]).size }))
+    .sort((a, b) => b.distinct - a.distinct)[0]?.c;
+  if (!best) return null;
+  const a = srcTable.data[best], b = tgtTable.data[best];
+  let agree = 0;
+  for (let i = 0; i < tgtTable.nRows; i++) if (String(a[i]) === String(b[i])) agree++;
+  return { col: best, agree, total: tgtTable.nRows };
+};
+
 // Copy a column (typically a Cluster label) from another dataset into the active
 // one, so e.g. romance-space points can be colored by sex-space clusters. The
 // alignment guard matters: silently mis-joining respondents yields wrong science.
@@ -1214,20 +1262,13 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
     // Auto alignment probe (order mode): pick a stable identity/demographic column
     // to sanity-check row order — NOT a PC/axis score, which is recomputed per
     // dataset and will legitimately differ even when respondents ARE aligned.
-    const probe = useMemo(() => {
-        if (!src || !active || mode !== 'order' || !shared.length || !countsMatch) return null;
-        const isAxisLike = (c: string) => /^(PC\d|Axis|Component)/i.test(c);
-        const idLike = shared.find(c => /\bid\b/i.test(c) && !isAxisLike(c));
-        const categoricalCandidates = shared.filter(c => !isAxisLike(c) && getColorFieldKind(src.table.data[c] ?? []) === 'categorical');
-        const best = idLike ?? categoricalCandidates
-            .map(c => ({ c, distinct: new Set(src.table.data[c]).size }))
-            .sort((a, b) => b.distinct - a.distinct)[0]?.c;
-        if (!best) return null;
-        const a = src.table.data[best], b = active.table.data[best];
-        let agree = 0;
-        for (let i = 0; i < active.table.nRows; i++) if (String(a[i]) === String(b[i])) agree++;
-        return { col: best, agree, total: active.table.nRows };
-    }, [mode, shared, countsMatch, src, active]);
+    // Shared with the assistant's transfer_column, so both run the same check (D3).
+    const probe = useMemo(
+        () => (src && active && mode === 'order' && countsMatch
+            ? alignmentProbe(src.table, active.table)
+            : null),
+        [mode, countsMatch, src, active],
+    );
 
     const matchStats = useMemo(() => {
         if (!src || !active || mode !== 'match' || !effKey) return null;
@@ -1673,7 +1714,7 @@ export default function Home() {
   }, [activeId, activeDataset?.table, shapeBy]);
 
   // PCA state: scree info from the most recent in-app run (per active dataset)
-  const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[] } | null>(null);
+  const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[]; spectrum?: number[]; eigenvalues?: number[]; standardize?: boolean; k?: number; columns?: string[] } | null>(null);
   useEffect(() => { setPcaInfo(null); }, [activeId]);
 
   // Clustering state
@@ -2078,6 +2119,31 @@ export default function Home() {
       if (dsInputRef.current) dsInputRef.current.value = "";
       if (compInputRef.current) compInputRef.current.value = "";
   };
+
+  // eps is a DISTANCE in the units of the plotted axes, so a fixed 0.1–5 range
+  // is meaningless on anything but standardized or small-range data (B5). Scale
+  // the slider to the actual spread; the number box beside it removes the
+  // ceiling entirely.
+  const epsSliderMax = useMemo(() => {
+      if (standardize) return 5;                    // z-scores: 5 SD is already generous
+      if (!processedData || !activeDataset) return 5;
+      const ax = effectiveAxes(activeDataset, viewMode);
+      let span = 0;
+      for (const c of [ax.x, ax.y, ax.z].filter(Boolean) as string[]) {
+          let lo = Infinity, hi = -Infinity;
+          for (const raw of processedData.data[c] ?? []) {
+              const v = asNumber(raw);
+              if (v !== null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+          }
+          if (hi > lo) span = Math.max(span, hi - lo);
+      }
+      // Half the widest axis span is well past where DBSCAN merges everything.
+      return span > 0 ? Math.max(1, Math.round(span / 2)) : 5;
+  }, [standardize, processedData, activeDataset, viewMode]);
+  const epsSliderStep = useMemo(
+      () => Math.max(0.001, Math.round((epsSliderMax / 100) * 1000) / 1000),
+      [epsSliderMax],
+  );
 
   const handleCluster = async () => {
       if (clusterMethod === "NONE" || !processedData) return;
@@ -2510,7 +2576,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               };
           }));
           if (res.k < 3) setViewMode('2D');
-          setPcaInfo({ varianceExplained: res.varianceExplained, cumulative: res.cumulative });
+          setPcaInfo({ varianceExplained: res.varianceExplained, cumulative: res.cumulative, spectrum: res.spectrum, eigenvalues: res.eigenvalues, standardize, k: res.k, columns: res.columns });
           const pct = res.varianceExplained.map((v, i) => `${cols[i] ?? `PC${i + 1}`} ${(v * 100).toFixed(0)}%`).join(', ');
           const replacedNote = res.replaced.length
               ? ` Replaced the previous ${res.label ? `"${res.label}"` : 'unnamed'} run (${res.replaced.join(', ')}).`
@@ -2876,32 +2942,38 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd == null ? 'n/a' : res.overall.sd.toFixed(2)} [sample, n-1], n=${res.overall.n}, ${res.nGroups} groups):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'}, omega-squared=${res.omegaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group; descriptive effect sizes, not significance tests).${caveats.length ? ` Note: ${caveats.join('; ')}.` : ''}`;
       },
 
-      suggestK: (maxK) => {
+      suggestK: (maxK, standardizeArg) => {
           const t = latestTable();
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ax = effectiveAxes(activeDataset, viewMode);
           // Diagnostics must see the same units the clustering will use, or the
-          // suggestion answers a different question than the run
+          // suggestion answers a different question than the run. run_clustering
+          // accepts an explicit standardize override while these two only read
+          // the UI toggle, so suggest_k → run_clustering(standardize: true) gave
+          // a recommendation computed on raw scales for a run on z-scores —
+          // exactly the mismatch this comment claims to prevent (D2).
+          const useStd = standardizeArg ?? standardize;
           const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
-          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
           const rows = silhouetteByK(cols, kmeans, maxK);
           if (!rows.length) return 'Too few complete rows on the current axes to evaluate.';
           const best = rows.reduce((a, b) => (b.silhouette > a.silhouette ? b : a));
-          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ', z-scored' : ', raw scales'}:\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
+          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${useStd ? ', z-scored' : ', raw scales'} — pass standardize=${useStd} to run_clustering to match:\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
       },
 
-      suggestEps: (minSamplesArg) => {
+      suggestEps: (minSamplesArg, standardizeArg) => {
           const t = latestTable();
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ms = minSamplesArg ?? minSamples;
+          const useStd = standardizeArg ?? standardize;   // see suggestK (D2)
           const ax = effectiveAxes(activeDataset, viewMode);
           const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
-          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
           if (ms < 2) return 'min_samples must be at least 2 for an eps suggestion — at min_samples=1 every point is its own core point, so eps stops affecting the result.';
           const res = kDistancePercentiles(cols, ms);
           if (!res) return 'Too few complete rows on the current axes.';
           const p = res.percentiles;
-          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. These are distances to each point's ${res.kthNeighbor}-nearest neighbour — min_samples counts the point itself, so that is the eps at which a point becomes a core point. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise. Computed on ${res.n} rows${res.n >= 2000 ? ' (an evenly-spaced sample, capped at 2000)' : ''}.`;
+          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${useStd ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. These are distances to each point's ${res.kthNeighbor}-nearest neighbour — min_samples counts the point itself, so that is the eps at which a point becomes a core point. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise. Computed on ${res.n} rows${res.n >= 2000 ? ' (a seeded random sample, capped at 2000)' : ''}. Pass standardize=${useStd} to run_clustering so the run uses these units.`;
       },
 
       switchDataset: (name) => {
@@ -2943,16 +3015,33 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (mode === 'match' && (!key_column || !src.table.columns.includes(key_column) || !tgt.table.columns.includes(key_column))) {
               return `mode=match needs a key_column present in both datasets. Shared columns: ${src.table.columns.filter(c => tgt.table.columns.includes(c)).join(', ') || 'none'}.`;
           }
+          // The same alignment probe the manual panel runs (D3). Matching row
+          // counts prove nothing about whether row 7 is the same respondent in
+          // both files, and this is the one tool that turns a bad join into
+          // plausible-looking results rather than an obvious error.
+          const probe = mode === 'order' ? alignmentProbe(src.table, tgt.table) : null;
+          if (probe && probe.agree < probe.total) {
+              const pct = Math.round((probe.agree / probe.total) * 100);
+              if (pct < 90) {
+                  return `Refused: order-mode alignment looks wrong. "${probe.col}" is present in both datasets and only ${probe.agree}/${probe.total} rows (${pct}%) agree, so row order does not line up and the transfer would attach values to the wrong respondents. Use mode=match with a shared key column instead.`;
+              }
+          }
+
           const name = (new_name?.trim() || `${column}·${src.name}`);
           const nt = handleTransfer({ sourceId: src.id, sourceCol: column, mode, keyCol: key_column ?? '', name });
           if (nt) freshTableRef.current = nt;
-          const srcColArr = src.table.data[column];
-          let filled = tgt.table.nRows;
+          // The real count, not the row count: order mode fills every row only
+          // when the source is at least as long, and match mode fills only the
+          // keys that were found.
+          let filled = Math.min(src.table.nRows, tgt.table.nRows);
           if (mode === 'match' && key_column) {
               const keys = new Set(src.table.data[key_column].map(String));
               filled = tgt.table.data[key_column].filter(v => keys.has(String(v))).length;
           }
-          return `Transferred "${column}" from ${src.name} into the active dataset as "${name}" (${mode} mode, ~${filled}/${tgt.table.nRows} rows filled). Points are now colored by it.`;
+          const caveat = probe
+              ? ` Alignment check on "${probe.col}": ${probe.agree}/${probe.total} rows agree${probe.agree === probe.total ? '' : ' — verify before interpreting'}.`
+              : mode === 'order' ? ' No shared column was available to verify row alignment, so order was assumed.' : '';
+          return `Transferred "${column}" from ${src.name} into the active dataset as "${name}" (${mode} mode, ${filled}/${tgt.table.nRows} rows filled).${caveat} Points are now colored by it.`;
       },
 
       removePin: (index) => {
@@ -3527,7 +3616,21 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                             </span>
                             <span>{eps}</span>
                         </label>
-                        <input type="range" min="0.1" max="5" step="0.1" value={eps} onChange={e => setEps(parseFloat(e.target.value))} className="w-full" />
+                        {/* The range is scaled to the data, not fixed at 5 (B5).
+                            With standardize off, eps is in raw axis units — on
+                            income-scale axes the old maximum of 5 labelled 100%
+                            of points Noise with no way to go higher from the UI,
+                            so only the assistant could reach a usable value. The
+                            number box accepts anything the slider cannot. */}
+                        <div className="flex items-center gap-2">
+                            <input type="range" min={epsSliderStep} max={epsSliderMax} step={epsSliderStep} value={Math.min(eps, epsSliderMax)} onChange={e => setEps(parseFloat(e.target.value))} className="w-full" />
+                            <input
+                                type="number" min={0} step={epsSliderStep} value={eps}
+                                onChange={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v > 0) setEps(v); }}
+                                aria-label="eps value"
+                                className="w-16 flex-shrink-0 bg-[var(--input)] border border-[var(--border)] px-1 py-0.5 text-[10px] outline-none"
+                            />
+                        </div>
                         <label className="flex justify-between"><span className="opacity-70">Min Samples:</span> <span>{minSamples}</span></label>
                         <input type="range" min="1" max="50" step="1" value={minSamples} onChange={e => setMinSamples(parseInt(e.target.value))} className="w-full" />
                         {minSamples < 2 && (

@@ -1,6 +1,6 @@
 # Scatter Lab — Handoff
 
-**Date:** 2026-08-02 (covering the build sprint of Aug 1–2, 2026)
+**Date:** 2026-08-05 (code-review remediation; build sprint was Aug 1–2, 2026)
 **Live:** https://scatter-lab.vercel.app · **Repo:** https://github.com/kaiser-factorial/pca-workbench (public)
 **Deploy:** push to `main` → Vercel auto-builds (project `scatter-lab`, team `factorial-ai`, Root Directory `frontend`, ~35s builds)
 
@@ -112,24 +112,118 @@ collection-group query and inserts them with `source_app = 'joint-session'`. Sha
 record shape: `source_app, event_id, model, rating, reason, tools?, created_at`. Apps
 keep their native storage; analysis gets one table.
 
+## The 2026-08-05 code review, and what it changed
+
+A full review lives in [docs/code-review-2026-08-05.md](docs/code-review-2026-08-05.md)
+— findings grouped A (analytic accuracy), B (what the UI says), C (import/export),
+D (assistant), E (dependencies/coverage), F (performance). Everything except the items
+listed under "Still open" below has been fixed on branch
+`claude/code-review-menu-analytics-ui-f7llud`. Read the review for the reasoning; this is
+the orientation.
+
+**The five that would have changed a published number.**
+
+- **A2** — the demo file was the errata iris (see Data hygiene). PC1 was 72.77% where R
+  says 72.96%.
+- **A3** — `suggest_eps` read the k-distance curve at the `min_samples`-th neighbour, but
+  `dbscan` counts the point itself, so every suggested eps was one neighbour too generous
+  — and it contradicted the app's own methods reference.
+- **A14** — SPSS/Qualtrics missing-value codes (`-99`, `-999`, `9999`) parsed as ordinary
+  measurements and entered the correlation matrix, distances and histograms. Now detected
+  and reported, never auto-stripped: which code means what is the researcher's knowledge.
+- **C6** — a column Excel formatted as Text was a usable measurement in half the app and
+  missing data in the other half. Worst case, clustering median-imputed *every* row of it
+  and clustered on a constant.
+- **C10** — a components file matched against a subset produced a truncated dot product
+  reported as a PC score, with case-sensitive matching that could silently match nothing.
+
+**The one worth knowing about as a design decision (D8).** The assistant's column profile
+sent each categorical column's most frequent values. On `Species` that is the aggregate;
+on an email column it is eight arbitrary rows. The guard is now per-VALUE, not per-column:
+a value covering at least five rows is named, anything rarer is only counted. That keeps
+an ordinary 60-level `school` variable fully usable — a per-column cardinality rule
+withheld it for no privacy gain — while an email address is never sent. Five is the
+conventional small-cell threshold in statistical disclosure control.
+
+**Transparency (B series).** Users never see the code, so the choices the app makes are
+now in the interface: `(i)` markers beside the controls they apply to, and an **About**
+dialog from the header. Both render from `src/lib/disclosures.ts`; `methods.ts` supplies
+the long-form citation-backed half. One source, three surfaces — the drift between three
+copies of the k-distance convention is exactly what caused A3.
+
+**Performance (F series).** The rotation loop was the centre of it: `setCamera` inside
+`requestAnimationFrame` re-rendered the whole tree sixty times a second and, because the
+layout object was rebuilt inline, made `react-plotly.js` re-plot all four panes every
+frame. Rotation now writes the camera straight to the plot (`Plotly.relayout`), and three
+seconds of rotation produces **zero** `plotly_redraw` events. Alongside: pins hold their
+own camera; `TmuxGrid` no longer purges every WebGL context when a pin is added or
+removed; `ViewPlot` and the assistant panel are memoized so sliders and keystrokes cannot
+reach the plots; the HTML export lost 43% of its bytes; and `pickDefaultColorBy` went from
+1,194 ms to 42 ms on 200k × 30 with output proven identical against the old implementation
+across 400 random tables.
+
+**F17 deserves its own line** because it was filed as "probably nothing, worth one browser
+check". The app passed `template: 'plotly_white'` and `var(--foreground)` as Plotly
+colours; measured, Plotly resolved the template to `undefined` and every one of those
+colours to its own default `#444`. The theme-aware plot chrome had never once applied.
+
+### Still open from the review
+
+- **E1 follow-on — `ccru` pulls `next@14.2.35`**, which carries most of the repo's
+  remaining high-severity advisories (plus `postcss`, `sharp`, `undici`). The app itself
+  runs `next@16.2.10`, so this is transitive, not shipped code — but it is what `npm audit`
+  keeps reporting. Deliberately left alone: it is a dependency decision, not a code fix.
+- **F7 — 2D scatter is SVG, one DOM node per point.** `plotly.js-gl3d-dist-min` does not
+  register `scattergl`, so 2D mode has no decimation and 50k points freezes the tab. The
+  fix is a build decision with a real trade: `plotly.js-dist-min` roughly doubles the
+  vendored bundle **and** the self-contained HTML export, which F3 just cut by 43%. A
+  custom bundle registering `scattergl` + `scatter3d` + `mesh3d` is the better answer and
+  is a build-pipeline change (`copy-plotly`, the inlined export bundle). Wants a decision,
+  not a patch.
+- **F19 / F23 — CSV parsing.** Parsing positionally (`header: false`) measured −35–48%
+  time and memory, and PapaParse's `worker: true` would keep the tab responsive. Both were
+  left deliberately: `header: true` is what produces the `TooManyFields` / `TooFewFields`
+  errors and the `renamedHeaders` map that the C1/C2 warnings are built on, so taking them
+  means reimplementing the ragged-row and duplicate-header detection by hand. Trading the
+  silent-data-loss machinery — the single biggest theme of this review — for import speed
+  is not a change to make unsupervised.
+- **F16 (the large half)** — dropping 36 hard-coded 500 ms sleeps in the GIF export needs
+  `_fullLayout.scene._scene` + `gl.readPixels` instead of `Plotly.toImage`. Private API,
+  ~46 s → ~5 s. The palette-reuse half is done.
+- **A4/A5-adjacent leftovers**: none. A5, A6, A8, A10–A14 are all closed.
+- **E6** — DBSCAN is O(n²) and `queue.push(...jn)` can exceed the argument limit on very
+  large neighbour sets; `distMatrix` allocates n² doubles. Fine at survey scale, but these
+  are cliffs rather than slopes and there is still no row-count guard in front of them.
+- **Rules-of-hooks is not in the eslint config.** Worth adding: this session found three
+  `useMemo`s sitting after an early return in `ColumnTransfer` (fixed), and introduced —
+  then caught in the browser — the same mistake in `Home`, where React threw error #310.
+  The unit suite is green on that bug; only loading the page finds it.
+
 ## Data hygiene (repo is PUBLIC)
 
 - `LS_pca_workbench_views copy/` holds real participant-derived data — **gitignored,
   never commit** (it has never entered git history).
-- Demo data is Kaggle's public Iris Species CSV (150 flowers, retrieved 2026-08-04)
-  in `frontend/public/demo/`; its source/checksum live beside it in `iris.SOURCE.md`.
+- Demo data is Fisher's iris from the **UCI** repository (`bezdekIris.data`,
+  doi.org/10.24432/C56C76) in `frontend/public/demo/`; source, both checksums and a
+  reproduction command live beside it in `iris.SOURCE.md`. It replaced the Kaggle mirror
+  on 2026-08-05: that copy carries UCI's documented errata in rows 35 and 38, which moved
+  PC1 from 72.96% to 72.77% and read as an eigensolver bug. Don't "helpfully" swap it back.
 - Only the Supabase **anon** key is in env/bundle (public by design); `service_role`
   must never appear anywhere.
 
 ## Outstanding
 
-1. ~~Unit tests are not in the repo~~ **Done (2026-08-02):** stats, PCA, and
-   methods-retrieval suites live in `frontend/src/lib/__tests__/` (vitest,
-   `npm test`, 24 cases) and run in GitHub Actions on every push/PR
-   (`.github/workflows/test.yml`).
+1. ~~Unit tests are not in the repo~~ **Done (2026-08-02), extended (2026-08-05):**
+   16 suites / 207 cases in `frontend/src/lib/__tests__/` (vitest). CI
+   (`.github/workflows/tests.yml`) now runs `vitest`, `tsc --noEmit`, `next build` and a
+   lint gate — it used to run vitest alone, so a type error or a broken build reached the
+   preview deployment before it reached CI (finding E3).
 2. **Methods library editorial pass** (`src/lib/methods.ts`): content synthesized from
    model knowledge + the NYU CDS Lab 13 notebook, with named citations. The intended
-   vetting step is a ten-minute read/edit by Corina — not yet done.
+   vetting step is a ten-minute read/edit by Corina — **still not done**, and now more
+   visible: these chunks are rendered verbatim on the new About page, not just retrieved
+   by the assistant. (The unbalanced parenthesis in `loadings_vs_scores` was fixed as part
+   of A8, along with naming which loadings convention the app reports.)
 3. **Local dev machine is severely degraded** (25-min Next compiles, minutes to hydrate).
    Current workflow: push and let Vercel build (33s there). Investigate the Mac
    (Activity Monitor, disk space, thermals) before trusting local builds again.

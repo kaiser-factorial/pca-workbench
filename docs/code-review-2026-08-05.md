@@ -148,7 +148,7 @@ Checked empirically across four n/cap combinations: on the four-stratum fixture 
 
 `random.ts` (new) · `stats.ts` `toMatrix` · `cluster.ts` · tests in `stats.test.ts`
 
-### A5 · OPAQUE — mean silhouette skips singleton clusters instead of scoring them zero
+### A5 · FIXED (2026-08-05) — mean silhouette skips singleton clusters instead of scoring them zero
 
 `if (own.length <= 1) continue` excludes singletons from the average. Rousseeuw's definition assigns them `s = 0`.
 Excluding rather than zeroing inflates the mean, hardest at high k and with outliers — precisely where
@@ -156,7 +156,7 @@ Excluding rather than zeroing inflates the mean, hardest at high k and with outl
 
 `stats.ts:156-183` (line 167)
 
-### A6 · OPAQUE — group and overall "sd" are population sd, labelled only "sd"
+### A6 · FIXED (2026-08-05) — group and overall "sd" are population sd, labelled only "sd"
 
 Verified: `compareGroups([1,2,3,4], …)` reports `sd = 1.11803` (population, ÷n). Sample sd is `1.29099`.
 Population sd is defensible for a descriptive summary and correct inside the PCA, but for group means a
@@ -196,7 +196,7 @@ freedom left to estimate error from — which is itself the answer.)
 `stats.ts` `GroupComparison` · `page.tsx` (bridge + tool description) · `disclosures.ts` `group_stats` ·
 tests in `stats.test.ts`
 
-### A8 · OPAQUE — "loadings" are unit-norm eigenvector weights, and the methods reference gives a threshold for the other quantity
+### A8 · FIXED (2026-08-05) — "loadings" are unit-norm eigenvector weights, and the methods reference gives a threshold for the other quantity
 
 `runPCA` reports raw eigenvector entries — sklearn's `components_`. In psychometrics, this app's audience,
 "loading" ordinarily means the variable–component correlation, the eigenvector scaled by √eigenvalue. Both are
@@ -248,13 +248,13 @@ about breakdown denominators and column transfer — a design question rather th
 `pca.ts` · `cluster.ts` `countImputed` · `page.tsx` (both run paths, both tools, `get_app_state`) ·
 `disclosures.ts` · tests in `pca.test.ts`, `cluster.test.ts`
 
-### A10 · EDGE — k is clamped to p but not to rank
+### A10 · FIXED (2026-08-05) — k is clamped to p but not to rank
 
 With n = 3 and p = 5, components 3–5 are numerically zero and their scores are noise. Clamp to `min(p, n − 1)`.
 
 `pca.ts:128`
 
-### A11 · EDGE — a fully non-numeric axis column clusters silently on a constant
+### A11 · FIXED (2026-08-05) — a fully non-numeric axis column clusters silently on a constant
 
 `median([])` returns `0`, so `imputeColumns` fills such a column entirely with zeros; it contributes nothing to
 distance, and `runClustering` still reports success with cluster sizes. Verified: a text second axis produced six
@@ -263,21 +263,21 @@ the run: if an axis column has no numeric values, refuse and name it.
 
 `cluster.ts:51-56` · `table.ts:28-33` · `page.tsx:1741-1768, 2299-2330`
 
-### A12 · EDGE — empty k-means clusters keep their centre
+### A12 · FIXED (2026-08-05) — empty k-means clusters keep their centre
 
 sklearn relocates them. Keeping means a k = 8 run can yield six non-empty labels with gaps in the numbering, and
 the reported size list quietly has fewer entries than k.
 
 `cluster.ts:152-155`
 
-### A13 · EDGE — the Jacobi convergence test is absolute, not norm-relative
+### A13 · FIXED (2026-08-05) — the Jacobi convergence test is absolute, not norm-relative
 
 `Math.sqrt(off) < 1e-12` can never be satisfied for covariance PCA on large-magnitude columns, so it burns all
 100 sweeps. Results verified still correct and finite; at p ≈ 200 that is ~10⁹ operations on the main thread.
 
 `pca.ts:74-78`
 
-### A14 · WRONG — missing-value sentinels are never detected
+### A14 · FIXED (2026-08-05) — missing-value sentinels are never detected
 
 Verified: a column containing `-99`, `-999` or `9999` parses those as ordinary numbers. They then enter the PCA
 correlation matrix, Euclidean distances, Pearson/Spearman, and the mini-histogram as genuine measurements. SPSS
@@ -364,7 +364,7 @@ being painted over by later siblings, and clipped by the sidebar's `overflow-y-a
 
 `page.tsx` Cluster and PCA sections · `disclosures.ts` · `InfoTip.tsx`
 
-### B4 · OPAQUE — the scree chart is truncated at k, so it cannot be used to choose k
+### B4 · FIXED (2026-08-05) — the scree chart is truncated at k, so it cannot be used to choose k
 
 The "Variance explained" bars plot `varianceExplained`, which has length k. Keep 3 components and you see 3 bars.
 But `methods.ts` teaches the Cattell scree test and the Kaiser eigenvalue > 1 criterion, and both need the *full*
@@ -373,7 +373,7 @@ them all, and mark the kept ones.
 
 `page.tsx:907-921` · `pca.ts:210` · `methods.ts:16`
 
-### B5 · OPAQUE — the eps slider maxes at 5, in unlabelled data units
+### B5 · FIXED (2026-08-05) — the eps slider maxes at 5, in unlabelled data units
 
 `min=0.1 max=5 step=0.1`. With standardize off, eps is in raw data units. Verified: on income-scale axes,
 `eps = 5` — the slider's maximum — labels 100% of points Noise, and the UI offers no way to go higher; only the
@@ -728,7 +728,7 @@ is a subtle and correct call.
 
 ## D. The assistant
 
-### D1 · OPAQUE — the assistant can't state the app's own guarantees unless it happens to retrieve the right chunk
+### D1 · FIXED (2026-08-05) — the assistant can't state the app's own guarantees unless it happens to retrieve the right chunk
 
 "Will I get the same clusters if I run this again?" is the most natural reproducibility question a researcher can
 ask, and it is a question about *this app's implementation*, not about statistics. Nothing routes it to
@@ -744,7 +744,7 @@ facts the assistant is least able to guess.
 
 `assistant.ts:512-546` · `assistant.ts:163-178, 290-307`
 
-### D2 · OPAQUE — `suggest_k` and `suggest_eps` can answer in different units than the run that follows
+### D2 · FIXED (2026-08-05) — `suggest_k` and `suggest_eps` can answer in different units than the run that follows
 
 Neither tool takes a `standardize` parameter, so both read the UI toggle, while `run_clustering` accepts an
 explicit override. So `suggest_k` → `run_clustering(standardize: true)` produces a recommendation computed on raw
@@ -753,7 +753,7 @@ prevent. Add the parameter to both diagnostics and echo the resolved value in th
 
 `assistant.ts:342-371` · `page.tsx:2453-2478` vs `2306`
 
-### D3 · OPAQUE — `transfer_column` skips the alignment probe the UI performs
+### D3 · FIXED (2026-08-05) — `transfer_column` skips the alignment probe the UI performs
 
 The manual panel computes an identity-column agreement check and shows *"Check (Id): 140/150 agree ⚠"* in red,
 with a comment noting that silently mis-joining respondents yields wrong science. The assistant path checks only
@@ -904,7 +904,7 @@ carries most of the repo's remaining high-severity advisories (plus `postcss`, `
 runs `next@16.2.10`, so this is a transitive dev-surface issue rather than shipped code — but it is what
 `npm audit` will keep reporting. Worth its own decision.
 
-### E2 · OPAQUE — PC-column detection uses three different conventions
+### E2 · FIXED (2026-08-05) — PC-column detection uses three different conventions
 
 Case-sensitive `/^PC\d+(_|$)/` in the PCA panel and the assistant's `runPCA`; case-*insensitive*
 `/^PC\d+(_|$)/i` in `suggestStandardize`; and an exact `['PC1','PC2','PC3']` membership test in
@@ -914,7 +914,7 @@ Case-sensitive `/^PC\d+(_|$)/` in the PCA panel and the assistant's `runPCA`; ca
 
 `page.tsx:771, 2423` · `cluster.ts:38` · `defaults.ts:32` · `page.tsx:1056`
 
-### E3 · EDGE — CI runs only the unit tests
+### E3 · FIXED (2026-08-05) — CI runs only the unit tests
 
 The workflow's only step is `npx vitest run`: no `next build`, no `tsc --noEmit`, no `eslint`. A type error or a
 broken build reaches Vercel before it reaches CI, which matters more than usual given HANDOFF Outstanding #3
@@ -948,7 +948,7 @@ Still open: `engine.ts`'s components-projection path (C10) and Spearman ties. Su
 
 `frontend/src/lib/__tests__/`
 
-### E5 · EDGE — `isIdentifierColumn`'s `/ID$/` is over-eager
+### E5 · FIXED (2026-08-05) — `isIdentifierColumn`'s `/ID$/` is over-eager
 
 It matches any name ending in capital ID, so `VALID` or `HYBRID` would be excluded from default axes and from the
 assistant's default PCA variable list.
@@ -988,7 +988,7 @@ optimization is warranted**. Stage split is stable at roughly 56% parse and tran
 profiling, and that 31% is almost entirely one function (F18). Items below are conditional on caring about
 50k × 50 and up; the three marked *do anyway* are near-free.
 
-### F1 · WRONG — the OpenAI SDK and the whole markdown stack ship in the initial bundle
+### F1 · FIXED (2026-08-05) — the OpenAI SDK and the whole markdown stack ship in the initial bundle
 
 `assistant.ts:1` is a static `import OpenAI from 'openai'`. `page.tsx:13` statically imports `AssistantPanel`, and
 `page.tsx:15` imports `GUIDE_TARGETS` as a *value* from `assistant.ts` — so making the panel lazy would not break
@@ -1009,7 +1009,7 @@ switch to `err.status` codes.
 
 `assistant.ts:1` · `page.tsx:13, 15` · `AssistantPanel.tsx:5-11` · `assistant.ts:765-772`
 
-### F2 · OPAQUE — first paint is gated on full hydration
+### F2 · FIXED (2026-08-05) — first paint is gated on full hydration
 
 `if (!mounted) return null` means the app renders nothing on the server *and* nothing on the first client render,
 so the user gets a blank white page until React hydrates — then waits again for the `ssr: false` Plotly chunk,
@@ -1019,7 +1019,7 @@ server-side, which is legitimate; the usual mitigation is a theme-neutral shell 
 
 `page.tsx:22, 1320, 1439, 2695`
 
-### F3 · OPAQUE — the HTML export is roughly twice the size it needs to be
+### F3 · FIXED (2026-08-05) — the HTML export is roughly twice the size it needs to be
 
 `exportHTML` serialises whatever `buildTraces` returns, which in 3D includes the decorative ground-shadow trace:
 a full copy of every x and y value, plus an n-length array holding the same z-floor constant repeated.
@@ -1038,7 +1038,7 @@ touch in the live view that nobody needs in a shared file. Both changes are loca
 
 `page.tsx:1999, 2040, 2056` · shadow built at `page.tsx:491-511`
 
-### F4 · OPAQUE — `backdrop-blur` sits directly over the WebGL canvas, in the default theme
+### F4 · FIXED (2026-08-05) — `backdrop-blur` sits directly over the WebGL canvas, in the default theme
 
 The legend and notes panels are `backdrop-blur-md` and positioned absolutely over the plot. `backdrop-filter:
 blur()` forces the compositor to re-sample and re-blur the region behind it whenever that region repaints — and
@@ -1051,7 +1051,7 @@ Same elements also carry `transition-all duration-200`, which transitions layout
 
 `page.tsx:43, 56, 64` · `AssistantPanel.tsx:257`
 
-### F5–F6 · two smaller wins
+### F5–F6 · FIXED (2026-08-05) · two smaller wins
 
 - **F5** — both themes' typefaces load unconditionally: `Courier_Prime` at weights 400 and 700 *and* `JetBrains_Mono`, so every visitor downloads and preloads the inactive theme's face. `layout.tsx:5-15`
 - **F6** — `bridgeRef.current = { … }` is reassigned during render, allocating around thirty closures every time `Home` renders, which during auto-rotation is sixty times a second. Individually cheap, but it is the hottest loop in the app, and it is also a side effect during render (React 19 strict mode will double-invoke it), as is the `window.__scatterlabBridge` assignment beside it. `page.tsx:2230, 2653`
@@ -1070,7 +1070,7 @@ it is a build decision — `plotly.js-dist-min`, or a custom bundle registering 
 
 `PlotlyPlot.tsx:5` · trace types at `page.tsx:399, 433` · `package.json:6`
 
-### F8 · WRONG — the trace memo holds in 3D and leaks in 2D, where it costs most
+### F8 · FIXED (2026-08-05) — the trace memo holds in 3D and leaks in 2D, where it costs most
 
 In 3D, `effectiveAxes`/`effectiveLabels` return `d.axes`/`d.labels` *themselves* — the dataset's own sub-objects,
 replaced only by an axis edit or a PCA run — so the memo deps hold, `buildTraces` does not re-run during
@@ -1083,7 +1083,7 @@ recalculation. Combined with F7 that means a full SVG rebuild of every point.
 
 `page.tsx:268-271` · memo at `page.tsx:1302-1305` · `page.tsx:2699`
 
-### F9 · WRONG — the rotation loop drives every plot through React, and the layout object defeats the one guard that would stop it
+### F9 · FIXED (2026-08-05) — the rotation loop drives every plot through React, and the layout object defeats the one guard that would stop it
 
 `setCamera` inside `requestAnimationFrame` re-renders the whole `Home` subtree 60 times a second — sidebar,
 Variables panel, PCA section, cluster breakdown, all four panes, and the assistant. `renderView` then calls
@@ -1099,7 +1099,7 @@ one redraw, and the win is independent of dataset size.
 
 `page.tsx:1442-1460, 2670, 1770`
 
-### F10 · WRONG — the assistant transcript is re-parsed from markdown on every frame of rotation
+### F10 · FIXED (2026-08-05) — the assistant transcript is re-parsed from markdown on every frame of rotation
 
 `AssistantPanel` is not memoized, receives a fresh `onDockChange` closure every `Home` render, and maps its chat
 array to a fresh `ReactMarkdown` per message. The remark pipeline measures **1.06 ms per message** for a ~1 KB
@@ -1110,7 +1110,7 @@ per-message component removes it entirely.
 
 `AssistantPanel.tsx:52, 379-390` · `page.tsx:3062`
 
-### F11 · OPAQUE — pinned 3D views share the live camera, so a pin can never hold its own angle
+### F11 · FIXED (2026-08-05) — pinned 3D views share the live camera, so a pin can never hold its own angle
 
 `getLayout` reads the single `camera` state for every 3D pane, so all pins rotate with the live view — four scene
 redraws per frame, and a pin that cannot preserve the viewpoint it was taken from. A UX bug with a performance
@@ -1118,7 +1118,7 @@ tail; the fix pattern already exists two lines away, since the 2D viewport *is* 
 
 `page.tsx:1798` vs `page.tsx:2123` · `page.tsx:2670`
 
-### F12 · OPAQUE — adding or removing a pin purges and re-creates *every* plot
+### F12 · FIXED (2026-08-05) — adding or removing a pin purges and re-creates *every* plot
 
 `TmuxGrid` returns a structurally different tree per view count — for one view the root's child is
 `WrappedView`, for two it is a `div` wrapping them. React sees a changed child type at the same position,
@@ -1128,7 +1128,7 @@ panes, so pins shuffle identity on removal (and the four-view branch orders them
 
 `TmuxGrid.tsx:43-78`
 
-### F13 · OPAQUE — cluster sliders and Notes keystrokes re-render all four plots, for nothing
+### F13 · FIXED (2026-08-05) — cluster sliders and Notes keystrokes re-render all four plots, for nothing
 
 The eps, min-samples and k sliders fire `onChange` on every `input` event — 30–60 per second while dragging — and
 each re-renders the whole tree and issues four `Plotly.react` calls. **None of those three values affects the plot
@@ -1139,7 +1139,7 @@ and `includeExportInfo`.
 
 `page.tsx:2979, 2981, 2987` · state at `page.tsx:1351, 1398-1405, 1425`
 
-### F14 · OPAQUE — the column-profiling pass runs three times per table change in render, plus once on demand
+### F14 · FIXED (2026-08-05) — the column-profiling pass runs three times per table change in render, plus once on demand
 
 The same scan is implemented four times: `VariablesPanel.profiles`, `ClusterBreakdown.candidates`,
 `PCASection.numericVars` — all three in render — plus `columnProfiles()` for the assistant bridge, which is
@@ -1165,7 +1165,7 @@ render.
 
 `page.tsx:582, 2195, 938, 770` · probe at `page.tsx:1046, 1054-1067`
 
-### F15 · EDGE — `buildTraces`, measured, and the two lines worth changing
+### F15 · FIXED (2026-08-05) — `buildTraces`, measured, and the two lines worth changing
 
 Because the 3D memo works, this runs on axis/colour/mute/cluster/theme changes rather than per frame. Measured
 3D: **1.16 ms** at 10k × 5 categories, **5.93 ms** at 50k × 5, **15.88 ms** at 50k × 50 with shape on (152
@@ -1181,7 +1181,7 @@ the GPU point count.
 
 `page.tsx:368` · `page.tsx:458-500` · `page.tsx:411-437`
 
-### F16 · EDGE — the GIF export spends 18 seconds asleep in a Plotly constant
+### F16 · FIXED (2026-08-05) — the GIF export spends 18 seconds asleep in a Plotly constant
 
 `Plotly.toImage` deep-copies every data array, spins up an offscreen `newPlot` with its own WebGL context, and —
 because the plot has a gl3d subplot — waits a hard-coded **500 ms** before capturing. Times 36 frames, that is 18
@@ -1197,7 +1197,7 @@ that dependency knowingly.
 
 `page.tsx:1940-1963`
 
-### F17 · EDGE — plot chrome may be silently falling back to Plotly defaults; worth one browser check
+### F17 · FIXED (2026-08-05) — plot chrome may be silently falling back to Plotly defaults; worth one browser check
 
 `getLayout` sets `template: 'plotly_white'` and passes CSS custom properties as Plotly colours (`font: { color:
 'var(--foreground)' }`, on axis titles, tick fonts and the legend). Plotly resolves templates only from plain
@@ -1210,7 +1210,7 @@ computed fill on an axis title in both themes. Note that `exportHTML` already du
 
 `page.tsx:1776, 1777, 1781, 1794-1795, 1808-1809` vs `page.tsx:2010-2035`
 
-### F18 · OPAQUE — `pickDefaultColorBy` re-scans every column up to six times (*do this one anyway*)
+### F18 · FIXED (2026-08-05) — `pickDefaultColorBy` re-scans every column up to six times (*do this one anyway*)
 
 This single function is nearly all of the 31% "setup" share, and the reason is a sort comparator:
 
@@ -1254,7 +1254,7 @@ BOM, header-only) were byte-identical.
 
 `parse.ts:305-318` · `table.ts:16-23`
 
-### F20 · EDGE — Parquet builds a third full copy and sanitizes every cell twice (*do this one anyway*)
+### F20 · FIXED (2026-08-05) — Parquet builds a third full copy and sanitizes every cell twice (*do this one anyway*)
 
 `parseParquet` maps hyparquet's rows into a new `fixed` array of row objects and *then* calls `rowsToTable` on it,
 so the original rows, the mapped copy, and the columnar result are all alive at peak — measured **+314 MB for the
@@ -1267,7 +1267,7 @@ Strictly less work, one fewer representation, and it closes the gap where the Bi
 
 `parse.ts:331-343` (lines 337-342) · `table.ts:6-13`
 
-### F21 · EDGE — saving a workspace serialises the whole payload twice, for a display-only byte count (*do this one anyway*)
+### F21 · FIXED (2026-08-05) — saving a workspace serialises the whole payload twice, for a display-only byte count (*do this one anyway*)
 
 `saveWorkspace` calls `new Blob([JSON.stringify(payload)]).size` purely to record a number shown in the workspace
 list, then hands the same payload to IndexedDB, which structured-clones it again. Measured on a 200k × 30 table:
@@ -1278,7 +1278,7 @@ shape is in `exportWorkspaceFile` and `importWorkspaceFile`.
 
 `workspaces.ts:108-112` · callers `page.tsx:1585, 1603, 2545`
 
-### F22 · EDGE — the components projection is row-major for a column-major algorithm
+### F22 · FIXED (2026-08-05) — the components projection is row-major for a column-major algorithm
 
 `processUpload`'s components path allocates n small row arrays and then indexes `X[i][j]` inside a j-outer loop:
 worst-case locality. Then it allocates n more three-element arrays for coordinates and maps over them three times.

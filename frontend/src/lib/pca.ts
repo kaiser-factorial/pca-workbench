@@ -11,7 +11,11 @@ export type PCAResult = {
   replaced: string[];                     // columns of a previous same-label run this one replaced
   label: string;                          // sanitized run label ('' = the unnamed run)
   loadings: Record<string, { var: string; loading: number }[]>; // per score column, sorted by |loading|
-  varianceExplained: number[];            // fraction per kept component
+  varianceExplained: number[];            // fraction per KEPT component
+  /** Variance fraction for every component, kept or not — the full scree (B4). */
+  spectrum: number[];
+  /** Eigenvalues for every component, for the Kaiser > 1 rule (B4). */
+  eigenvalues: number[];
   cumulative: number[];
   variables: string[];
   k: number;
@@ -427,6 +431,16 @@ export const runPCA = (
   });
 
   const varianceExplained = values.slice(0, k).map(v => Math.max(v, 0) / total);
+  // The FULL spectrum, not just the kept components (finding B4). The scree
+  // chart plotted varianceExplained, whose length is k — so keeping 3
+  // components drew 3 bars. But methods.ts teaches the Cattell scree test and
+  // the Kaiser eigenvalue > 1 rule, and both need every eigenvalue: the elbow
+  // is invisible if the plot stops at the elbow.
+  const spectrum = values.map(v => Math.max(v, 0) / total);
+  // Eigenvalues themselves, for the Kaiser criterion. On a correlation PCA each
+  // variable contributes 1, so "> 1" is the meaningful line; on a covariance
+  // PCA it is not, which is why the UI only draws it when standardized.
+  const eigenvalues = values.map(v => Math.max(v, 0));
   const cumulative = varianceExplained.reduce<number[]>((acc, v) => {
     acc.push((acc[acc.length - 1] ?? 0) + v);
     return acc;
@@ -443,5 +457,5 @@ export const runPCA = (
     ...(iterative ? { iterations: iterative.iterations, converged: iterative.converged } : {}),
   };
 
-  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k, missing };
+  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, spectrum, eigenvalues, cumulative, variables, k, missing };
 };
