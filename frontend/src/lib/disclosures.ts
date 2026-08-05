@@ -43,7 +43,7 @@ export const DISCLOSURES = {
   median_imputation: {
     title: 'How missing values are handled',
     text:
-      'Median impute (the default) replaces each gap with that variable\'s median, keeping every row but shrinking variance and attenuating correlations in proportion to how much was filled. Complete cases instead drops any row with a gap in the selected variables, which keeps the covariance structure honest but reduces n and can bias the sample when the missingness is not random. Neither is free — with substantial missingness, run both and compare. Every run reports exactly what it filled or dropped, and in which variables. Clustering always median-imputes.',
+      'Three options, none of them free. Median fills each gap with that variable\'s median: simple, but it ignores the correlation structure and shrinks variance. Iterative PCA reconstructs each gap from the low-rank structure of the other variables and repeats until the fill settles (the missMDA imputePCA method) — on this app\'s own test, that recovers punched-out iris values with about half the error of the median, though it is marginally worse when variables are uncorrelated. Complete cases drops any row with a gap instead, keeping the covariance honest but reducing n and possibly biasing the sample. All three are single imputation, so none of them carry the uncertainty of the filled values into what follows; with substantial missingness, run more than one and compare. Every run reports what it filled or dropped and in which variables. Clustering always median-imputes.',
     methodsTopic: 'pca_caveats',
   },
 

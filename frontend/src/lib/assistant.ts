@@ -41,7 +41,7 @@ export type AppBridge = {
     pcaRuns: {
       label: string; columns: string[]; variables: string[];
       standardize: boolean; savedAt: string; varianceExplained: number[];
-      missing?: { strategy: 'median' | 'complete'; imputedCells: number; rowsUsed: number; rowsDropped: number };
+      missing?: { strategy: 'median' | 'complete' | 'iterative'; imputedCells: number; rowsUsed: number; rowsDropped: number };
     }[];
   };
   setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
@@ -55,7 +55,7 @@ export type AppBridge = {
   pinView: () => string;
   loadDemoData: () => Promise<string>;
   // analysis (aggregates only)
-  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string; missing?: 'median' | 'complete' }) => string;
+  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string; missing?: 'median' | 'complete' | 'iterative' }) => string;
   correlate: (colA: string, colB: string) => string;
   compareGroups: (numericCol: string, groupCol: string) => string;
   suggestK: (maxK: number) => string;
@@ -299,8 +299,8 @@ const TOOLS: ChatCompletionTool[] = [
           standardize: { type: 'boolean', description: 'Default true (correlation-based PCA)' },
           missing: {
             type: 'string',
-            enum: ['median', 'complete'],
-            description: 'How to handle rows with missing values. "median" (default) fills each gap with that variable\'s median, keeping every row but shrinking variance and attenuating correlations. "complete" drops any row with a gap in the selected variables, keeping the covariance structure honest but reducing n and potentially biasing the sample if missingness is not random. With substantial missingness, running both and comparing is the recommended check — see get_methods_reference topic pca_caveats.',
+            enum: ['median', 'complete', 'iterative'],
+            description: 'How to handle rows with missing values. "median" (default) fills each gap with that variable\'s median — simple, but ignores the correlation structure. "complete" drops any row with a gap in the selected variables, keeping the covariance honest but reducing n and potentially biasing the sample. "iterative" is regularized iterative PCA (the missMDA imputePCA method): it reconstructs each gap from the low-rank structure of the other variables and iterates to convergence, which recovers missing values far more accurately when variables are correlated, and is marginally worse than median when they are not. All three are single imputation, so none of them propagate uncertainty. With substantial missingness, running more than one and comparing is the recommended check — see get_methods_reference topic pca_caveats.',
           },
           label: {
             type: 'string',

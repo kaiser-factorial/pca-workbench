@@ -259,7 +259,10 @@ const missingNote = (rep: MissingReport | undefined, nRows: number): string => {
         return ` Complete cases only: ${rep.rowsDropped} of ${nRows} rows were dropped for having a gap, leaving ${rep.rowsUsed} — ${worst}${more}. Those rows have no score.`;
     }
     const pct = (rep.imputedCells / Math.max(rep.totalCells, 1)) * 100;
-    return ` ${rep.imputedCells} of ${rep.totalCells} cells (${pct < 0.1 ? '<0.1' : pct.toFixed(1)}%) were missing and filled with the column median — ${worst}${more}.`;
+    const how = rep.strategy === 'iterative'
+        ? `reconstructed by iterative PCA (${rep.iterations} iterations${rep.converged ? '' : ', did NOT converge — treat with caution'})`
+        : 'filled with the column median';
+    return ` ${rep.imputedCells} of ${rep.totalCells} cells (${pct < 0.1 ? '<0.1' : pct.toFixed(1)}%) were missing and ${how} — ${worst}${more}.`;
 };
 
 // A cached upload: processed table, upload-time profile, and its plot-axis choices.
@@ -916,7 +919,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             <div className="space-y-1">
                 <span className="opacity-70">Missing values<InfoTip topic="median_imputation" /></span>
                 <div className="flex gap-1">
-                    {([['median', 'Median impute'], ['complete', 'Complete cases']] as const).map(([v, lbl]) => (
+                    {([['median', 'Median'], ['iterative', 'Iterative PCA'], ['complete', 'Complete cases']] as const).map(([v, lbl]) => (
                         <button
                             key={v}
                             onClick={() => setMissing(v)}
@@ -2533,7 +2536,8 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;
           const label = sanitizeLabel(opts.label ?? '');
           if (opts.label && !label) return `"${opts.label}" is not usable as a run label — use letters, digits, _ or -.`;
-          const missing: MissingStrategy = opts.missing === 'complete' ? 'complete' : 'median';
+          const missing: MissingStrategy =
+              opts.missing === 'complete' ? 'complete' : opts.missing === 'iterative' ? 'iterative' : 'median';
           return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 1), 10), opts.standardize ?? true, label, missing);
       },
 
