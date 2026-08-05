@@ -17,7 +17,7 @@ import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
-import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, type MissingReport, type MissingStrategy } from "@/lib/pca";
+import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, isPCColumn, type MissingReport, type MissingStrategy } from "@/lib/pca";
 import { isIdentifierColumn, valueIsTooRare, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
 import { InfoTip } from "@/components/InfoTip";
 import { InfoDialog } from "@/components/InfoDialog";
@@ -792,7 +792,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     // stay selectable on purpose — feeding composites into a second-order PCA
     // is a legitimate technique.
     const numericVars = useMemo(
-        () => numericColumns(table).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster'),
+        () => numericColumns(table).filter(c => !isPCColumn(c) && c !== 'Cluster'),
         [table]
     );
     const [selected, setSelected] = useState<Set<string>>(() => new Set(numericVars));
@@ -2624,7 +2624,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       runPCA: (opts) => {
           const t = latestTable();
           if (!t) return 'No dataset loaded.';
-          const numeric = numericColumns(t).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster');
+          const numeric = numericColumns(t).filter(c => !isPCColumn(c) && c !== 'Cluster');
           const vars = (opts.variables?.length ? opts.variables : numeric.filter(c => !isIdentifierColumn(c)));
           const bad = vars.filter(v => !numeric.includes(v));
           if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;

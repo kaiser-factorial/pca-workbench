@@ -1,6 +1,7 @@
 import { asNumber, median, numericValues } from './table';
 // Deterministic PRNG so repeated runs give identical clusters (random_state analog)
 import { mulberry32 } from './random';
+import { isPCColumn } from './pca';
 
 // DBSCAN + KMeans over plot coordinates, replacing the sklearn endpoints.
 // Sizes here are survey-scale (hundreds to low thousands of points), so the
@@ -44,7 +45,7 @@ export const suggestStandardize = (cols: (number | string | null)[][], names: st
   // COMP_ composites deliberately do NOT: each comes from a different
   // decomposition, so across-composite scale differences are back to the
   // ordinary range heuristic below.
-  if (names.length > 0 && names.every(nm => /^PC\d+(_|$)/i.test(nm))) return false;
+  if (names.length > 0 && names.every(isPCColumn)) return false;
   const ranges: number[] = [];
   for (const col of cols) {
     let min = Infinity, max = -Infinity;

@@ -44,6 +44,24 @@ export type MissingReport = {
   converged?: boolean;
 };
 
+/**
+ * Is this column a PCA score column?
+ *
+ * One predicate, because there were three and they disagreed: case-sensitive
+ * `/^PC\d+(_|$)/` in the PCA panel, case-INsensitive in `suggestStandardize`,
+ * and an exact `['PC1','PC2','PC3']` membership test in `pickDefaultAxes`. A
+ * file with lowercase `pc1`/`pc2` was therefore treated as PC scores by the
+ * clustering heuristic (standardize off) while simultaneously being offered as
+ * raw PCA input by the panel (finding E2).
+ *
+ * Case-insensitive is the right resolution: a components file written by R or
+ * SPSS may use either case, and nothing downstream cares which.
+ */
+export const isPCColumn = (name: string): boolean => /^PC\d+(_|$)/i.test(name);
+
+/** The bare PC1..PC3 a components-file projection creates, in order. */
+export const BASE_PC_COLUMNS = ['PC1', 'PC2', 'PC3'];
+
 // Run labels become column-name fragments — keep them word-shaped
 export const sanitizeLabel = (s: string): string =>
   s.trim().replace(/\s+/g, '_').replace(/[^\w-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');

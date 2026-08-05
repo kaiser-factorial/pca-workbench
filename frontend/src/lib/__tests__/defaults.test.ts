@@ -68,3 +68,26 @@ describe('valueIsTooRare — where naming a value stops being an aggregate', () 
     expect(MIN_AGGREGATE_COUNT).toBe(5);
   });
 });
+
+// A bare /ID$/ matched any name ending in capital I-D, so ordinary variables
+// were excluded from default axes and from the assistant's default PCA
+// variables (finding E5).
+describe('isIdentifierColumn — boundaries, not just suffixes', () => {
+  it('still catches real identifier conventions', () => {
+    for (const n of ['id', 'ID', 'Id', 'uuid', 'GUID', 'user_id', 'participant-id', 'subject id', 'respondentID', 'subjID']) {
+      expect(isIdentifierColumn(n)).toBe(true);
+    }
+  });
+
+  it('no longer swallows ordinary words ending in ID', () => {
+    for (const n of ['VALID', 'HYBRID', 'RAPID', 'GRID', 'LIPID', 'ACID']) {
+      expect(isIdentifierColumn(n)).toBe(false);
+    }
+  });
+
+  it('leaves ordinary measures alone', () => {
+    for (const n of ['score', 'age', 'PC1', 'openness_1', 'identity']) {
+      expect(isIdentifierColumn(n)).toBe(false);
+    }
+  });
+});
