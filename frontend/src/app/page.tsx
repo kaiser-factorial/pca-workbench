@@ -1471,12 +1471,20 @@ export default function Home() {
     try {
       // Yield a frame so the busy state paints before heavy parsing starts
       await new Promise(r => setTimeout(r, 30));
-      const [dsTable, compTable] = await Promise.all([
+      const [dsParsed, compParsed] = await Promise.all([
         readTable(dsFile),
         compFile ? readTable(compFile) : Promise.resolve(null),
       ]);
-      const result = processUpload(dsTable, compTable);
-      setUploadStatus(result.message);
+      const result = processUpload(dsParsed.table, compParsed?.table ?? null);
+      // Parser warnings describe things that silently changed the data, so they
+      // lead — the success message is the part the user can already see.
+      const warnings = [
+        ...dsParsed.warnings,
+        ...(compParsed?.warnings ?? []).map(w => `Components file: ${w}`),
+      ];
+      setUploadStatus(warnings.length
+        ? `${warnings.map(w => `⚠ ${w}`).join('\n')}\n${result.message}`
+        : result.message);
       const id = Date.now();
       const table = result.table;
       const axes = initialView?.axes ?? pickDefaultAxes(table);
@@ -2837,14 +2845,17 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               </button>
             )}
             {uploadStatus && (
-              <p className="text-[11px] leading-snug opacity-70 break-words">{uploadStatus}</p>
+              // whitespace-pre-line: parser warnings are newline-separated
+              <p className="text-[11px] leading-snug opacity-70 break-words whitespace-pre-line">{uploadStatus}</p>
             )}
-            {/^Error|failed/i.test(uploadStatus) && (
+            {/^Error|failed|⚠/i.test(uploadStatus) && (
               <button
-                onClick={() => askAssistantRef.current?.(`My upload failed with this message: "${uploadStatus}". Explain what's wrong with my file and how to fix it.`)}
+                onClick={() => askAssistantRef.current?.(/^Error|failed/i.test(uploadStatus)
+                  ? `My upload failed with this message: "${uploadStatus}". Explain what's wrong with my file and how to fix it.`
+                  : `My upload produced these warnings: "${uploadStatus}". Explain what they mean for my data and how to fix the file.`)}
                 className="text-[11px] underline-offset-2 hover:underline opacity-60 hover:opacity-100 text-left cursor-pointer"
               >
-                ✳ Ask the assistant about this error
+                ✳ Ask the assistant about {/^Error|failed/i.test(uploadStatus) ? 'this error' : 'these warnings'}
               </button>
             )}
             {datasets.length > 0 && (

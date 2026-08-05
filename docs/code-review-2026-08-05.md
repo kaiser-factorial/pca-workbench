@@ -309,7 +309,7 @@ exclude `min_samples = 1` or warn that it makes every point a core point.
 Tested empirically against the pinned versions — PapaParse 5.5.4 and SheetJS 0.18.5 — not reasoned about.
 Everything below is a confirmed behaviour.
 
-### C1 · WRONG — `res.errors` from PapaParse is discarded entirely
+### C1 · FIXED (2026-08-05) — `res.errors` from PapaParse was discarded entirely
 
 The `complete` callback reads `res.meta.fields` and `res.data` and never looks at `res.errors`.
 
@@ -320,29 +320,55 @@ The `complete` callback reads `res.meta.fields` and `res.data` and never looks a
 | leading title line (Qualtrics/SPSS) | `TooManyFields` | the title becomes the only column name, the real header row becomes data, everything after is discarded |
 | no header row | none | the first data row silently becomes the column names; one row of data is lost |
 
-Surfacing `res.errors` in `uploadStatus` costs about five lines, and the "✳ Ask the assistant about this error"
-chip is already wired to whatever lands there — so the assistant could immediately explain a malformed CSV
-instead of the user staring at a wrong plot.
+**Resolved.** `readTable` now returns `{ table, warnings }` and the parsers report anything that silently changed
+the data. The upload handler puts warnings *above* the success message, the sidebar renders them with
+`whitespace-pre-line`, and the "✳ Ask the assistant" chip now fires on warnings too — with wording that
+distinguishes a warning from a failure, so the assistant is asked the right question.
 
-`parse.ts:305-318` · chip at `page.tsx:2841-2848`
+Covered: unterminated quotes (naming the line, since everything after is swallowed), ragged rows in both
+directions (extras discarded / gaps blanked, with line numbers), undetectable delimiter on a single-column result,
+blank header cells, repeated header names (C2), an all-numeric header meaning no header row, and numeric-looking
+text (C3).
 
-### C2 · OPAQUE — duplicate headers are renamed silently
+**This commit changes no parsing behaviour** — it is purely additive, so it cannot regress data handling. The
+remaining C-series items (C4, C5, C7, C8, C10) do change behaviour and are separate.
 
-`Q1,Q1,Age` becomes `["Q1","Q1_1","Age"]`. PapaParse logs it to the console; the app doesn't, so the user
-analyses a column under a name they never wrote. See also F19, which inherits this dedupe.
+Two things worth recording from doing it. First, `parseCSVText(text)` is now split out from the `File` plumbing:
+PapaParse reaches for `FileReaderSync` when handed a `File`, which only exists in a Worker, so the warning logic
+was untestable as written. It costs nothing — with no `chunk` config PapaParse's own `FileReader` path already
+materialised the whole file as one string. Second, duplicate-header detection uses PapaParse's own
+`meta.renamedHeaders` rather than pattern-matching the result; a column genuinely named `Q1_1` alongside `Q1` is
+ordinary in survey exports, and there is a test asserting that case stays quiet.
 
-`parse.ts:312`
+`parse.ts` · `page.tsx:1474-1489, 2846-2861` · tests in `parse.test.ts`
 
-### C3 · WRONG — European decimal commas turn every measure into a text column
+### C2 · FIXED (2026-08-05) — duplicate headers were renamed silently
+
+`Q1,Q1,Age` becomes `["Q1","Q1_1","Age"]`. PapaParse logs it to the console; the app didn't, so the user
+analysed a column under a name they never wrote. Now reported via `meta.renamedHeaders`, naming both the original
+and the rename. Still relevant to F19: taking `header: false` means inheriting this dedupe by hand.
+
+`parse.ts` · `parse.test.ts`
+
+### C3 · FIXED (2026-08-05, detection) — European decimal commas turn every measure into a text column
 
 Verified with `Q1;Q2;Age` / `1,5;2,5;30`: PapaParse auto-detects the semicolon delimiter correctly, but
 `dynamicTyping` leaves `"1,5"` a string. Those columns then fail `numericColumns()`, and `processUpload` throws
 *"Dataset needs at least two numeric columns to plot"* with no hint about the cause. A German or French Excel
 export — the canonical alternatively-formatted dataset — is unusable and the error points the wrong way.
-Thousands separators (`"1,234"`) fail identically. Detect a comma-decimal column at parse time and either convert
-it or say what was found.
+Thousands separators (`"1,234"`) fail identically.
 
-`parse.ts:305-318` · `engine.ts:289-293`
+**Resolved by naming it, not by converting it.** A column arriving entirely as text is now checked against decimal
+commas, thousands separators and percent signs; at ≥80% match the warning names the affected columns and how to
+fix the file. Deliberately not auto-converting: silently reinterpreting text as numbers can corrupt genuine
+strings, and the user is the one who knows their locale. The grouped form (`1,234`) is tested before the decimal
+form because it satisfies both readings.
+
+Still open: the downstream message from `engine.ts:291` ("needs at least two numeric columns") remains
+uninformative on its own — it is now preceded by a warning that explains the cause, but the message itself could
+name the text columns it rejected.
+
+`parse.ts` · `engine.ts:289-293` · `parse.test.ts`
 
 ### C4 · WRONG — XLSX reads only the first sheet, silently
 
@@ -543,8 +569,11 @@ imputation of a missing coordinate, and the raw-scale eps failure from B5. Plus 
 `kDistancePercentiles` to actual `dbscan` behaviour. **`demoData.test.ts`** adds the suite's first external ground
 truth for `runPCA`.
 
-Still open: `parse.ts` and `engine.ts`'s components path — where C1, C3, C4, C5 and C10 live — and Spearman ties.
-Suite is now 59 tests.
+**`parse.ts` now has coverage too** (18 cases): clean input staying silent, BOM/CRLF/quoted delimiters,
+semicolon and tab detection, every warning path above, and the negative case where a genuine `Q1_1` must not be
+reported as a duplicate.
+
+Still open: `engine.ts`'s components-projection path (C10) and Spearman ties. Suite is now 77 tests.
 
 `frontend/src/lib/__tests__/`
 
