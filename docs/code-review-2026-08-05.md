@@ -62,19 +62,41 @@ eight decimal places.
 | Power iteration + deflation | 72.7705% | 23.0305% | 3.6838% | 0.5152% |
 | R `prcomp(iris, scale.=TRUE)` | 72.9624% | 22.8508% | 3.6689% | 0.5179% |
 
+Those first two rows were measured on the demo file **as originally committed** — the errata mirror. The point of
+the table is that the two independent solvers agree exactly with each other while both differ from R, which
+localises the discrepancy to the data rather than the math. Since A2 has now been fixed, all three rows read
+72.9624 / 22.8508 / 3.6689 / 0.5179, and `demoData.test.ts` asserts it.
+
 Also confirmed: scores exactly mean-centred, score variance equals the eigenvalue, components orthonormal,
 eigenvalues descending, sign convention deterministic, covariance mode correct. The Jacobi rotation is a correct
 `JᵀAJ` similarity transform using the numerically stable root for `t`. **The PCA math is sound.** The third row
 of that table is finding A2, not a solver bug.
 
-### A2 · OPAQUE — the demo dataset is the errata iris
+### A2 · FIXED (2026-08-05) — the demo dataset was the errata iris
 
-The Kaggle/UCI `Iris.csv` differs from Fisher's original in two rows. In this file, row 35 is `4.9,3.1,1.5,0.1`
-(Fisher: `…,0.2`) and row 38 is `4.9,3.1,1.5,0.1` (Fisher: `4.9,3.6,1.4,0.1`). R's `iris` and scikit-learn ≥ 0.23
-use the original. Anyone sanity-checking Scatter Lab against a tutorial sees 72.77% where the tutorial says 72.96%
-and reasonably concludes the PCA is broken. Two sentences in `iris.SOURCE.md` closes this permanently.
+The Kaggle/UCI `Iris.csv` differs from Fisher's original in two rows. In this file, row 35 was
+`4.9,3.1,1.5,0.1` (Fisher: `…,0.2`) and row 38 was `4.9,3.1,1.5,0.1` (Fisher: `4.9,3.6,1.4,0.1`). R's `iris` and
+scikit-learn ≥ 0.23 use the original, so anyone sanity-checking Scatter Lab against a tutorial saw 72.77% where
+the tutorial says 72.96% and could reasonably conclude the PCA was broken.
 
-`frontend/public/demo/iris.csv` rows 35, 38 · `iris.SOURCE.md`
+**Resolved.** The demo file is now regenerated from UCI's own corrected copy, `bezdekIris.data`, rather than the
+`iris.data` mirror Kaggle reproduces — UCI ships both, and `iris.names` documents the discrepancy verbatim.
+`iris.SOURCE.md` records the URL, the upstream checksum, the citation
+(<https://doi.org/10.24432/C56C76>), the two presentational transformations applied, and a one-line command that
+reproduces the shipped file byte-identically.
+
+Verified three ways: `bezdekIris.data` differs from `iris.data` at exactly rows 35 and 38 and nowhere else; it
+agrees measurement-for-measurement with scikit-learn's `load_iris` (corrected in 0.23) and `seaborn-data`, all 600
+values; and the result matches four independent sets of published R statistics — column means, sample sds,
+`prcomp` sdev, and variance explained on both scales — to six decimal places. A new suite, `demoData.test.ts`,
+pins the two rows and asserts `runPCA` against R, so re-downloading `iris.data` by mistake fails the build rather
+than silently regressing the demo.
+
+Side benefit worth noting for E4: this is the suite's first *external* ground truth for `runPCA`. Every other PCA
+test checks analytic or self-consistency properties, which by construction cannot catch an error shared between
+the implementation and its own assumptions.
+
+`frontend/public/demo/iris.csv` rows 35, 38 · `iris.SOURCE.md` · `frontend/src/lib/__tests__/demoData.test.ts`
 
 ### A3 · WRONG — `suggest_eps` is off by one against the app's own DBSCAN core rule
 
