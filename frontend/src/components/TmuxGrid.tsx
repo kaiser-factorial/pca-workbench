@@ -34,46 +34,48 @@ const WrappedView = ({ view, index, theme, renderView }: {
     );
 };
 
+// One tree for every view count, with a key per pane.
+//
+// This used to return a structurally different tree per count — for one view the
+// root's child was a WrappedView, for two a div wrapping them. React sees a
+// changed child type at the same position, unmounts the subtree, and
+// react-plotly.js's cleanup calls Plotly.purge, so adding or removing a single
+// pin destroyed and re-created the WebGL context of EVERY pane including the
+// live one (finding F12). There were also no keys, so pins shuffled identity on
+// removal, and the four-view branch laid panes out 0, 3, 1, 2.
+//
+// A CSS grid keeps the DOM shape constant and the keys keep pane identity, so
+// removing a pin now unmounts exactly that pin.
+const GRID: Record<number, { cols: string; rows: string }> = {
+   1: { cols: '1fr', rows: '1fr' },
+   2: { cols: '1fr 1fr', rows: '1fr' },
+   3: { cols: '1fr 1fr', rows: '1fr 1fr' },
+   4: { cols: '1fr 1fr', rows: '1fr 1fr' },
+};
+
 export function TmuxGrid({ views, renderView }: { views: any[], renderView: (view: any, index: number) => React.ReactNode }) {
    const { theme } = useTheme();
-
-   const pane = (i: number) => <WrappedView view={views[i]} index={i} theme={theme} renderView={renderView} />;
-
    if (views.length === 0) return null;
-   if (views.length === 1) return <div className="w-full h-full p-2">{pane(0)}</div>;
 
-   if (views.length === 2) {
-       return (
-           <div className="w-full h-full p-2 flex gap-2">
-               <div className="w-1/2 h-full">{pane(0)}</div>
-               <div className="w-1/2 h-full">{pane(1)}</div>
-           </div>
-       )
-   }
+   const n = Math.min(views.length, 4);
+   const { cols, rows } = GRID[n];
 
-   if (views.length === 3) {
-       return (
-           <div className="w-full h-full p-2 flex gap-2">
-               <div className="w-1/2 h-full">{pane(0)}</div>
-               <div className="w-1/2 h-full flex flex-col gap-2">
-                   <div className="h-1/2 w-full">{pane(1)}</div>
-                   <div className="h-1/2 w-full">{pane(2)}</div>
-               </div>
-           </div>
-       )
-   }
-
-   // length >= 4:
    return (
-       <div className="w-full h-full p-2 flex gap-2">
-           <div className="w-1/2 h-full flex flex-col gap-2">
-               <div className="h-1/2 w-full">{pane(0)}</div>
-               <div className="h-1/2 w-full">{pane(3)}</div>
-           </div>
-           <div className="w-1/2 h-full flex flex-col gap-2">
-               <div className="h-1/2 w-full">{pane(1)}</div>
-               <div className="h-1/2 w-full">{pane(2)}</div>
-           </div>
+       <div
+           className="w-full h-full p-2 grid gap-2"
+           style={{ gridTemplateColumns: cols, gridTemplateRows: rows }}
+       >
+           {views.slice(0, 4).map((view, i) => (
+               <div
+                   key={view.id}
+                   className="min-w-0 min-h-0"
+                   // With three panes the live view takes the full-height left
+                   // column, which is the layout the old branch built by hand.
+                   style={n === 3 && i === 0 ? { gridRow: 'span 2' } : undefined}
+               >
+                   <WrappedView view={view} index={i} theme={theme} renderView={renderView} />
+               </div>
+           ))}
        </div>
-   )
+   );
 }

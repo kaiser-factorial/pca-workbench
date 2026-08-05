@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef, useMemo } from "react";
+import { useEffect, useState, useRef, useMemo, memo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2, Info } from "lucide-react";
 import dynamic from 'next/dynamic';
@@ -14,7 +14,14 @@ import { CSV_BOM, csvCell } from "@/lib/csv";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed, nonNumericAxes } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
-import { AssistantPanel } from "@/components/AssistantPanel";
+// Loaded on demand (finding F1). Statically imported, this pulled
+// react-markdown, remark-gfm, remark-breaks and the whole micromark/mdast tree
+// onto the critical path for every visitor — including everyone who never opens
+// the assistant. ssr:false because the panel is entirely client state.
+const AssistantPanel = dynamic(
+    () => import("@/components/AssistantPanel").then(m => m.AssistantPanel),
+    { ssr: false },
+);
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
@@ -1455,11 +1462,113 @@ const SidebarGroup = ({ children, theme }: { children: React.ReactNode, theme: s
     return <div className="flex-grow flex flex-col gap-6">{children}</div>;
 };
 
-const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRelayout: (e: any) => void }) => {
+// Plot chrome, as a pure function of its inputs.
+//
+// Pulled out of the component for two reasons. Referential stability: it used to
+// be called inline in render, so every pane got a fresh layout object and
+// `react-plotly.js` — which re-plots whenever `prev.layout !== layout`,
+// regardless of `revision` — ran Plotly.react on all four plots on every render
+// (F9, F13). And so it can be memoized where it is used.
+//
+// Colours are CONCRETE. This function used to pass `template: 'plotly_white'`
+// and `var(--foreground)` as font colours; measured in the browser, Plotly
+// resolved the template to `undefined` and every one of those colours to its own
+// default `#444` — the theme-aware chrome the code intended had never once
+// applied (F17). exportHTML always used real hex values, which was the clue.
+const PLOT_CHROME = {
+    light: { fg: '#111111', grid3d: '#bbbbbb', grid2d: '#cccccc', tick: '#888888', zero: '#888888' },
+    dark: { fg: '#10ff50', grid3d: '#3a3a3a', grid2d: '#333333', tick: '#9a9a9a', zero: '#555555' },
+};
+
+type PlotLayoutOpts = {
+    dark: boolean;
+    title: string;
+    colorBy: string;
+    axisNames: AxisLabels;
+    mode: "3D" | "2D";
+    axesOn: boolean;
+    window2d: { x: [number, number], y: [number, number] } | null;
+    camera: { eye: { x: number, y: number, z: number } };
+};
+
+const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window2d, camera }: PlotLayoutOpts) => {
+    const c = dark ? PLOT_CHROME.dark : PLOT_CHROME.light;
+    const baseLayout: any = {
+        autosize: true,
+        // Terminal panes carry their own label — a Plotly title would duplicate it
+        margin: { l: mode === "2D" ? 40 : 0, r: 20, b: mode === "2D" ? 40 : 0, t: dark ? 10 : 40 },
+        ...(dark ? {} : { title: { text: title, font: { color: c.fg } } }),
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        showlegend: false,
+        legend: { title: { text: colorBy, font: { color: c.fg } }, font: { color: c.fg } },
+    };
+
+    if (mode === "3D") {
+        const axis3d = (label: string) => ({
+            showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
+            gridcolor: c.grid3d, zerolinecolor: c.zero,
+            tickfont: { size: 10, color: c.tick },
+            title: { text: label, font: { color: c.fg } },
+        });
+        baseLayout.scene = {
+            camera,
+            xaxis: axis3d(axisNames.x),
+            yaxis: axis3d(axisNames.y),
+            zaxis: axis3d(axisNames.z),
+            bgcolor: 'transparent',
+        };
+    } else {
+        const axis2d = (label: string) => ({
+            showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
+            gridcolor: c.grid2d, zerolinecolor: c.zero,
+            tickfont: { color: c.tick },
+            title: { text: label, font: { color: c.fg } },
+        });
+        baseLayout.xaxis = axis2d(axisNames.x);
+        baseLayout.yaxis = axis2d(axisNames.y);
+        // Each view brings its own viewport — the active one's live state, a
+        // pin's captured one — since these are data-space bounds and pins are
+        // framed on their own columns. `autorange` is set explicitly so a reset
+        // actually refits: dropping `range` alone lets Plotly keep the old window.
+        if (window2d) {
+            baseLayout.xaxis.range = [...window2d.x];
+            baseLayout.yaxis.range = [...window2d.y];
+            baseLayout.xaxis.autorange = false;
+            baseLayout.yaxis.autorange = false;
+        } else {
+            baseLayout.xaxis.autorange = true;
+            baseLayout.yaxis.autorange = true;
+        }
+    }
+
+    return baseLayout;
+};
+
+// Memoized: without it, any state change in Home — a slider tick, a Notes
+// keystroke, a streaming assistant token — re-rendered every pane and, because
+// the layout object was rebuilt inline, made react-plotly.js re-plot all four
+// (F13). None of those values affect the plot.
+const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelayout }: {
+    view: any, title: string, colorBy: string, axesOn: boolean,
+    window2d: { x: [number, number], y: [number, number] } | null,
+    camera: { eye: { x: number, y: number, z: number } },
+    onRelayout: (e: any) => void,
+}) => {
     const { theme } = useTheme();
     const traces = useMemo(
         () => buildTraces(view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted ?? {}, theme === 'terminal', view.shapeBy ?? ""),
         [view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted, theme, view.shapeBy]
+    );
+    // The layout object is now stable across renders that do not change it,
+    // which is what react-plotly.js actually keys on: it re-plots whenever
+    // `prev.layout !== layout`, and `revision` does NOT override that.
+    const layout = useMemo(
+        () => buildPlotLayout({
+            dark: theme === 'terminal', title, colorBy,
+            axisNames: view.labels, mode: view.viewMode, axesOn, window2d, camera,
+        }),
+        [theme, title, colorBy, view.labels, view.viewMode, axesOn, window2d, camera],
     );
     return (
         <Plot
@@ -1471,7 +1580,8 @@ const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRela
             onRelayout={onRelayout}
         />
     );
-};
+});
+ViewPlot.displayName = 'ViewPlot';
 
 export default function Home() {
   const { theme, setTheme } = useTheme();
@@ -1502,11 +1612,20 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
   const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": false, "2D": true });
   const [camera, setCamera] = useState({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+  // The live camera, readable without a re-render. During rotation the angle
+  // changes 60 times a second and React never hears about it (F9) — but pinning,
+  // exporting and saving a workspace all need the angle currently on screen, so
+  // the rAF loop keeps this in step with what it hands Plotly.
+  const cameraRef = useRef(camera);
+  useEffect(() => { cameraRef.current = camera; }, [camera]);
   // 2D viewport, the flat-mode counterpart of `camera`. null = autorange (fit all
   // points). Set by assistant zoom/pan and by the user's own mouse zoom, so a
   // React re-render can't silently snap the plot back to the full extent.
   const [range2d, setRange2d] = useState<{ x: [number, number], y: [number, number] } | null>(null);
   const [isRotating, setIsRotating] = useState(false);
+  // Mirrored into a ref so handleRelayout can stay referentially stable.
+  const isRotatingRef = useRef(false);
+  useEffect(() => { isRotatingRef.current = isRotating; }, [isRotating]);
   const cntRef = useRef(0);
   const reqRef = useRef<number | undefined>(undefined);
 
@@ -1603,24 +1722,53 @@ export default function Home() {
     setMounted(true);
   }, []);
 
+  // Auto-rotation drives Plotly directly instead of going through React (F9).
+  //
+  // `setCamera` in the rAF loop re-rendered the whole Home subtree sixty times a
+  // second — sidebar, Variables panel, PCA section, cluster breakdown, all four
+  // panes and the assistant — and `react-plotly.js` guards on
+  // `prev.layout === layout`, which a freshly-built layout object never
+  // satisfies, so all four plots ran Plotly.react every frame. Writing the eye
+  // straight to the active plot collapses that to one camera write and one
+  // redraw, and the win does not depend on dataset size.
+  //
+  // Only the ACTIVE plot is driven: since F11 a pin holds the angle it was taken
+  // at, so rotating the live view must not move them.
   useEffect(() => {
-    if (isRotating && viewMode === "3D") {
+    if (!(isRotating && viewMode === "3D")) {
+        if (reqRef.current) cancelAnimationFrame(reqRef.current);
+        return;
+    }
+    let cancelled = false;
+    let stopped = false;
+    (async () => {
+        const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
+        if (cancelled) return;
         const rotate = () => {
             cntRef.current += 0.005;
-            setCamera({
-                eye: {
-                    x: 2.2 * Math.cos(cntRef.current),
-                    y: 2.2 * Math.sin(cntRef.current),
-                    z: 0.6
-                }
-            });
+            const eye = {
+                x: 2.2 * Math.cos(cntRef.current),
+                y: 2.2 * Math.sin(cntRef.current),
+                z: 0.6,
+            };
+            cameraRef.current = { eye };
+            const gd = getActivePlotDiv();
+            // `_fullLayout` marks a plot Plotly has actually initialised;
+            // relayout on a div mid-mount throws.
+            if (gd?._fullLayout) Plotly.relayout(gd, { 'scene.camera.eye': eye });
             reqRef.current = requestAnimationFrame(rotate);
         };
         reqRef.current = requestAnimationFrame(rotate);
-    } else {
+    })();
+    return () => {
+        cancelled = true;
+        stopped = true;
         if (reqRef.current) cancelAnimationFrame(reqRef.current);
-    }
-    return () => { if (reqRef.current) cancelAnimationFrame(reqRef.current); }
+        // Commit the angle we stopped on, so an export, a pin or a workspace
+        // save records what the user was looking at rather than where rotation
+        // began. React state is only touched here — once per stop, not per frame.
+        if (stopped) setCamera(cameraRef.current);
+    };
   }, [isRotating, viewMode]);
 
   // Peek at a workbook's sheets as soon as it is chosen, so the user can pick
@@ -1975,66 +2123,11 @@ export default function Home() {
       }
   };
 
-  const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null) => {
-      const dark = theme === 'terminal';
-      const baseLayout: any = {
-          autosize: true,
-          // Terminal panes carry their own label — a Plotly title would duplicate it
-          margin: { l: mode === "2D" ? 40 : 0, r: 20, b: mode === "2D" ? 40 : 0, t: dark ? 10 : 40 },
-          template: 'plotly_white',
-          ...(dark ? {} : { title: { text: title, font: { color: 'var(--foreground)', family: 'var(--font-sans)' } } }),
-          paper_bgcolor: 'transparent',
-          plot_bgcolor: 'transparent',
-          showlegend: false,
-          legend: { title: { text: colorBy, font: { color: 'var(--foreground)' } }, font: { color: 'var(--foreground)' } }
-      };
-
-      // Grid/tick colors must read against each theme's canvas
-      const gridC = dark ? '#3a3a3a' : '#bbbbbb';
-      const gridC2d = dark ? '#333333' : '#cccccc';
-      const tickC = dark ? '#9a9a9a' : '#888888';
-      const zeroC = dark ? '#555555' : '#888888';
-
-      if (mode === "3D") {
-          const axis3d = (label: string) => ({
-              showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
-              gridcolor: gridC, zerolinecolor: zeroC,
-              tickfont: { size: 10, color: tickC },
-              title: { text: label, font: { color: 'var(--foreground)' } }
-          });
-          baseLayout.scene = {
-              camera: camera,
-              xaxis: axis3d(customAxisNames.x),
-              yaxis: axis3d(customAxisNames.y),
-              zaxis: axis3d(customAxisNames.z),
-              bgcolor: 'transparent'
-          };
-      } else {
-          const axis2d = (label: string) => ({
-              showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
-              gridcolor: gridC2d, zerolinecolor: zeroC,
-              tickfont: { color: tickC },
-              title: { text: label, font: { color: 'var(--foreground)' } }
-          });
-          baseLayout.xaxis = axis2d(customAxisNames.x);
-          baseLayout.yaxis = axis2d(customAxisNames.y);
-          // Each view brings its own viewport — the active one's live state, a
-          // pin's captured one — since these are data-space bounds and pins are
-          // framed on their own columns. `autorange` is set explicitly so a reset
-          // actually refits: dropping `range` alone lets Plotly keep the old window.
-          if (window2d) {
-              baseLayout.xaxis.range = [...window2d.x];
-              baseLayout.yaxis.range = [...window2d.y];
-              baseLayout.xaxis.autorange = false;
-              baseLayout.yaxis.autorange = false;
-          } else {
-              baseLayout.xaxis.autorange = true;
-              baseLayout.yaxis.autorange = true;
-          }
-      }
-
-      return baseLayout;
-  };
+  const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null, sceneCamera: { eye: { x: number, y: number, z: number } } | null = null) =>
+      buildPlotLayout({
+          dark: theme === 'terminal', title, colorBy, axisNames: customAxisNames,
+          mode, axesOn, window2d, camera: sceneCamera ?? camera,
+      });
 
   // Target by id — NOT .js-plotly-plot: Plotly.toImage spawns (and can leak) a
   // temporary clone div with that class, and grabbing the purged clone exports
@@ -2352,6 +2445,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             // Freeze the 2D framing too, so a pin keeps showing the region it was
             // taken on after the live view is zoomed elsewhere or reset
             range2d: viewMode === "2D" ? get2dRange() : null,
+            // ...and the 3D angle, for the same reason. Every 3D pane used to
+            // read the single live `camera`, so pins rotated with the live view
+            // and could never hold the viewpoint they were taken from — four
+            // scene redraws a frame for a picture nobody asked to move (F11).
+            // Read from the plot itself so a camera the user dragged is caught
+            // even when state has not been told about it yet.
+            camera: viewMode === "3D"
+                ? (getActivePlotDiv()?.layout?.scene?.camera ?? cameraRef.current)
+                : null,
             muted: { ...mutedMap },
             label: `${activeDataset?.name ?? 'Pinned'} · ${colorBy}` }
       ]);
@@ -2489,10 +2591,12 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       const saved = localStorage.getItem('scatterlab.assistant.dock');
       if (saved === 'right' || saved === 'bottom' || saved === 'float') setAssistantDock(saved);
   }, []);
-  const changeDock = (d: 'right' | 'bottom' | 'float') => {
+  // useCallback so memoizing AssistantPanel is not defeated by a fresh closure
+  // on every Home render (F10).
+  const changeDock = useCallback((d: 'right' | 'bottom' | 'float') => {
       setAssistantDock(d);
       localStorage.setItem('scatterlab.assistant.dock', d);
-  };
+  }, []);
   bridgeRef.current = {
       getState: () => ({
           datasets: datasets.map(d => ({ name: d.name, nRows: d.table.nRows, active: d.id === activeId })),
@@ -2976,6 +3080,29 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       (window as unknown as { __scatterlabBridge?: unknown }).__scatterlabBridge = bridgeRef;
   }, []);
 
+  // Stable across renders, so memoizing ViewPlot is not defeated by a fresh
+  // closure on every prop pass (F13). Reads live values from refs where it must,
+  // rather than closing over state that would force it to be rebuilt.
+  const handleRelayout = useCallback((e: any) => {
+      const gd = getActivePlotDiv();
+      if (!gd) return;
+      if (e['scene.camera']) {
+          // A drag during auto-rotation means the user took the wheel.
+          if (isRotatingRef.current) setIsRotating(false);
+          setCamera(e['scene.camera']);
+          return;
+      }
+      // Mirror the user's own box-zoom/pan into state; without this the next
+      // re-render would re-apply the old layout and snap the plot back.
+      // Double-click sends autorange instead.
+      if (e['xaxis.autorange'] || e['yaxis.autorange']) { setRange2d(null); return; }
+      const x0 = e['xaxis.range[0]'], x1 = e['xaxis.range[1]'];
+      const y0 = e['yaxis.range[0]'], y1 = e['yaxis.range[1]'];
+      if ([x0, x1, y0, y1].every(v => typeof v === 'number' && Number.isFinite(v))) {
+          setRange2d({ x: [x0, x1], y: [y0, y1] });
+      }
+  }, []);
+
   const renderView = (view: any, index: number) => {
       // view object is either the active state or a pinned state
       const isPinned = view.id !== 'active';
@@ -2991,37 +3118,62 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               )}
               <ViewPlot
                   view={view}
-                  layout={getLayout(view.label ?? (isPinned ? "Pinned View" : "Active View"), view.labels, view.viewMode, view.showAxes ?? false, (isPinned ? view.range2d : range2d) ?? null)}
-                  onRelayout={(e: any) => {
-                      if (view.id !== 'active') return;
-                      if (view.viewMode === "3D") {
-                          if (e['scene.camera'] && isRotating) {
-                              setIsRotating(false);
-                              setCamera(e['scene.camera']);
-                          }
-                          return;
-                      }
-                      // Mirror the user's own box-zoom/pan into state; without this
-                      // the next re-render would re-apply the old layout and snap
-                      // the plot back. Double-click sends autorange instead.
-                      if (e['xaxis.autorange'] || e['yaxis.autorange']) { setRange2d(null); return; }
-                      const x0 = e['xaxis.range[0]'], x1 = e['xaxis.range[1]'];
-                      const y0 = e['yaxis.range[0]'], y1 = e['yaxis.range[1]'];
-                      if ([x0, x1, y0, y1].every(v => typeof v === 'number' && Number.isFinite(v))) {
-                          setRange2d({ x: [x0, x1], y: [y0, y1] });
-                      }
-                  }}
+                  title={view.label ?? (isPinned ? "Pinned View" : "Active View")}
+                  colorBy={colorBy}
+                  axesOn={view.showAxes ?? false}
+                  window2d={(isPinned ? view.range2d : range2d) ?? null}
+                  camera={isPinned ? (view.camera ?? camera) : camera}
+                  onRelayout={handleRelayout}
               />
           </div>
       );
   };
 
-  if (!mounted) return null;
+  // Memoized so the live pane's props are referentially stable between renders
+  // that do not concern it. In 3D `effectiveAxes` returns the dataset's own
+  // `axes` object, so the memo held by accident; the 2D branch builds a fresh
+  // literal, which meant every unrelated state change — a slider tick, a Notes
+  // keystroke, a streaming token — rebuilt every trace and handed Plotly new
+  // array references, in the mode where that costs most (F8).
+  const activeView = useMemo(
+      () => (processedData && activeDataset
+          ? {
+              id: 'active', data: processedData, colorBy, shapeBy,
+              axes: effectiveAxes(activeDataset, viewMode),
+              labels: effectiveLabels(activeDataset, viewMode),
+              viewMode, showAxes: showAxes[viewMode], muted: mutedMap,
+              label: `${activeDataset.name} · live`,
+          }
+          : null),
+      [processedData, activeDataset, colorBy, shapeBy, viewMode, showAxes, mutedMap],
+  );
+  const allViews = useMemo(
+      () => (activeView ? [activeView, ...pinnedViews] : []),
+      [activeView, pinnedViews],
+  );
+
+  // Theme-neutral shell until next-themes reports the client's theme.
+  //
+  // This used to `return null`, so the app rendered nothing on the server AND
+  // nothing on the first client render: a blank white page until React
+  // hydrated, then another wait for the ssr:false Plotly chunk, which has no
+  // loading fallback. The EmptyState that exists to greet a first-time user was
+  // invisible until the moment it was no longer needed (finding F2). The gate
+  // itself is legitimate — next-themes cannot know the theme server-side — so
+  // the fix is a shell that commits to no theme rather than to nothing.
+  if (!mounted) {
+      return (
+          <div className="flex w-full h-screen items-center justify-center bg-[var(--background)] text-[var(--foreground)]">
+              <div className="flex flex-col items-center gap-3 opacity-60">
+                  <UploadCloud className="w-10 h-10" aria-hidden="true" />
+                  <span className="text-sm font-bold tracking-tight">Scatter Lab</span>
+                  <span className="text-xs">Loading…</span>
+              </div>
+          </div>
+      );
+  }
 
   // We construct the views array for TmuxGrid: active view is always first, then pinned views
-  const allViews = processedData
-      ? [{ id: 'active', data: processedData, colorBy, shapeBy, axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode, showAxes: showAxes[viewMode], muted: mutedMap, label: `${activeDataset?.name} · live` }, ...pinnedViews]
-      : [];
 
   return (
     <div className={`flex w-full h-screen bg-[var(--background)] text-[var(--foreground)] ${theme === 'terminal' ? 'moving-scanlines' : ''}`}>

@@ -1,4 +1,20 @@
-import OpenAI from 'openai';
+import type OpenAIType from 'openai';
+
+// The OpenAI client is loaded on FIRST USE, not at module load (finding F1).
+//
+// A static import put the client — 224 KB gzipped before tree-shaking — on the
+// critical path for every visitor, including everyone who never opens the
+// assistant and everyone without an API key, for whom the panel is inert. The
+// codebase already does this correctly four times over: xlsx, hyparquet, gifenc
+// and Plotly are all behind `await import(...)`.
+//
+// The handle is cached because `describeApiError` needs the error CLASSES for
+// its instanceof checks, and it is called from a synchronous context.
+let OpenAICtor: typeof OpenAIType | null = null;
+const loadOpenAI = async (): Promise<typeof OpenAIType> => {
+  if (!OpenAICtor) OpenAICtor = (await import('openai')).default;
+  return OpenAICtor;
+};
 import { METHODS_TOPICS, searchMethods } from './methods';
 import type {
   ChatCompletionMessageParam,
@@ -585,8 +601,9 @@ export const summarizeArgs = (argsJson: string): string => {
   }
 };
 
-const makeClient = (apiKey: string, baseURL: string) =>
-  new OpenAI({
+const makeClient = async (apiKey: string, baseURL: string) => {
+  const OpenAI = await loadOpenAI();
+  return new OpenAI({
     apiKey,
     baseURL,
     dangerouslyAllowBrowser: true,
@@ -596,6 +613,7 @@ const makeClient = (apiKey: string, baseURL: string) =>
       'X-Title': 'Scatter Lab',
     },
   });
+};
 
 // One user turn: stream the response, execute any tool calls, loop until the
 // model stops asking for tools. Returns the updated history.
@@ -611,7 +629,7 @@ export const runAssistantTurn = async (
   bridgeRef: { current: AppBridge },
   handlers: StreamHandlers,
 ): Promise<ChatCompletionMessageParam[]> => {
-  const client = makeClient(apiKey, baseURL);
+  const client = await makeClient(apiKey, baseURL);
   const messages: ChatCompletionMessageParam[] = [...history, { role: 'user', content: userText }];
 
   const executeTool = async (name: string, argsJson: string): Promise<string> => {
@@ -785,10 +803,21 @@ export const suggestModels = (models: ModelInfo[]): string[] => {
 
 // Friendly error strings for the panel
 export const describeApiError = (err: unknown): string => {
-  if (err instanceof OpenAI.AuthenticationError) return 'API key rejected — check it in settings.';
-  if (err instanceof OpenAI.NotFoundError) return 'Model not found — check the model ID in settings.';
-  if (err instanceof OpenAI.RateLimitError) return 'Rate limited — wait a moment and try again.';
-  if (err instanceof OpenAI.APIConnectionError) return 'Could not reach the API — check your connection.';
-  if (err instanceof OpenAI.APIError) return `API error: ${err.message}`;
-  return `Error: ${(err as any)?.message ?? err}`;
+  // Reads err.status rather than `instanceof OpenAI.AuthenticationError`, so
+  // this stays synchronous and does not force the SDK to be loaded just to
+  // describe a failure (F1). The status codes are the same contract the error
+  // classes wrap, and they survive a client that never loaded at all.
+  const e = err as { status?: number; message?: string; name?: string };
+  switch (e?.status) {
+    case 401:
+    case 403: return 'API key rejected — check it in settings.';
+    case 404: return 'Model not found — check the model ID in settings.';
+    case 429: return 'Rate limited — wait a moment and try again.';
+  }
+  // APIConnectionError carries no status: the request never reached a server.
+  if (e?.name === 'APIConnectionError' || e?.name === 'APIConnectionTimeoutError') {
+    return 'Could not reach the API — check your connection.';
+  }
+  if (typeof e?.status === 'number') return `API error: ${e.message ?? e.status}`;
+  return `Error: ${e?.message ?? err}`;
 };
