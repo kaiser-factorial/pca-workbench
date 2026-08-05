@@ -1,4 +1,4 @@
-import type { DataTable } from './table';
+import { isNumericColumn, type DataTable } from './table';
 
 export type DefaultAxes = { x: string; y: string; z: string | null };
 
@@ -24,13 +24,17 @@ export const isBooleanLike = (values: any[]) => {
 };
 
 const numericColumns = (table: DataTable) =>
-  table.columns.filter(c => (table.data[c] ?? []).some(v => typeof v === 'number'));
+  table.columns.filter(c => isNumericColumn(table.data[c] ?? []));
 
 // PC columns (from a components run) win. Otherwise, avoid identifiers when
 // there are at least two measured variables to form a meaningful plot.
 export const pickDefaultAxes = (table: DataTable): DefaultAxes => {
-  if (['PC1', 'PC2', 'PC3'].every(c => table.columns.includes(c))) {
-    return { x: 'PC1', y: 'PC2', z: 'PC3' };
+  // Take whichever PCs exist rather than demanding all three: since C10 stopped
+  // zero-padding, a two-component components file legitimately yields PC1/PC2
+  // only, and requiring PC3 sent those datasets down the raw-variable path.
+  const pcs = ['PC1', 'PC2', 'PC3'].filter(c => table.columns.includes(c));
+  if (pcs.length >= 2) {
+    return { x: pcs[0], y: pcs[1], z: pcs[2] ?? null };
   }
   const numeric = numericColumns(table);
   const nonIdentifiers = numeric.filter(c => !isIdentifierColumn(c));

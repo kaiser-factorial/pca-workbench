@@ -1,4 +1,4 @@
-import { DataTable, median, numericValues } from './table';
+import { DataTable, asNumber, median, numericValues } from './table';
 
 // In-browser PCA: median imputation → (optional) standardization → covariance/
 // correlation matrix → Jacobi eigendecomposition → scores + loadings.
@@ -281,11 +281,7 @@ export const runPCA = (
   // Coerce every selected variable once: null marks "not observed as a number",
   // which is what both strategies key off.
   const cols: (number | null)[][] = variables.map(v =>
-    (table.data[v] ?? []).map(x => {
-      if (typeof x === 'number' && Number.isFinite(x)) return x;
-      if (typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x))) return Number(x);
-      return null;
-    }));
+    (table.data[v] ?? []).map(asNumber));
   const missingByVar: { var: string; n: number }[] = [];
   cols.forEach((col, j) => {
     const have = numericValues(col).length;

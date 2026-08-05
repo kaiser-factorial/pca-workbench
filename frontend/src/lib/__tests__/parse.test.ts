@@ -247,6 +247,42 @@ describe('xlsxExtractToTable — which sheet was read, and why (finding C4)', ()
   });
 });
 
+// The CSV path has always dropped blank-named columns; the XLSX path kept them,
+// leaving an unnamed column in the Variables list that matched nothing in the
+// user's sheet.
+describe('xlsxExtractToTable — blank header cells are dropped, as in CSV (finding C8)', () => {
+  it('drops a column whose header is an empty string, and says so', () => {
+    const { table, warnings } = xlsxExtractToTable(makeExtract({
+      columns: ['a', '', 'b'],
+      rows: [{ a: 1, '': 'x', b: 2 }, { a: 3, '': 'y', b: 4 }],
+    }));
+    expect(table.columns).toEqual(['a', 'b']);
+    expect(warnsAbout(warnings, 'blank')).toBe(true);
+  });
+
+  it('treats an all-whitespace header the same way', () => {
+    const { table } = xlsxExtractToTable(makeExtract({
+      columns: ['a', '   ', 'b'], rows: [{ a: 1, '   ': 'x', b: 2 }],
+    }));
+    expect(table.columns).toEqual(['a', 'b']);
+  });
+
+  it('keeps __EMPTY columns, which mean something different', () => {
+    // __EMPTY is SheetJS naming a genuinely blank header — the title-row
+    // signature C7 reports. That column still holds data worth showing.
+    const { table, warnings } = xlsxExtractToTable(makeExtract({
+      columns: ['a', '__EMPTY'], rows: [{ a: 1, __EMPTY: 'x' }],
+    }));
+    expect(table.columns).toEqual(['a', '__EMPTY']);
+    expect(warnsAbout(warnings, 'no header cell')).toBe(true);
+  });
+
+  it('refuses a sheet that was nothing but blank headers', () => {
+    expect(() => xlsxExtractToTable(makeExtract({ columns: ['', '  '], rows: [{ '': 1 }] })))
+      .toThrow(/is empty/);
+  });
+});
+
 // Without cellDates a date cell arrives as the Excel serial number 46024 — a
 // plottable, PCA-able, clusterable "measurement" with nothing marking it as a
 // date. The worker now sets cellDates, so these arrive as Date objects.

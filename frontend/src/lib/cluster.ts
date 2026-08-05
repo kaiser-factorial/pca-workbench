@@ -1,4 +1,4 @@
-import { median, numericValues } from './table';
+import { asNumber, median, numericValues } from './table';
 // Deterministic PRNG so repeated runs give identical clusters (random_state analog)
 import { mulberry32 } from './random';
 
@@ -12,16 +12,23 @@ import { mulberry32 } from './random';
 // units the clustering will actually use. An sd-0 column becomes all zeros: a
 // variable that does not vary contributes nothing to distance, which is the
 // honest reading.
-export const zscoreCellColumns = (cols: (number | null)[][]): (number | null)[][] =>
+//
+// Takes raw table cells and coerces on the way in. It must, because every call
+// site passes them straight from the DataTable: if this only recognised typeof
+// number, a text-formatted value would pass through UNSCALED and then be
+// coerced downstream by imputeColumns, mixing raw units with z-scores in the
+// same distance computation (C6).
+export const zscoreCellColumns = (cols: (number | string | null)[][]): (number | null)[][] =>
   cols.map(col => {
+    const vals = col.map(asNumber);
     let n = 0, sum = 0;
-    for (const v of col) if (typeof v === 'number') { n++; sum += v; }
-    if (!n) return col;
+    for (const v of vals) if (v !== null) { n++; sum += v; }
+    if (!n) return vals;
     const mean = sum / n;
     let ss = 0;
-    for (const v of col) if (typeof v === 'number') ss += (v - mean) ** 2;
+    for (const v of vals) if (v !== null) ss += (v - mean) ** 2;
     const sd = Math.sqrt(ss / n);
-    return col.map(v => (typeof v === 'number' ? (sd ? (v - mean) / sd : 0) : v));
+    return vals.map(v => (v !== null ? (sd ? (v - mean) / sd : 0) : null));
   });
 
 // Smart default for the standardize toggle, by data regime:
@@ -32,7 +39,7 @@ export const zscoreCellColumns = (cols: (number | null)[][]): (number | null)[][
 //   near-constant items by dividing by a tiny sd.
 // - heterogeneous scales → on: otherwise Euclidean distance is effectively
 //   just the widest column.
-export const suggestStandardize = (cols: (number | null)[][], names: string[]): boolean => {
+export const suggestStandardize = (cols: (number | string | null)[][], names: string[]): boolean => {
   // Bare or labeled component sets (PC1, PC2_openness) both count as PC scores.
   // COMP_ composites deliberately do NOT: each comes from a different
   // decomposition, so across-composite scale differences are back to the
@@ -41,7 +48,10 @@ export const suggestStandardize = (cols: (number | null)[][], names: string[]): 
   const ranges: number[] = [];
   for (const col of cols) {
     let min = Infinity, max = -Infinity;
-    for (const v of col) if (typeof v === 'number') { if (v < min) min = v; if (v > max) max = v; }
+    for (const raw of col) {
+      const v = asNumber(raw);
+      if (v !== null) { if (v < min) min = v; if (v > max) max = v; }
+    }
     if (max > min) ranges.push(max - min);
   }
   if (ranges.length < 2) return false;
@@ -64,7 +74,7 @@ export const countImputed = (
   const byVariable: { var: string; n: number }[] = [];
   cols.forEach((col, j) => {
     let have = 0;
-    for (const v of col) if (typeof v === 'number') have++;
+    for (const v of col) if (asNumber(v) !== null) have++;
     if (have < n) byVariable.push({ var: names[j] ?? `column ${j + 1}`, n: n - have });
   });
   return {
@@ -74,14 +84,19 @@ export const countImputed = (
   };
 };
 
-// Column-wise median imputation so missing axis values don't break distance math
-const imputeColumns = (cols: (number | null)[][]): number[][] => {
-  const meds = cols.map(c => median(numericValues(c)));
+// Column-wise median imputation so missing axis values don't break distance math.
+//
+// asNumber rather than a typeof check: this used to treat a text-formatted
+// numeric column as entirely missing and replace every row with the median, so
+// clustering ran on a constant and said nothing about that variable (C6).
+const imputeColumns = (cols: (number | string | null)[][]): number[][] => {
+  const numeric = cols.map(c => c.map(asNumber));
+  const meds = numeric.map(c => median(numericValues(c)));
   const n = cols[0]?.length ?? 0;
-  return Array.from({ length: n }, (_, i) => cols.map((c, j) => (typeof c[i] === 'number' ? (c[i] as number) : meds[j])));
+  return Array.from({ length: n }, (_, i) => numeric.map((c, j) => c[i] ?? meds[j]));
 };
 
-export const dbscan = (colData: (number | null)[][], eps: number, minSamples: number): string[] => {
+export const dbscan = (colData: (number | string | null)[][], eps: number, minSamples: number): string[] => {
   const X = imputeColumns(colData);
   const n = X.length;
   const eps2 = eps * eps;
@@ -117,7 +132,7 @@ export const dbscan = (colData: (number | null)[][], eps: number, minSamples: nu
   return labels.map(l => (l === -1 ? 'Noise' : `Cluster ${l}`));
 };
 
-export const kmeans = (colData: (number | null)[][], k: number): string[] => {
+export const kmeans = (colData: (number | string | null)[][], k: number): string[] => {
   const X = imputeColumns(colData);
   const n = X.length;
   const dim = X[0]?.length ?? 0;

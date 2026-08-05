@@ -2,6 +2,7 @@
 // returns summaries, never row-level data — that is the privacy contract.
 
 import { sampleIndices } from './random';
+import { asNumber } from './table';
 
 type Cell = number | null | undefined | string;
 
@@ -9,7 +10,9 @@ const numericPairs = (a: Cell[], b: Cell[]): [number, number][] => {
   const out: [number, number][] = [];
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
-    if (typeof a[i] === 'number' && typeof b[i] === 'number') out.push([a[i] as number, b[i] as number]);
+    // asNumber, so a text-formatted column correlates like any other (C6)
+    const x = asNumber(a[i]), y = asNumber(b[i]);
+    if (x !== null && y !== null) out.push([x, y]);
   }
   return out;
 };
@@ -86,8 +89,8 @@ export const compareGroups = (
   const all: number[] = [];
   const n = Math.min(numeric.length, groups.length);
   for (let i = 0; i < n; i++) {
-    const v = numeric[i];
-    if (typeof v !== 'number' || groups[i] == null) continue;
+    const v = asNumber(numeric[i]);
+    if (v === null || groups[i] == null) continue;
     const g = String(groups[i]);
     if (!byGroup.has(g)) byGroup.set(g, []);
     byGroup.get(g)!.push(v);
@@ -142,8 +145,8 @@ const toMatrix = (cols: Cell[][], cap = 1200): number[][] => {
   const n = Math.min(...cols.map(c => c.length));
   const rows: number[][] = [];
   for (let i = 0; i < n; i++) {
-    const row = cols.map(c => c[i]);
-    if (row.every(v => typeof v === 'number')) rows.push(row as number[]);
+    const row = cols.map(c => asNumber(c[i]));
+    if (row.every((v): v is number => v !== null)) rows.push(row);
   }
   if (rows.length <= cap) return rows;
   return sampleIndices(rows.length, cap).map(i => rows[i]);

@@ -8,6 +8,8 @@ import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { Accordion, AccordionItem, Separator } from "puxel";
 import { readTable, listSheets, type SheetInfo } from "@/lib/parse";
+import { isNumericColumn } from "@/lib/table";
+import { CSV_BOM, csvCell } from "@/lib/csv";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
@@ -289,8 +291,10 @@ const effectiveAxes = (d: Dataset, mode: "3D" | "2D"): Axes =>
 const effectiveLabels = (d: Dataset, mode: "3D" | "2D"): AxisLabels =>
     mode === "2D" ? { x: d.labels2d.x, y: d.labels2d.y, z: 'Z' } : d.labels;
 
+// isNumericColumn, not `typeof v === 'number'`: a column Excel formatted as Text
+// is still a measurement, and pca.ts/engine.ts always treated it as one (C6).
 const numericColumns = (table: DataTable) =>
-    table.columns.filter(c => (table.data[c] ?? []).some(v => typeof v === 'number'));
+    table.columns.filter(c => isNumericColumn(table.data[c] ?? []));
 
 const defaultLabels = (axes: Axes): AxisLabels => ({ x: axes.x, y: axes.y, z: axes.z ?? 'Z' });
 
@@ -1596,6 +1600,9 @@ export default function Home() {
       const warnings = [
         ...dsParsed.warnings,
         ...(compParsed?.warnings ?? []).map(w => `Components file: ${w}`),
+        // What the projection did to the numbers — coverage, fuzzy name
+        // matches, unreadable loadings, fewer than three components (C10).
+        ...result.warnings,
       ];
       setUploadStatus(warnings.length
         ? `${warnings.map(w => `⚠ ${w}`).join('\n')}\n${result.message}`
@@ -1694,7 +1701,7 @@ export default function Home() {
       const tables: Record<string, DataTable> = {};
       registry.forEach((id, tbl) => { tables[id] = tbl; });
       return {
-          version: 1,
+          version: wsStore.WORKSPACE_VERSION,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
           activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
           notes, mutedMap,
@@ -1740,6 +1747,10 @@ export default function Home() {
       try {
           const ws = await wsStore.loadWorkspace(name);
           if (!ws) { setWorkspaceBusy(""); setUploadStatus("Workspace not found."); return; }
+          // Stored workspaces get the same check as imported ones: an entry
+          // written by an older build, or half-written when a tab closed, would
+          // otherwise white-screen on render exactly as a bad file did (C11).
+          wsStore.validateWorkspace(ws);
           applyWorkspace(name, ws);
           setWorkspaceBusy("");
       } catch (err: any) {
@@ -2020,7 +2031,14 @@ export default function Home() {
       const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
       const gd = getActivePlotDiv();
       if (!gd || !gd.data) return 'The active plot is not ready to export yet.';
+      // Hold the camera still for the capture, as exportGIF already did: a PNG
+      // saved mid-rotation catches the camera in motion, so the saved angle is
+      // not the one on screen when the button was pressed (C13).
+      const wasRotating = isRotating;
+      setIsRotating(false);
       try {
+          // One frame for the rAF loop to observe the flag before capturing.
+          await new Promise(r => requestAnimationFrame(() => r(null)));
           await setExportDressing(Plotly, gd, true);
           await Plotly.downloadImage(gd, {
               format: 'png',
@@ -2036,6 +2054,7 @@ export default function Home() {
           return message;
       } finally {
           try { await setExportDressing(Plotly, gd, false); } catch { /* a re-render restores the live plot */ }
+          setIsRotating(wasRotating);
       }
       return null;
   };
@@ -2217,17 +2236,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
   const exportDatasetCsv = (): string | null => {
       const table = freshTableRef.current ?? processedData;
       if (!activeDataset || !table) return 'No active dataset to export.';
-      const encode = (value: unknown) => {
-          const text = value == null ? '' : String(value);
-          return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-      };
       const rows = [
-          table.columns.map(encode).join(','),
+          table.columns.map(csvCell).join(','),
           ...Array.from({ length: table.nRows }, (_, row) =>
-              table.columns.map(column => encode(table.data[column]?.[row])).join(',')
+              table.columns.map(column => csvCell(table.data[column]?.[row])).join(',')
           ),
       ];
-      const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      // BOM: without it Excel reads the file as the system codepage, so any
+      // non-ASCII column name or value arrives mangled (C12).
+      const blob = new Blob([CSV_BOM + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -2925,24 +2942,27 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 ))}
               </div>
             )}
-            {(datasets.length > 0 || workspaces.length > 0) && (
-              <div className="flex gap-2 text-[11px]">
-                {datasets.length > 0 && (
-                  <button onClick={exportWorkspace} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
-                    Export as file
-                  </button>
-                )}
-                <label className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
-                  Import file
-                  <input
-                    type="file"
-                    accept=".json"
-                    className="hidden"
-                    onChange={e => { const f = e.target.files?.[0]; if (f) importWorkspace(f); e.target.value = ""; }}
-                  />
-                </label>
-              </div>
-            )}
+            {/* Import is ALWAYS available. It used to share the export row's
+                condition, so someone opening the app fresh with a workspace a
+                colleague sent them had no control to open it — the one moment
+                importing is most likely (C15). Export stays gated: there is
+                nothing to write until a dataset is loaded. */}
+            <div className="flex gap-2 text-[11px]">
+              {datasets.length > 0 && (
+                <button onClick={exportWorkspace} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
+                  Export as file
+                </button>
+              )}
+              <label className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
+                Import file
+                <input
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) importWorkspace(f); e.target.value = ""; }}
+                />
+              </label>
+            </div>
             {workspaceBusy && <p className="text-[11px] opacity-70">{workspaceBusy}</p>}
           </SidebarSection>
 

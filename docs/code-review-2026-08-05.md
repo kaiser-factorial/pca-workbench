@@ -36,7 +36,7 @@ chunk.
 ### Fix these ten first
 
 1. ~~**A3** — `suggest_eps` is off by one, and contradicts the app's own methods reference.~~ **FIXED**
-2. ~~**C1** — PapaParse errors are discarded; ragged rows, unterminated quotes and Qualtrics title rows destroy data silently.~~ **FIXED**
+2. ~~**C1** — PapaParse errors are discarded; ragged rows, unterminated quotes and Qualtrics title rows destroy data silently.~~ **FIXED**  — and with C4–C15, the whole C series is now closed.
 3. ~~**A7** — `compare_groups` reports η² = 1.000 on an ID column.~~ **FIXED**
 4. ~~**B1–B3** — the four disclosures (deterministic k-means, median imputation, plotted-axes-only clustering, population sd).~~ **FIXED** — delivered as `disclosures.ts` + `InfoTip`.
 5. ~~**A4** — cluster diagnostics subsample by stride, not at random.~~ **FIXED**
@@ -518,67 +518,159 @@ A single `Date` in a column earns the warning, since mixed columns are the ones 
 
 `xlsx.worker.ts` (`cellDates`) · `parse.ts` · `table.ts:10` (no longer dead) · tests in `parse.test.ts`
 
-### C6 · OPAQUE — Excel columns formatted as Text vanish from the app, though the PCA math handles them
+### C6 · FIXED (2026-08-05) — Excel columns formatted as Text vanish from the app, though the PCA math handles them
 
-`pca.ts:135` and `engine.ts:214` coerce numeric strings; `numericColumns()`, `numericPairs()` and
-`imputeColumns()` do not. Pick one convention.
+`pca.ts` and `engine.ts` coerced numeric strings; `numericColumns()`, `numericPairs()` and `imputeColumns()` did
+not. So one column was a usable measurement in half the app and missing data in the other half.
 
-`page.tsx:273` · `stats.ts:43` · `cluster.ts:55`
+The clustering case was the damaging one, and it was worse than "vanishes": `imputeColumns` treated every value in
+a text-formatted column as missing and replaced it with the column median. Clustering then ran on a **constant**
+for that axis — producing labels that looked like clusters and said nothing whatsoever about that variable.
 
-### C7 · OPAQUE — a title row above the header yields phantom `__EMPTY` columns and shifted data, with no error
+**Resolved.** One helper, `asNumber` in `table.ts`, is now the app's single answer to "is this cell a number, and
+which one": a finite number written as text is a number; blank, NaN, ±Infinity and words are `null`. It is used by
+`numericColumns`, `numericPairs`, `compareGroups`, `toMatrix`, `countImputed`, `imputeColumns`,
+`zscoreCellColumns`, `suggestStandardize`, `runPCA`, `processUpload` and `pickDefaultAxes` — the inline coercions
+in `pca.ts` and `engine.ts` were replaced by it rather than left as a fifth copy.
 
-Verified.
+`zscoreCellColumns` mattered more than it looks. Every call site passes raw `DataTable` columns, so had it kept a
+`typeof` check while `imputeColumns` coerced, a text value would have passed through **unscaled** and then been
+coerced downstream — mixing raw units and z-scores inside one distance computation. Fixing one without the other
+would have replaced a visible bug with a silent one.
 
-`parse.ts:320-329`
+One deliberate subtlety: `Number('')` is `0` and `Number(' ')` is `0`, so the emptiness check comes first. A blank
+cell is missing data, not a measured zero, and there is a test pinning that.
 
-### C8 · EDGE — a blank XLSX header cell becomes a column named `""`
+Nine of the ten new tests fail against the pre-fix code.
 
-The CSV path filters those out; the XLSX path doesn't.
+`table.ts` `asNumber`/`isNumericColumn` · `cluster.ts` · `stats.ts` · `pca.ts` · `engine.ts` · `defaults.ts` ·
+`page.tsx` · tests in `numeric.test.ts`
 
-`parse.ts:312` vs `320-329`
+### C7 · FIXED (2026-08-05, in the C1–C3 batch) — a title row above the header yields phantom `__EMPTY` columns and shifted data, with no error
 
-### C9 · EDGE — no file-size guard anywhere
+Closed by commit `8ed0c16`, which added the `__EMPTY` warning to the XLSX path; the entry was simply never marked.
+Confirmed present and covered by tests.
 
-Nothing in `uploadFiles` or `readTable` bounds input size, and parsing runs on the main thread with no worker, so
-a large CSV freezes the tab showing only "Processing…". See F23.
+> ⚠ 2 columns had no header cell and were named "__EMPTY", "__EMPTY_1". If the sheet has a title row above the
+> header, the first data row is being used as the column names.
 
-`page.tsx:1464-1512`
+`parse.ts` · tests in `parse.test.ts`
 
-### C10 · OPAQUE — components-file projection truncates, zero-pads, and coerces, all silently
+### C8 · FIXED (2026-08-05) — a blank XLSX header cell becomes a column named `""`
 
-Four silences in one function:
+The CSV path filtered those out; the XLSX path did not, leaving an unnamed column in the Variables list that
+matched nothing in the user's sheet.
 
-- Only the *intersecting* variables are used, with no renormalisation, so a 50-variable components file matched against 20 present columns produces a truncated dot product that is not the PC score — and the message reports the count used but never how many were missing.
-- Matching is case- and whitespace-sensitive (`df.columns.includes(v)`), so `Openness` vs `openness` yields no overlap at all.
-- `PC1/PC2/PC3` are always created and zero-padded, so a 2-component file yields an all-zero PC3 that `pickDefaultAxes` then assigns to the Z axis.
-- `Number(v) || 0` turns an unparseable loading into a real zero without a word.
+**Resolved.** `xlsxExtractToTable` now drops columns whose name is empty or all whitespace and reports them in the
+same words the CSV path uses, so the two paths no longer disagree about the same file. `__EMPTY` columns are
+deliberately kept: that name means a genuinely blank header cell above real data — the C7 title-row signature —
+which is a different thing from a header that is an empty string.
 
-Report coverage as "used 20 of 50 components-file variables", warn below some threshold, offer case-insensitive
-matching with an explicit note, and create only the PCs the file actually contains.
+`parse.ts` · tests in `parse.test.ts`
 
-`engine.ts:197-287` (lines 200-208, 244-260, 262-271) · `defaults.ts:31-39`
+### C9 · FIXED (2026-08-05) — no file-size guard anywhere
 
-### C11 · EDGE — workspace import validates only that `version` is truthy
+Nothing bounded input size, and CSV parsing still runs on the main thread, so a large file froze the tab on
+"Processing…" with no explanation and no way to cancel.
 
-`importWorkspaceFile` checks `!parsed.version` and nothing else. `applyWorkspace` then rehydrates table references
-and hands the result to `setDatasets`, where render dereferences `d.table.nRows` — so a malformed, truncated or
-hand-edited workspace file throws during render and white-screens the app with no recovery path. `version: 1` is
-written but never read, so there is no forward-compatibility story either.
+**Resolved**, in `readTable` so every entry point is covered at once — dropzone, drag-and-drop, demo and the
+components slot. Two thresholds, because refusing and warning are different jobs:
 
-`workspaces.ts:132-139` · `page.tsx:1560-1578, 1626-1657`
+- **Over 250 MB: refused**, with the size and the reason. The whole table lives in memory as columnar arrays and a
+  text file becomes several times its own size as JS values, so this is set where the tab would fail anyway. An
+  explicit refusal beats an OOM crash that reads as a bug in the app.
+- **Over 25 MB: loaded, then warned** that rotation, clustering and the diagnostics will be slow. Said afterwards
+  on purpose — it explains the wait the user just sat through and warns them off what will be slow next.
 
-### C12 · EDGE — CSV export has no BOM and no formula-injection guard
+Size is checked before the extension, so an oversized `.docx` gets the useful message rather than a complaint
+about its suffix.
 
-Non-ASCII column names mangle when Excel opens the file, and a cell beginning `=` `+` `-` `@` can be interpreted
-as a formula.
+`parse.ts` `MAX_FILE_BYTES`/`LARGE_FILE_BYTES` · tests in `csv.test.ts`
 
-`page.tsx:2088-2098`
+### C10 · FIXED (2026-08-05) — components-file projection truncates, zero-pads, and coerces, all silently
 
-### C13 · EDGE — `exportPNG` doesn't pause auto-rotation the way `exportGIF` does
+Four silences in one function, each producing a number that looked like a PC score and was not one.
 
-A PNG saved mid-rotation can capture a moving camera.
+**Resolved, all four, and every one of them now says something.**
 
-`page.tsx:1886-1909` vs `1919-1920`
+*Truncated projection.* Only the intersecting variables were used, with no renormalisation, so a 50-variable
+components file matched against 20 present columns produced a partial dot product. The message reported the count
+used and never the count missing. Coverage is now the headline, and the wording says why it matters rather than
+just quoting a ratio:
+
+> ⚠ The components file lists 5 variables and this dataset has 3. The 2 missing ("agreeableness", …) contribute
+> nothing, so the scores are a partial projection rather than the component the file describes — they are not
+> comparable to scores computed with the full set.
+
+Below half coverage a second, blunter line is added.
+
+*Case-sensitive matching.* `Openness` against `openness`, or a trailing space, yielded **no overlap at all** — a
+total failure presented as "no overlapping variables". Matching now falls back to a trimmed, lower-cased lookup,
+with exact matches always winning, and says when it had to.
+
+*Zero-padded PCs.* `PC1/PC2/PC3` were always created, so a two-component file produced an all-zero PC3 that
+`pickDefaultAxes` then assigned to the Z axis — a plot with a meaningless third dimension. Only the components the
+file contains are created now, and `pickDefaultAxes` takes whichever PCs exist rather than demanding all three.
+
+*Unreadable loadings.* `Number(v) || 0` turned an unparseable loading into a real zero — a claim ("this variable
+does not load on this component") rather than an omission. It still has to be 0 for the arithmetic, but the count
+is reported, and a genuine 0 is not mistaken for one.
+
+`engine.ts` · `defaults.ts` `pickDefaultAxes` · `page.tsx` (warnings surfaced) · tests in `projection.test.ts`
+
+### C11 · FIXED (2026-08-05) — workspace import validates only that `version` is truthy
+
+`importWorkspaceFile` checked `!parsed.version` and nothing else. `applyWorkspace` then rehydrated a dangling
+table reference to `undefined` and handed it to `setDatasets`, where render dereferenced `d.table.nRows` — throwing
+inside React and white-screening the app with no recovery but a reload.
+
+**Resolved.** `validateWorkspace` runs **before any state is replaced** and names what is wrong:
+
+> Import failed: Workspace file is damaged: dataset "inject" refers to a table ("t_missing") that the file does
+> not contain.
+
+It checks the payload is an object, the version is a number, `tables` / `datasets` / `pinnedViews` have the right
+shapes, every referenced table resolves, and every resolved table really is one. `version` is now read as well as
+written, so a file from a newer build says so instead of failing further in. Malformed JSON gets its own message
+rather than `JSON.parse`'s ("Unexpected token < in JSON at position 0"), which means nothing to a researcher who
+picked the wrong file.
+
+The same check guards the IndexedDB load path, not just file import: a stored workspace half-written when a tab
+closed would white-screen identically.
+
+Written against `unknown` rather than `any` — this is the one place in the app handling a value nobody typed, so
+the narrowing should be real. That removed a pre-existing lint error rather than adding any.
+
+Verified in the browser: damaged file refused, app still rendered, still interactive afterwards.
+
+`workspaces.ts` `validateWorkspace`/`WORKSPACE_VERSION` · `page.tsx` (import + IndexedDB load) ·
+tests in `workspaces.test.ts`
+
+### C12 · FIXED (2026-08-05) — CSV export has no BOM and no formula-injection guard
+
+**Resolved** in a new `csv.ts`, small but worth having tested because the two halves pull in opposite directions.
+
+The BOM is straightforward: without it Excel reads a UTF-8 CSV as the system codepage and mangles every non-ASCII
+name — and this app's users export questionnaire items in every script there is.
+
+The formula guard needed more care than the usual advice. The standard mitigation prefixes anything opening with
+`=`, `+`, `-` or `@`, but `-` is also the minus sign, and this app exports PC scores, z-scores and correlations —
+**negative numbers are everywhere**. Blanket-escaping would corrupt the common case to defend against the rare
+one. So the guard is number-aware: anything that reads as a number passes through untouched (a numeric cell cannot
+be a formula), and only text opening with a lead character is prefixed with an apostrophe.
+
+Verified on the exported bytes rather than in the abstract — `ef bb bf` BOM present, `naïve_μ` intact,
+`=HYPERLINK(...)` and `@SUM(A1)` both defused, `-3.5` and `-0.25` untouched.
+
+`csv.ts` (new) · `page.tsx` `exportDatasetCsv` · tests in `csv.test.ts`
+
+### C13 · FIXED (2026-08-05) — `exportPNG` doesn't pause auto-rotation the way `exportGIF` does
+
+**Resolved.** `exportPNG` now stops rotation, yields one animation frame so the rAF loop observes the flag before
+the capture, and restores the previous rotation state in `finally` — the same shape `exportGIF` already used, so
+the two exports no longer disagree about whether the camera holds still.
+
+`page.tsx` `exportPNG`
 
 ### C14 · FIXED (2026-08-05) — a corrupt XLSX was reported as a problem with the user's data
 
@@ -609,6 +701,19 @@ Worth noting what is not a bug: a CSV renamed `.xlsx` parses correctly, because 
 than trusting the extension.
 
 `parse.ts` `BINARY_JUNK` / `xlsxExtractToTable` · tests in `parse.test.ts`
+
+### C15 · FIXED (2026-08-05) — a workspace file could not be imported until you already had data
+
+Found while writing the regression suite, not by reading the code: the Playwright run could not locate the import
+control on a fresh page, and the reason turned out to be real rather than a bad selector. The whole Export/Import
+row was gated on `datasets.length > 0 || workspaces.length > 0`, so someone opening the app for the first time
+with a `.scatterlab.json` a colleague had sent them had **no control to open it** — precisely the moment importing
+is most likely. The workaround was to load an unrelated dataset first, which nothing on screen suggested.
+
+**Resolved.** Import is now always available. Export stays gated, because until a dataset is loaded there is
+genuinely nothing to write.
+
+`page.tsx` (Workspace section) · covered by the workspace regression run
 
 ### OK — what the import/export path gets right
 

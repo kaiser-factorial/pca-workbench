@@ -22,6 +22,34 @@ export const rowsToTable = (rows: Record<string, any>[], columns: string[]): Dat
   return { columns, data, nRows: rows.length };
 };
 
+/**
+ * The app's single answer to "is this cell a number, and which one".
+ *
+ * Excel columns formatted as Text arrive as strings, and so do CSV values
+ * PapaParse declined to convert. `pca.ts` and `engine.ts` already coerced them;
+ * `numericColumns`, `numericPairs` and the clustering imputer did not, so the
+ * same column was a usable measurement in one half of the app and missing data
+ * in the other (finding C6). Worst case, clustering median-imputed *every* row
+ * of a text-formatted column and silently clustered on the median.
+ *
+ * A finite number written as text is a number. Anything else — blank, NaN,
+ * ±Infinity, a word — is null, meaning "not observed as a number".
+ */
+export const asNumber = (v: unknown): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    // Number('') is 0 and Number(' ') is 0, so the emptiness check must come first.
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+};
+
+/** True when the column holds at least one value usable as a number. */
+export const isNumericColumn = (vals: unknown[]): boolean => vals.some(v => asNumber(v) !== null);
+
 export const numericValues = (vals: any[]): number[] =>
   vals.filter((v): v is number => typeof v === 'number');
 

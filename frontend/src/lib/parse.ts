@@ -8,6 +8,22 @@ export type { SheetInfo };
 
 export const SUPPORTED_EXTENSIONS = ['.csv', '.xlsx', '.parquet'];
 
+// Nothing bounded input size, and parsing a CSV still happens on the main
+// thread, so a large file froze the tab on "Processing…" with no explanation
+// and no way to cancel (finding C9).
+//
+// The hard limit is set where the browser would fail anyway: the whole table is
+// held in memory as columnar arrays, and a text file becomes several times its
+// own size as JS values, so a quarter-gigabyte input is already past what a tab
+// can hold alongside a WebGL plot. Refusing with a number beats an OOM crash
+// that looks like a bug in the app.
+export const MAX_FILE_BYTES = 250 * 1024 * 1024;
+// Below the hard limit but big enough that the wait needs explaining.
+export const LARGE_FILE_BYTES = 25 * 1024 * 1024;
+
+const formatBytes = (b: number) =>
+  b >= 1024 * 1024 * 1024 ? `${(b / 1024 / 1024 / 1024).toFixed(1)} GB` : `${Math.round(b / 1024 / 1024)} MB`;
+
 // Parsers report what they silently did to the file alongside the table.
 // PapaParse hands back a res.errors array describing ragged rows, unterminated
 // quotes and undetectable delimiters; ignoring it meant a malformed CSV loaded
@@ -146,7 +162,10 @@ const BINARY_JUNK = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/;
 // SheetJS objects — see xlsx.worker.ts for why that boundary exists. Split out
 // as a pure function for the same reason parseCSVText is: the warnings are the
 // part worth testing, and they should not need a Worker to exercise.
-export const xlsxExtractToTable = ({ sheetNames, sheetName, autoSelected, rows, columns }: WorkbookExtract): ParsedTable => {
+export const xlsxExtractToTable = (
+  { sheetNames, sheetName, autoSelected, rows, columns: rawColumns }: WorkbookExtract,
+): ParsedTable => {
+  let columns = rawColumns;
   // SheetJS does not throw on a file that is not a spreadsheet: handed random
   // bytes it returns a plausible-looking workbook whose headers are binary
   // garbage. The failure then surfaced downstream as "needs at least two
@@ -158,6 +177,13 @@ export const xlsxExtractToTable = ({ sheetNames, sheetName, autoSelected, rows, 
       `"${sheetName}" does not contain readable spreadsheet data — most of its column names are binary rather than text. The file is probably corrupt, incompletely downloaded, or not really an XLSX. Try re-exporting it, or save it as CSV.`
     );
   }
+
+  // A header cell holding an empty string (rather than being truly blank, which
+  // SheetJS names __EMPTY) becomes a column called "". The CSV path has always
+  // dropped those; the XLSX path kept them, producing an unnamed, unselectable
+  // column in the Variables list (C8).
+  const blankNamed = columns.filter(c => c.trim() === '');
+  columns = columns.filter(c => c.trim() !== '');
 
   if (!columns.length) {
     // Naming the other sheets matters: a Readme-then-Data workbook is common,
@@ -187,6 +213,9 @@ export const xlsxExtractToTable = ({ sheetNames, sheetName, autoSelected, rows, 
   // the user cannot match to anything in their sheet.
   if (junk.length) {
     warnings.push(`${plural(junk.length, 'column name')} contains characters that are not readable text, which usually means the header row was misread. Check that the columns line up with your sheet.`);
+  }
+  if (blankNamed.length) {
+    warnings.push(`${plural(blankNamed.length, 'header cell was', 'header cells were')} blank, so ${blankNamed.length === 1 ? 'that column' : 'those columns'} ${blankNamed.length === 1 ? 'was' : 'were'} skipped.`);
   }
   // SheetJS invents __EMPTY / __EMPTY_1 keys for header cells that are blank,
   // which is the signature of a title line sitting above the real header.
@@ -273,8 +302,32 @@ const parseParquet = async (file: File): Promise<ParsedTable> => {
 
 export const readTable = async (file: File, opts: { sheet?: string } = {}): Promise<ParsedTable> => {
   const name = file.name.toLowerCase();
-  if (name.endsWith('.csv')) return parseCSV(file);
-  if (name.endsWith('.xlsx')) return parseXLSX(file, opts.sheet);
-  if (name.endsWith('.parquet')) return parseParquet(file);
-  throw new Error(`Unsupported file type — use one of: ${SUPPORTED_EXTENSIONS.join(', ')}`);
+  // Size is checked before the extension so an oversized file gets the useful
+  // message rather than a complaint about its suffix.
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error(
+      `"${file.name}" is ${formatBytes(file.size)}, over the ${formatBytes(MAX_FILE_BYTES)} limit. Everything here runs in the browser tab, which cannot hold a table that size alongside the plot. Filter or subsample the file first, or split it by group.`,
+    );
+  }
+
+  const read = async (): Promise<ParsedTable> => {
+    if (name.endsWith('.csv')) return parseCSV(file);
+    if (name.endsWith('.xlsx')) return parseXLSX(file, opts.sheet);
+    if (name.endsWith('.parquet')) return parseParquet(file);
+    throw new Error(`Unsupported file type — use one of: ${SUPPORTED_EXTENSIONS.join(', ')}`);
+  };
+
+  const parsed = await read();
+  // Said afterwards on purpose: it explains a wait the user has just sat
+  // through, and warns them off the interactions that will be slow next.
+  if (file.size > LARGE_FILE_BYTES) {
+    return {
+      ...parsed,
+      warnings: [
+        ...parsed.warnings,
+        `This file is ${formatBytes(file.size)}. Everything runs in the browser, so rotating, clustering and the k/eps diagnostics will be noticeably slower than usual, and the tab may stop responding while they run.`,
+      ],
+    };
+  }
+  return parsed;
 };
