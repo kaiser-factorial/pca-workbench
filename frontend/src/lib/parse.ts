@@ -292,13 +292,12 @@ const parseParquet = async (file: File): Promise<ParsedTable> => {
   const rows = await parquetReadObjects({ file: await file.arrayBuffer() });
   if (!rows.length) throw new Error('Parquet file has no rows');
   const columns = Object.keys(rows[0]);
-  // hyparquet may hand back BigInt for int64 columns — downcast for plotting
-  const fixed = rows.map(r => {
-    const o: Record<string, any> = {};
-    for (const c of columns) o[c] = typeof r[c] === 'bigint' ? Number(r[c]) : sanitizeCell(r[c]);
-    return o;
-  });
-  return { table: rowsToTable(fixed, columns), warnings: [] };
+  // Straight to rowsToTable, which sanitizes every cell anyway. The mapped copy
+  // this replaces kept the original rows, a second full set of row objects and
+  // the columnar result all alive at peak — measured +314 MB for the copy alone
+  // — and ran sanitizeCell twice per cell (F20). BigInt now lives in
+  // sanitizeCell, so nothing is lost by removing the pass.
+  return { table: rowsToTable(rows, columns), warnings: [] };
 };
 
 export const readTable = async (file: File, opts: { sheet?: string } = {}): Promise<ParsedTable> => {

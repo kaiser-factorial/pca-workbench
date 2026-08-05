@@ -255,7 +255,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
   const primary = theme === 'primary';
   const panelCls = primary
     ? 'bg-white border-[3px] border-[#111111] shadow-[6px_6px_0px_#111111]'
-    : 'bg-black/85 border border-[var(--system-green)]/50 backdrop-blur-sm';
+    : 'bg-black/85 border border-[var(--system-green)]/50';
   const headerCls = primary
     ? 'bg-[#111111] text-white'
     : 'bg-transparent text-[var(--system-green)] border-b border-[var(--system-green)]/30';

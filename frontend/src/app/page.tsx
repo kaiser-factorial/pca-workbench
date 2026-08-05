@@ -9,6 +9,7 @@ import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { Accordion, AccordionItem, Separator } from "puxel";
 import { readTable, listSheets, type SheetInfo } from "@/lib/parse";
 import { asNumber, isNumericColumn } from "@/lib/table";
+import { scanTable, numericColumnsOf, categoricalColumnsOf } from "@/lib/profile";
 import { CSV_BOM, csvCell } from "@/lib/csv";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed, nonNumericAxes } from "@/lib/cluster";
@@ -45,7 +46,7 @@ const PrimaryCollapsible = ({ title, mode = 'top', defaultOpen = true, width, bu
         );
 
         return (
-            <div className="flex bg-[var(--background)]/90 backdrop-blur-md border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] overflow-hidden transition-all duration-200" style={{ width: isOpen ? width : 36, height: 'fit-content' }}>
+            <div className="flex bg-[var(--background)]/90 border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] overflow-hidden transition-[width] duration-200" style={{ width: isOpen ? width : 36, height: 'fit-content' }}>
                 {buttonPosition === 'left' && buttonNode}
                 <div className="flex-grow min-w-0 transition-opacity duration-200" style={{ opacity: isOpen ? 1 : 0, width: isOpen ? width - 36 : 0 }}>
                     <div className="p-3" style={{ width: width - 36 }}>
@@ -58,7 +59,7 @@ const PrimaryCollapsible = ({ title, mode = 'top', defaultOpen = true, width, bu
     }
 
     return (
-        <div className="bg-[var(--background)]/90 backdrop-blur-md border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] transition-all duration-200 flex flex-col" style={{ width }}>
+        <div className="bg-[var(--background)]/90 border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] transition-[width] duration-200 flex flex-col" style={{ width }}>
             <button 
                 onClick={() => setIsOpen(!isOpen)} 
                 className="w-full flex justify-between items-center p-2 bg-[var(--border)] text-[var(--background)] hover:opacity-80 transition-opacity cursor-pointer"
@@ -351,10 +352,25 @@ const markerSizeFor = (mode: "3D" | "2D", symbol?: string) => {
     return 4;
 };
 
-const shapeCategories = (vals: any[]) =>
-    sortCategories(Array.from(new Set(vals.map((v: any) => String(v ?? 'N/A')))));
+// Called from both buildTraces and ThemedLegend. `vals.map(String)` across every
+// row, to discover at most six distinct values, measured 8.4 ms on a 200k table
+// (finding F14). A Set-first loop is 0.0 ms.
+//
+// Stops one past the decision threshold: everything downstream only asks
+// "is this more than MAX_SHAPE_CATEGORIES?", so counting further is wasted. The
+// exact total is therefore NOT available above the cap — the one caller that
+// used to print it now says "more than N", because printing a capped count
+// would be worse than printing none.
+const shapeCategories = (vals: any[]) => {
+    const seen = new Set<string>();
+    for (const v of vals) {
+        seen.add(String(v ?? 'N/A'));
+        if (seen.size > MAX_SHAPE_CATEGORIES) break;
+    }
+    return sortCategories(Array.from(seen));
+};
 
-const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false, shapeField = "") => {
+const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false, shapeField = "", includeFloor = true) => {
     if (!table || table.nRows === 0) return [];
     const n = table.nRows;
     const px = table.data[axes.x] ?? [];
@@ -385,22 +401,30 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         // variable subdivides traces without shifting anybody's colour
         const colorCats = sortCategories(Array.from(new Set(colorVals.map((v: any) => v ?? "N/A"))));
         const colorIdx = new Map(colorCats.map((v, i) => [String(v), i]));
-        const grouped: Record<string, { x: any[], y: any[], z: any[], color: any, shape: string | null }> = {};
+        // Grouping key is a NUMBER, and the lookups behind it are keyed on the
+        // raw values rather than their string forms. The composite
+        // `${cval}␟${sval}` this replaces allocated a string per point per call
+        // and measured as the single most expensive line in the function — 4.8
+        // ms of a 50k total (finding F15). Stringifying for `colorIdx.get`
+        // would have put the same allocation straight back.
+        const colorRank = new Map<any, number>(colorCats.map((v, i) => [v, i]));
+        const shapeRank = new Map<string, number>(shapeCats.map((v, i) => [v, i]));
+        const stride = shapeCats.length + 1;
+        const grouped = new Map<number, { x: any[], y: any[], z: any[], color: any, shape: string | null, ci: number, si: number }>();
         for (let i = 0; i < n; i++) {
             const cval = colorVals[i] ?? "N/A";
             const sval = shapeAt(i);
-            const key = sval == null ? String(cval) : `${cval}␟${sval}`;
-            const g = (grouped[key] ??= { x: [], y: [], z: [], color: cval, shape: sval });
+            const ci = colorRank.get(cval) ?? 0;
+            const si = sval == null ? 0 : (shapeRank.get(sval) ?? -1) + 1;
+            const key = ci * stride + si;
+            let g = grouped.get(key);
+            if (!g) { g = { x: [], y: [], z: [], color: cval, shape: sval, ci, si }; grouped.set(key, g); }
             g.x.push(px[i]);
             g.y.push(py[i]);
             g.z.push(pz[i]);
         }
         // Colour-major, then shape — keeps trace order aligned with the legend
-        const groups = Object.values(grouped).sort((a, b) => {
-            const ca = colorIdx.get(String(a.color)) ?? 0, cb = colorIdx.get(String(b.color)) ?? 0;
-            if (ca !== cb) return ca - cb;
-            return shapeCats.indexOf(a.shape ?? '') - shapeCats.indexOf(b.shape ?? '');
-        });
+        const groups = Array.from(grouped.values()).sort((a, b) => (a.ci - b.ci) || (a.si - b.si));
         groups.forEach(g => {
             // Muted/hidden categories keep their trace slot so colors don't shift:
             // 'muted' renders hollow with a thin grey outline, 'hidden' is invisible
@@ -484,6 +508,8 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         const hasHidden = kind === "categorical" && Object.values(muted).includes('hidden');
         let x_min = Infinity, x_max = -Infinity, y_min = Infinity, y_max = -Infinity, z_min = Infinity, z_max = -Infinity;
         const shadow_x: number[] = [], shadow_y: number[] = [];
+        const SHADOW_TARGET = 4000;
+        const shadowStride = n > SHADOW_TARGET ? Math.ceil(n / SHADOW_TARGET) : 1;
         for (let i = 0; i < n; i++) {
             if (hasHidden && muted[String(colorVals[i] ?? "N/A")] === 'hidden') continue;
             if (px[i] != null) {
@@ -498,7 +524,10 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
                 if (pz[i] < z_min) z_min = pz[i];
                 if (pz[i] > z_max) z_max = pz[i];
             }
-            if (px[i] != null && py[i] != null) {
+            // The shadow is decoration at opacity 0.1 and size 2, so above a few
+            // thousand points a decimated copy is indistinguishable — and it
+            // halves both the array copy and the GPU point count (F15).
+            if (px[i] != null && py[i] != null && (shadowStride === 1 || i % shadowStride === 0)) {
                 shadow_x.push(px[i]);
                 shadow_y.push(py[i]);
             }
@@ -512,6 +541,11 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         // The shadow floor must contrast with the canvas: near-black on light
         // themes, pale gray on the terminal theme's black background
         const shadowColor = dark ? '#d8d8d8' : '#111111';
+        // The ground shadow and its mesh floor are decoration. In the live view
+        // they read well; in a shared HTML file they are a second full copy of
+        // every x and y plus an n-length array of one repeated constant, which
+        // measured 1,070 KB of a 3,831 KB export (finding F3).
+        if (includeFloor) {
         traces.push({
             x: shadow_x,
             y: shadow_y,
@@ -533,6 +567,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
             showlegend: false,
             hoverinfo: 'skip'
         });
+        }
     }
 
     return traces;
@@ -543,15 +578,26 @@ const CHART_COLORS = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#3
 // Inline distribution sparkline for a numeric column
 const MiniHistogram = ({ values, color }: { values: any[], color: string }) => {
     const bars = useMemo(() => {
-        const nums = values.filter(v => typeof v === 'number' && !Number.isNaN(v));
-        if (nums.length < 2) return null;
-        let min = Infinity, max = -Infinity;
-        for (const v of nums) { if (v < min) min = v; if (v > max) max = v; }
-        if (min === max) return null;
+        // Two passes over the column, no copy of it. The `values.filter(...)`
+        // this replaces duplicated the whole column to compute fourteen bins —
+        // 7.9 ms of the component's 12.7 ms at 200k rows (finding F14).
+        let min = Infinity, max = -Infinity, count = 0;
+        for (const v of values) {
+            if (typeof v !== 'number' || Number.isNaN(v)) continue;
+            count++;
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        if (count < 2 || min === max) return null;
         const N = 14;
         const counts = new Array(N).fill(0);
-        for (const v of nums) counts[Math.min(N - 1, Math.floor(((v - min) / (max - min)) * N))]++;
-        const peak = Math.max(...counts);
+        const scale = N / (max - min);
+        for (const v of values) {
+            if (typeof v !== 'number' || Number.isNaN(v)) continue;
+            counts[Math.min(N - 1, Math.floor((v - min) * scale))]++;
+        }
+        let peak = 0;
+        for (const c of counts) if (c > peak) peak = c;
         return counts.map(c => c / peak);
     }, [values]);
     if (!bars) return null;
@@ -603,17 +649,12 @@ const VariablesPanel = ({ dataset, viewMode, colorBy, shapeBy, theme, onAxis, on
 }) => {
     const table = dataset.table;
     const axes = viewMode === "2D" ? { ...dataset.axes2d, z: null as string | null } : dataset.axes;
-    const profiles = useMemo(() => table.columns.map(col => {
-        const vals = table.data[col] ?? [];
-        let missing = 0, isNumeric = false, min = Infinity, max = -Infinity;
-        const distinct = new Set<any>();
-        for (const v of vals) {
-            if (v == null) { missing++; continue; }
-            if (typeof v === 'number') { isNumeric = true; if (v < min) min = v; if (v > max) max = v; }
-            distinct.add(v);
-        }
-        return { col, vals, missing, isNumeric, min, max, nUnique: distinct.size };
-    }), [table]);
+    // The shared scan (F14). This pass used to be written out here, again in
+    // PCASection and again in ClusterBreakdown, three times per table change.
+    const profiles = useMemo(
+        () => scanTable(table).map(s => ({ ...s, vals: table.data[s.col] ?? [] })),
+        [table],
+    );
 
     const fmt = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2).replace(/\.?0+$/, '');
     // Assignment buttons carry the Bauhaus triad in primary; terminal goes green
@@ -792,7 +833,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     // stay selectable on purpose — feeding composites into a second-order PCA
     // is a legitimate technique.
     const numericVars = useMemo(
-        () => numericColumns(table).filter(c => !isPCColumn(c) && c !== 'Cluster'),
+        () => numericColumnsOf(table).filter(c => !isPCColumn(c) && c !== 'Cluster'),
         [table]
     );
     const [selected, setSelected] = useState<Set<string>>(() => new Set(numericVars));
@@ -1039,7 +1080,7 @@ const ClusterBreakdown = ({ table, attr, onAttrChange, direction, onDirectionCha
     // normalizes away base rates, so dominant groups stop swamping every cluster.
     const [isSaving, setIsSaving] = useState(false);
     const candidates = useMemo(
-        () => table.columns.filter(c => c !== 'Cluster' && getColorFieldKind(table.data[c] ?? []) === 'categorical'),
+        () => categoricalColumnsOf(table).filter(c => c !== 'Cluster'),
         [table]
     );
     const effAttr = candidates.includes(attr) ? attr : candidates[0];
@@ -1142,20 +1183,32 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
     const [name, setName] = useState("");
 
     const src = others.find(d => d.id === sourceId) ?? others[0] ?? null;
-    if (!active || !src) return null;
 
-    const srcCols = src.table.columns;
+    // Every hook below runs unconditionally, and the "nothing to show" return
+    // sits under them. It used to sit HERE, above three useMemos — so a render
+    // where `src` went null (the other dataset removed while this stayed
+    // mounted) would run fewer hooks than the previous one and React would
+    // throw. Latent rather than theoretical; adding a fourth hook made it worth
+    // fixing rather than matching.
+    const srcCols = src?.table.columns ?? [];
     const effSrcCol = srcCols.includes(sourceCol) ? sourceCol : (srcCols.includes('Cluster') ? 'Cluster' : srcCols[0]);
-    const shared = src.table.columns.filter(c => active.table.columns.includes(c));
+    // Memoized because `probe` below depends on it: computed inline this was a
+    // fresh array every render, so the O(n*C) alignment scan re-ran on every
+    // keystroke and every rotation frame whenever two datasets were loaded
+    // (finding F14).
+    const shared = useMemo(
+        () => (src && active ? src.table.columns.filter(c => active.table.columns.includes(c)) : []),
+        [src, active],
+    );
     const effKey = shared.includes(keyCol) ? keyCol : shared[0];
-    const countsMatch = src.table.nRows === active.table.nRows;
-    const defaultName = `${effSrcCol}·${src.name}`;
+    const countsMatch = !!src && !!active && src.table.nRows === active.table.nRows;
+    const defaultName = `${effSrcCol}·${src?.name ?? ''}`;
 
     // Auto alignment probe (order mode): pick a stable identity/demographic column
     // to sanity-check row order — NOT a PC/axis score, which is recomputed per
     // dataset and will legitimately differ even when respondents ARE aligned.
     const probe = useMemo(() => {
-        if (mode !== 'order' || !shared.length || !countsMatch) return null;
+        if (!src || !active || mode !== 'order' || !shared.length || !countsMatch) return null;
         const isAxisLike = (c: string) => /^(PC\d|Axis|Component)/i.test(c);
         const idLike = shared.find(c => /\bid\b/i.test(c) && !isAxisLike(c));
         const categoricalCandidates = shared.filter(c => !isAxisLike(c) && getColorFieldKind(src.table.data[c] ?? []) === 'categorical');
@@ -1170,7 +1223,7 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
     }, [mode, shared, countsMatch, src, active]);
 
     const matchStats = useMemo(() => {
-        if (mode !== 'match' || !effKey) return null;
+        if (!src || !active || mode !== 'match' || !effKey) return null;
         const sk = src.table.data[effKey], tk = active.table.data[effKey];
         const srcKeys = new Set(sk.map(String));
         const uniqueSrc = srcKeys.size === src.table.nRows;
@@ -1180,6 +1233,8 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
     }, [mode, effKey, src, active]);
 
     const canTransfer = mode === 'order' ? countsMatch : (!!effKey && (matchStats?.matched ?? 0) > 0);
+
+    if (!active || !src) return null;
 
     return (
         <div className="space-y-2 text-xs border-t border-[var(--border)] pt-3 mt-1">
@@ -2157,10 +2212,27 @@ export default function Home() {
           const kind = getColorFieldKind(processedData.data[colorBy] ?? []);
           const title = includeExportInfo ? `${axesStr} · colored by ${colorBy}` : `${activeDataset.name}`;
 
-          const data = buildTraces(processedData, colorBy, viewMode, axes, labels, mutedMap, false, shapeBy);
-          if (includeExportInfo && kind === "continuous" && data[0]?.marker) {
-              data[0].marker.showscale = true;
-              data[0].marker.colorbar = { title: { text: colorBy }, thickness: 14 };
+          // No decorative floor, and coordinates at 6 significant figures: no
+          // scatter plot resolves the 17th digit, and the two together took a
+          // measured 20,000-point 3D export from 3,831 KB to 2,148 KB with no
+          // visible difference (finding F3).
+          const data = buildTraces(processedData, colorBy, viewMode, axes, labels, mutedMap, false, shapeBy, false)
+              .map(trace => {
+                  const t = { ...trace } as Record<string, unknown>;
+                  for (const key of ['x', 'y', 'z'] as const) {
+                      const arr = t[key];
+                      if (Array.isArray(arr)) {
+                          t[key] = arr.map(v => (typeof v === 'number' && Number.isFinite(v)
+                              ? Number(v.toPrecision(6))
+                              : v));
+                      }
+                  }
+                  return t;
+              });
+          if (includeExportInfo && kind === "continuous" && (data[0] as { marker?: Record<string, unknown> })?.marker) {
+              const m = (data[0] as { marker: Record<string, unknown> }).marker;
+              m.showscale = true;
+              m.colorbar = { title: { text: colorBy }, thickness: 14 };
           }
 
           // Standalone layout — concrete colors only (no CSS vars, which won't
@@ -2458,7 +2530,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               } else {
                   const levels = shapeCategories(t.data[opts.shape_by] ?? []);
                   if (levels.length > MAX_SHAPE_CATEGORIES) {
-                      problems.push(`"${opts.shape_by}" has ${levels.length} distinct values — shape encodes at most ${MAX_SHAPE_CATEGORIES}, and is only readable up to about 5. Use color_by for it instead, or shape a coarser column.`);
+                      problems.push(`"${opts.shape_by}" has more than ${MAX_SHAPE_CATEGORIES} distinct values — shape encodes at most ${MAX_SHAPE_CATEGORIES}, and is only readable up to about 5. Use color_by for it instead, or shape a coarser column.`);
                   }
               }
           }
@@ -2891,8 +2963,18 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           freshTableRef.current = null;
       },
   };
-  // Console/testing access to the assistant bridge (local state only)
-  if (typeof window !== 'undefined') (window as any).__scatterlabBridge = bridgeRef;
+  // Console/testing access to the assistant bridge (local state only).
+  //
+  // In an effect, not during render: assigning to `window` while rendering is a
+  // side effect, which React 19 strict mode double-invokes (finding F6). The
+  // `bridgeRef.current` write above deliberately stays where it is — the bridge
+  // closes over about forty pieces of state, and a dependency list that missed
+  // one would hand the assistant a stale view of the app, which is a worse bug
+  // than the allocation. The allocation cost itself is a symptom of rendering
+  // sixty times a second, which F9 removes at the source.
+  useEffect(() => {
+      (window as unknown as { __scatterlabBridge?: unknown }).__scatterlabBridge = bridgeRef;
+  }, []);
 
   const renderView = (view: any, index: number) => {
       // view object is either the active state or a pinned state

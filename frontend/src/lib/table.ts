@@ -7,6 +7,14 @@ export const sanitizeCell = (v: any): number | string | null => {
   if (v == null || v === '') return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'boolean') return v ? 1 : 0;
+  // hyparquet returns BigInt for int64 columns. Handling it here rather than in
+  // parseParquet lets that function pass rows straight to rowsToTable instead of
+  // building a second full copy first (finding F20) — and closes the hole where
+  // the old BigInt branch bypassed the finite check above entirely.
+  if (typeof v === 'bigint') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
   if (v instanceof Date) return v.toISOString();
   const s = String(v).trim();
   return s === '' ? null : s;
