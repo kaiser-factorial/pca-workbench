@@ -12,29 +12,29 @@ export const isIdentifierColumn = (name: string) => {
 };
 
 /**
- * Does listing this column's values amount to listing rows?
+ * How many rows a value must cover before naming it describes a group rather
+ * than a person.
  *
  * The app's privacy contract is that the assistant sees aggregates, never rows,
  * and the column profile it sends carries each categorical column's most
  * frequent values. On a genuine category ("Species": setosa/versicolor/…) those
- * eight strings ARE the aggregate and are exactly what makes the assistant
- * useful. On an email address, a free-text response or a participant name, every
- * value is unique, so the "top eight by frequency" are eight arbitrary rows with
- * a count of 1 — row-level data, leaving the browser, in the one case where it
- * matters most (finding D8).
+ * strings ARE the aggregate, and are what makes the assistant useful. On an
+ * email address or a free-text answer every value is unique, so "most frequent
+ * values" is just a handful of rows (finding D8).
  *
- * Name-based identification (`isIdentifierColumn`) is not enough on its own: a
- * column called `email` or `notes` matches no naming convention. Cardinality is
- * the reliable signal — if nearly every row has its own value, the values are
- * not categories.
+ * The test is deliberately per-VALUE, not per-column. A column-level cardinality
+ * rule gets the easy cases right and then withholds a perfectly ordinary
+ * `school` variable with 60 levels and 80 rows each — a real loss of context for
+ * no privacy gain, because nothing in that list identifies anyone. What actually
+ * matters is how many people stand behind each value: 80 is a group, 1 is a
+ * person, and the boundary belongs there.
+ *
+ * Five is the usual small-cell threshold in statistical disclosure control.
  */
-export const valuesAreRowLevel = (nUnique: number, nRows: number): boolean => {
-  if (nRows === 0) return false;
-  // Enough distinct values that the list is a sample of rows rather than a set
-  // of levels. Both conditions matter: the ratio catches a 200-row file with 200
-  // values, the cap catches a 50,000-row file with 4,000.
-  return nUnique > 50 || nUnique > nRows / 2;
-};
+export const MIN_AGGREGATE_COUNT = 5;
+
+/** True when naming this value would describe too few rows to be an aggregate. */
+export const valueIsTooRare = (count: number): boolean => count < MIN_AGGREGATE_COUNT;
 
 const uniqueNonNull = (values: any[]) =>
   Array.from(new Set(values.filter(v => v != null)));

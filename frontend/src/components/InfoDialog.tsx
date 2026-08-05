@@ -89,12 +89,12 @@ export const InfoDialog = ({
           <p className="opacity-80">
             The one exception is the assistant. If you connect an API key, your questions and a{' '}
             <em>summary</em> of the data do leave the browser, going to whichever provider the key belongs to.
-            What it can see is column names, each column&apos;s range and missing count, the most frequent values
-            of categorical columns, and the results of the analyses it runs — <strong>never individual rows</strong>.
-            Where a column holds roughly one distinct value per row — an email address, a name, a free-text
-            answer — its values are withheld entirely and only the count of them is sent, because &ldquo;the eight
-            most frequent values&rdquo; of such a column is just eight rows. If even that is more than your data
-            allows, leave the assistant disconnected; everything else here works without it.
+            What it can see is column names, each numeric column&apos;s range, mean, standard deviation and
+            quartiles, the common values of categorical columns, and the results of the analyses it runs —
+            <strong> never individual rows</strong>. A categorical value is only named if it covers at least five
+            rows: that keeps ordinary variables useful even with many levels, while an email address, a name or a
+            free-text answer — where each value belongs to one person — is never sent, only counted. If even that
+            is more than your data allows, leave the assistant disconnected; everything else here works without it.
           </p>
 
           <div className="flex gap-2 pt-1">

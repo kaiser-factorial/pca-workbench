@@ -802,15 +802,34 @@ Eight real addresses, leaving the browser on every `get_app_state`, in the one c
 system prompt's claim — *"You see column metadata and aggregate statistics only; you never see raw data rows"* —
 was very nearly true and false exactly where a reader would care.
 
-**Resolved.** `valuesAreRowLevel(nUnique, nRows)` in `defaults.ts` decides when a value list has stopped being an
-aggregate: more than 50 distinct values, or more than half the rows. Both conditions are needed — the ratio
-catches a 200-row file with 200 values, the cap catches a 50,000-row file with 4,000. When it fires (or the name
-matches `isIdentifierColumn`), the values are withheld and only `nUnique` is sent, so the assistant still knows
-the column exists and why it cannot enumerate it.
+**Resolved, then corrected.** The first fix was a per-COLUMN cardinality rule — withhold everything when a
+column had more than 50 distinct values or more than half the rows. It got emails right and was too blunt: an
+ordinary `school` variable with 60 levels and 80 rows each was withheld too, losing real context for no privacy
+gain, since nothing in that list identifies anyone.
 
-`get_cluster_breakdown` got the same guard, which it wanted anyway: a breakdown by a one-value-per-row column
-would have printed each value verbatim and told the user nothing, every cell reading `value 100% (1)`. It now
-refuses, in the same spirit as the A7 identifier guard.
+The test is now per-VALUE, which is where the question actually lives: how many people stand behind this value?
+Eighty is a group; one is a person. `valueIsTooRare(count)` in `defaults.ts` withholds any value covering fewer
+than five rows — the conventional small-cell threshold in statistical disclosure control — and `rareValuesWithheld`
+reports how many were held back, so the assistant knows they exist. On the same fixture:
+
+| column | distinct | sent |
+|---|---|---|
+| `pid`, `email`, `notes` | 4,800 each | nothing — every value covers one row |
+| `school` | 60 | all of them, 80 rows apiece |
+| `condition` | 3 | all of them |
+
+A column whose *name* marks it an identifier is still withheld wholesale, because in long-format data a
+participant ID legitimately repeats and would otherwise clear the frequency bar.
+
+`get_cluster_breakdown` got the same treatment, which it wanted anyway: a breakdown by a one-value-per-row column
+printed each value verbatim and told the user nothing. It now refuses when no value is groupable, and filters
+rare values out of the per-cluster lists — both are needed, since a column can hold three common categories *and*
+a hundred one-offs.
+
+**Numeric columns were widened at the same time.** They previously carried min/max only, which cannot show that a
+"0–100" variable is really 0–10 with one outlier, or that a 1–7 item is stacked at the ceiling. They now carry
+mean, sd and quartiles as well — strictly aggregate, no value attributable to a row — and the system prompt tells
+the assistant to use them to notice skew and outliers rather than asking the user for data.
 
 The information page states the resulting behaviour rather than the comfortable version of it.
 

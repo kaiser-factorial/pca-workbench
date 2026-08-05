@@ -8,7 +8,7 @@ import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { Accordion, AccordionItem, Separator } from "puxel";
 import { readTable, listSheets, type SheetInfo } from "@/lib/parse";
-import { isNumericColumn } from "@/lib/table";
+import { asNumber, isNumericColumn } from "@/lib/table";
 import { CSV_BOM, csvCell } from "@/lib/csv";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed } from "@/lib/cluster";
@@ -18,7 +18,7 @@ import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
 import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, type MissingReport, type MissingStrategy } from "@/lib/pca";
-import { isIdentifierColumn, valuesAreRowLevel, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
+import { isIdentifierColumn, valueIsTooRare, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
 import { InfoTip } from "@/components/InfoTip";
 import { InfoDialog } from "@/components/InfoDialog";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
@@ -2350,27 +2350,52 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       if (!t) return [];
       return t.columns.map(col => {
           const vals = t.data[col] ?? [];
-          let missing = 0, isNumeric = false, min = Infinity, max = -Infinity;
+          let missing = 0, isNumeric = false;
+          const nums: number[] = [];
           const counts = new Map<string, number>();
           for (const v of vals) {
               if (v == null) { missing++; continue; }
-              if (typeof v === 'number') { isNumeric = true; if (v < min) min = v; if (v > max) max = v; }
+              const n = asNumber(v);
+              if (n !== null) { isNumeric = true; nums.push(n); }
               else counts.set(String(v), (counts.get(String(v)) ?? 0) + 1);
           }
-          if (isNumeric) return { name: col, kind: 'numeric' as const, min, max, missing };
-          // Withhold the values themselves when they are effectively one per
-          // row — an email column's "top 8 by frequency" is 8 arbitrary rows
-          // with a count of 1, which is exactly the raw data this app promises
-          // never to send (D8). nUnique still goes, so the assistant knows the
-          // column exists and why it cannot enumerate it.
-          const rowLevel = isIdentifierColumn(col) || valuesAreRowLevel(counts.size, vals.length);
+
+          if (isNumeric) {
+              // Shape, not just extent. min/max alone cannot tell the assistant
+              // that a variable is skewed, that its "0–100" range is really
+              // 0–10 with one outlier at 100, or that a 1–7 item is stacked at
+              // the ceiling — all things it should be warning the user about.
+              // Still strictly aggregate: no value is attributable to a row.
+              nums.sort((a, b) => a - b);
+              const n = nums.length;
+              const q = (p: number) => n ? nums[Math.min(n - 1, Math.floor(p * n))] : NaN;
+              const mean = n ? nums.reduce((s, v) => s + v, 0) / n : NaN;
+              // Population sd (÷n), matching the rest of the app.
+              const sd = n ? Math.sqrt(nums.reduce((s, v) => s + (v - mean) ** 2, 0) / n) : NaN;
+              const r = (x: number) => (Number.isFinite(x) ? Math.round(x * 1e4) / 1e4 : x);
+              return {
+                  name: col, kind: 'numeric' as const, missing,
+                  min: r(nums[0]), max: r(nums[n - 1]),
+                  mean: r(mean), sd: r(sd), q1: r(q(0.25)), median: r(q(0.5)), q3: r(q(0.75)),
+              };
+          }
+
+          // Per-value guard: a value covering many rows describes a group, one
+          // covering a single row IS that row (D8). Filtering per value rather
+          // than per column keeps an ordinary 60-level `school` variable usable
+          // while still never naming an individual.
+          const shown = Array.from(counts.entries())
+              .filter(([, c]) => !valueIsTooRare(c))
+              .sort((a, b) => b[1] - a[1]);
+          // A column explicitly named as an identifier is withheld regardless:
+          // in long-format data a participant ID legitimately repeats, and would
+          // otherwise clear the frequency bar.
+          const identifier = isIdentifierColumn(col);
+          const withheld = counts.size - shown.length;
           return {
               name: col, kind: 'categorical' as const, missing, nUnique: counts.size,
-              ...(rowLevel ? {} : {
-                  topCategories: Array.from(counts.entries())
-                      .sort((a, b) => b[1] - a[1]).slice(0, 8)
-                      .map(([value, count]) => ({ value, count })),
-              }),
+              ...(identifier ? {} : { topCategories: shown.slice(0, 8).map(([value, count]) => ({ value, count })) }),
+              ...(identifier || withheld ? { rareValuesWithheld: identifier ? counts.size : withheld } : {}),
           };
       });
   };
@@ -2502,12 +2527,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               return `"${attribute}" is not a column. Categorical columns: ${cats.join(', ')}.`;
           }
           const attrVals = t.data[attribute];
-          // Same guard as the column profile: breaking clusters down by a column
-          // with one value per row would emit those values verbatim, and would
-          // be meaningless anyway — every cell would read "value 100% (1)" (D8).
-          const nUniqueAttr = new Set(attrVals.filter(v => v != null).map(String)).size;
-          if (isIdentifierColumn(attribute) || valuesAreRowLevel(nUniqueAttr, t.nRows)) {
-              return `"${attribute}" has ${nUniqueAttr} distinct values across ${t.nRows} rows — close to one per row, so a breakdown would just list individual values rather than describe the clusters. Pick a column with repeated categories.`;
+          // Same principle as the column profile, applied to the whole column:
+          // if almost no value covers enough rows to be a group, the breakdown
+          // would list individuals verbatim — and would say nothing anyway,
+          // every cell reading "value 100% (1)" (D8).
+          const attrCounts = new Map<string, number>();
+          for (const v of attrVals) if (v != null) attrCounts.set(String(v), (attrCounts.get(String(v)) ?? 0) + 1);
+          const groupable = Array.from(attrCounts.values()).filter(c => !valueIsTooRare(c)).length;
+          if (isIdentifierColumn(attribute) || groupable === 0) {
+              return `"${attribute}" has ${attrCounts.size} distinct values across ${t.nRows} rows, none of them covering enough rows to describe a group — a breakdown would just list individual values rather than say anything about the clusters. Pick a column with repeated categories.`;
           }
           const byCluster: Record<string, { total: number, counts: Record<string, number> }> = {};
           for (let i = 0; i < t.nRows; i++) {
@@ -2519,9 +2547,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           }
           return sortCategories(Object.keys(byCluster)).map(ck => {
               const { total, counts } = byCluster[ck];
-              const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6)
-                  .map(([v, n]) => `${v} ${Math.round((n / total) * 100)}% (${n})`).join(', ');
-              return `${ck} (n=${total}): ${rows}`;
+              // Filter here too, not just at the guard above: a column can hold
+              // three common categories AND a hundred one-off values, and only
+              // the per-value test keeps the latter out of the output.
+              const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+              const shown = entries.filter(([, n]) => !valueIsTooRare(n)).slice(0, 6);
+              const hidden = entries.length - entries.filter(([, n]) => !valueIsTooRare(n)).length;
+              const rows = shown.map(([v, n]) => `${v} ${Math.round((n / total) * 100)}% (${n})`).join(', ');
+              const tail = hidden ? `${shown.length ? ', ' : ''}${hidden} rarer value${hidden === 1 ? '' : 's'} not listed` : '';
+              return `${ck} (n=${total}): ${rows}${tail}`;
           }).join('\n');
       },
 

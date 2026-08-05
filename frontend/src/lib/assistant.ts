@@ -19,11 +19,27 @@ export const DEFAULT_MODEL = 'anthropic/claude-sonnet-4.5';
 export type ColumnProfile = {
   name: string;
   kind: 'numeric' | 'categorical';
+  missing: number;
+  // --- numeric ---
   min?: number;
   max?: number;
-  missing: number;
+  /** Population sd (÷n), the convention used everywhere else in this app. */
+  mean?: number;
+  sd?: number;
+  q1?: number;
+  median?: number;
+  q3?: number;
+  // --- categorical ---
   nUnique?: number;
+  /**
+   * Values frequent enough to be a category rather than a person. A value
+   * occurring once IS a row, so the guard is per-value, not per-column: a
+   * 60-level `school` column where every level has 80 rows is a category set
+   * and goes; an `email` column is 200 individuals and does not (D8).
+   */
   topCategories?: { value: string; count: number }[];
+  /** Distinct values withheld for being too rare to aggregate. */
+  rareValuesWithheld?: number;
 };
 
 // The page implements this; the assistant drives the app through it.
@@ -532,7 +548,7 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
 You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, configure and save a cluster-composition heatmap, save PNG, interactive HTML, rotating GIF, or active-dataset CSV exports, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items; it reports how much data was imputed or dropped, which you should mention when it is not negligible), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
-You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
+You see column metadata and aggregate statistics only; you never see raw data rows. Numeric columns come as min/max/mean/sd/quartiles — use those to notice skew, ceiling effects and likely outliers rather than asking for the data. Categorical columns list only values covering at least 5 rows; rareValuesWithheld counts the distinct values held back for being rarer than that, and identifier-like columns list none at all. That is a privacy guarantee, not a gap to work around: never ask the user to paste rows, and if asked about an individual row or participant, explain that you only have access to summaries.
 
 Statistical guidance is welcome: help interpret PC loadings, choose sensible eps/min_samples or k, and reason about what cluster compositions suggest — while being clear about the limits of exploratory clustering (results depend on parameters; clusters are descriptive, not proof of latent groups).
 
