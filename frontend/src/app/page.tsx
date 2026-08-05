@@ -14,7 +14,7 @@ import { AssistantPanel } from "@/components/AssistantPanel";
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
-import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames } from "@/lib/pca";
+import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, type MissingReport, type MissingStrategy } from "@/lib/pca";
 import { isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
 import { InfoTip } from "@/components/InfoTip";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
@@ -246,20 +246,20 @@ type PcaRun = {
     standardize: boolean;
     savedAt: string;
     varianceExplained: number[];
-    imputed?: { cells: number; total: number; byVariable: { var: string; n: number }[] };
+    missing?: MissingReport;
 };
 
-// One sentence naming how much of the input was filled in rather than observed.
-// Returns '' when nothing was, so a complete dataset says nothing at all.
-const imputationNote = (
-    imp: { cells: number; total: number; byVariable: { var: string; n: number }[] } | undefined,
-    nRows: number,
-): string => {
-    if (!imp || imp.cells === 0) return '';
-    const pct = (imp.cells / Math.max(imp.total, 1)) * 100;
-    const worst = imp.byVariable.slice(0, 3).map(m => `${m.var} ${m.n}/${nRows}`).join(', ');
-    const more = imp.byVariable.length > 3 ? `, +${imp.byVariable.length - 3} more` : '';
-    return ` ${imp.cells} of ${imp.total} cells (${pct < 0.1 ? '<0.1' : pct.toFixed(1)}%) were missing and filled with the column median — ${worst}${more}.`;
+// One sentence naming what happened to the incomplete rows. Returns '' when
+// there were none, so a complete dataset says nothing at all.
+const missingNote = (rep: MissingReport | undefined, nRows: number): string => {
+    if (!rep || !rep.byVariable.length) return '';
+    const worst = rep.byVariable.slice(0, 3).map(m => `${m.var} ${m.n}/${nRows}`).join(', ');
+    const more = rep.byVariable.length > 3 ? `, +${rep.byVariable.length - 3} more` : '';
+    if (rep.strategy === 'complete') {
+        return ` Complete cases only: ${rep.rowsDropped} of ${nRows} rows were dropped for having a gap, leaving ${rep.rowsUsed} — ${worst}${more}. Those rows have no score.`;
+    }
+    const pct = (rep.imputedCells / Math.max(rep.totalCells, 1)) * 100;
+    return ` ${rep.imputedCells} of ${rep.totalCells} cells (${pct < 0.1 ? '<0.1' : pct.toFixed(1)}%) were missing and filled with the column median — ${worst}${more}.`;
 };
 
 // A cached upload: processed table, upload-time profile, and its plot-axis choices.
@@ -777,7 +777,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     theme: string | undefined,
     lastRun: { varianceExplained: number[]; cumulative: number[] } | null,
     runs: PcaRun[],
-    onRun: (vars: string[], k: number, standardize: boolean, label: string) => void,
+    onRun: (vars: string[], k: number, standardize: boolean, label: string, missing: MissingStrategy) => void,
 }) => {
     // Component columns (bare or labeled) don't feed new PCAs; COMP_ composites
     // stay selectable on purpose — feeding composites into a second-order PCA
@@ -789,13 +789,14 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     const [selected, setSelected] = useState<Set<string>>(() => new Set(numericVars));
     const [k, setK] = useState(3);
     const [standardize, setStandardize] = useState(true);
+    const [missing, setMissing] = useState<MissingStrategy>('median');
     const [label, setLabel] = useState('');
     // Auto-suggest tracks the selection until the user types a label of their
     // own; a cleared field re-arms the suggestion.
     const labelTouched = useRef(false);
     // Replacement confirm: what's waiting for an OK, and whether the user has
     // opted out of being asked (persisted).
-    const [pendingRun, setPendingRun] = useState<{ vars: string[]; k: number; standardize: boolean; label: string; replaces: string[] } | null>(null);
+    const [pendingRun, setPendingRun] = useState<{ vars: string[]; k: number; standardize: boolean; label: string; missing: MissingStrategy; replaces: string[] } | null>(null);
     // New dataset → fresh default selection and label. A mere table change
     // (a run adding columns) must NOT reset — that would wipe the user's
     // subset selection mid-iteration — it only prunes columns that vanished.
@@ -808,6 +809,32 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
         if (labelTouched.current) return;
         setLabel(selected.size === numericVars.length ? '' : (deriveRunLabel(Array.from(selected)) ?? ''));
     }, [selected, numericVars.length]);
+
+    // Per-variable missingness for the picker. methods.ts (pca_workflow) advises
+    // dropping columns above ~50% missing rather than imputing them — at that
+    // level an imputed column is mostly one repeated value, which enters the
+    // correlation matrix as a near-constant.
+    const missingPct = useMemo(() => {
+        const out: Record<string, number> = {};
+        for (const c of numericVars) {
+            const vals = table.data[c] ?? [];
+            let have = 0;
+            for (const v of vals) if (typeof v === 'number') have++;
+            out[c] = table.nRows ? (1 - have / table.nRows) * 100 : 0;
+        }
+        return out;
+    }, [numericVars, table]);
+    const heavilyMissing = Array.from(selected).filter(c => (missingPct[c] ?? 0) > 50);
+    // Rows with no gap across the current selection — what complete-case would keep.
+    const completeRows = useMemo(() => {
+        const sel = Array.from(selected).filter(c => numericVars.includes(c));
+        if (!sel.length) return table.nRows;
+        let count = 0;
+        for (let i = 0; i < table.nRows; i++) {
+            if (sel.every(c => typeof (table.data[c] ?? [])[i] === 'number')) count++;
+        }
+        return count;
+    }, [selected, numericVars, table]);
 
     const toggle = (c: string) => setSelected(prev => {
         const next = new Set(prev);
@@ -829,10 +856,10 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
         const existing = runs.find(r => r.label === cleanLabel);
         const suppressed = typeof localStorage !== 'undefined' && localStorage.getItem('scatterlab.pca.confirmReplace') === 'off';
         if (existing && !suppressed) {
-            setPendingRun({ vars, k: effK, standardize, label: cleanLabel, replaces: existing.columns });
+            setPendingRun({ vars, k: effK, standardize, label: cleanLabel, missing, replaces: existing.columns });
             return;
         }
-        onRun(vars, effK, standardize, cleanLabel);
+        onRun(vars, effK, standardize, cleanLabel, missing);
     };
 
     return (
@@ -845,12 +872,23 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                 </span>
             </div>
             <div className="max-h-36 overflow-y-auto space-y-0.5 pr-1 border border-[var(--border)]/30 p-1.5">
-                {numericVars.map(c => (
-                    <label key={c} className="flex items-center gap-2 cursor-pointer hover:opacity-80">
-                        <input type="checkbox" checked={selected.has(c)} onChange={() => toggle(c)} />
-                        <span className="truncate" title={c}>{c}</span>
-                    </label>
-                ))}
+                {numericVars.map(c => {
+                    const miss = missingPct[c] ?? 0;
+                    return (
+                        <label key={c} className="flex items-center gap-2 cursor-pointer hover:opacity-80">
+                            <input type="checkbox" checked={selected.has(c)} onChange={() => toggle(c)} />
+                            <span className="truncate flex-1" title={c}>{c}</span>
+                            {miss > 0 && (
+                                <span
+                                    className={`flex-shrink-0 text-[10px] ${miss > 50 ? 'font-bold text-[var(--p-red)]' : 'opacity-50'}`}
+                                    title={`${miss.toFixed(0)}% of rows are missing this variable`}
+                                >
+                                    {miss.toFixed(0)}% NA
+                                </span>
+                            )}
+                        </label>
+                    );
+                })}
                 {numericVars.length === 0 && <div className="opacity-50 p-1">No numeric variables available.</div>}
             </div>
             <label className="flex justify-between items-center">
@@ -873,6 +911,34 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             {label && sanitizeLabel(label) && (
                 <div className="text-[10px] opacity-50">
                     → {pcaColumnNames(sanitizeLabel(label), Math.min(k, maxK)).join(', ')}
+                </div>
+            )}
+            <div className="space-y-1">
+                <span className="opacity-70">Missing values<InfoTip topic="median_imputation" /></span>
+                <div className="flex gap-1">
+                    {([['median', 'Median impute'], ['complete', 'Complete cases']] as const).map(([v, lbl]) => (
+                        <button
+                            key={v}
+                            onClick={() => setMissing(v)}
+                            className={`flex-1 py-1 text-[10px] font-bold border ${missing === v
+                                ? 'bg-[var(--foreground)] text-[var(--background)] border-[var(--foreground)]'
+                                : 'bg-[var(--input)] border-[var(--border)] opacity-60 hover:opacity-100'}`}
+                        >
+                            {lbl}
+                        </button>
+                    ))}
+                </div>
+                {missing === 'complete' && (
+                    <div className={`text-[10px] leading-snug ${completeRows < 3 ? 'text-[var(--p-red)]' : 'opacity-60'}`}>
+                        {completeRows} of {table.nRows} rows have no gaps in this selection
+                        {completeRows < table.nRows && ' — the rest will have no score'}.
+                    </div>
+                )}
+            </div>
+            {heavilyMissing.length > 0 && (
+                <div className="text-[10px] leading-snug text-[var(--p-red)]">
+                    ⚠ {heavilyMissing.map(c => `"${c}"`).join(', ')} {heavilyMissing.length === 1 ? 'is' : 'are'} over 50% missing.
+                    Imputing that much makes a column mostly one repeated value; dropping it is usually better than filling it.
                 </div>
             )}
             <button
@@ -915,7 +981,7 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                                 Cancel
                             </button>
                             <button
-                                onClick={() => { onRun(pendingRun.vars, pendingRun.k, pendingRun.standardize, pendingRun.label); setPendingRun(null); }}
+                                onClick={() => { onRun(pendingRun.vars, pendingRun.k, pendingRun.standardize, pendingRun.label, pendingRun.missing); setPendingRun(null); }}
                                 className={`px-3 py-1.5 font-bold cursor-pointer ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--system-green)]/20 border border-[var(--system-green)] text-[var(--system-green)]'}`}
                             >
                                 Replace
@@ -1796,7 +1862,7 @@ export default function Home() {
           for (const l of labels) sizes.set(l, (sizes.get(l) ?? 0) + 1);
           setUploadStatus(
               `${clusterMethod} on ${axNames.join(' · ')} — ${sortCategories(Array.from(sizes.keys())).map(l => `${l}: ${sizes.get(l)}`).join(', ')}.`
-              + imputationNote(imp, processedData.nRows));
+              + missingNote({ strategy: 'median', imputedCells: imp.cells, totalCells: imp.total, byVariable: imp.byVariable, rowsUsed: processedData.nRows, rowsDropped: 0 }, processedData.nRows));
       } catch (err: any) {
           setUploadStatus(`Clustering failed: ${err?.message ?? err}`);
       } finally {
@@ -2167,11 +2233,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       setPinnedViews(pinnedViews.filter(v => v.id !== id));
   };
 
-  const handleRunPCA = (vars: string[], k: number, standardize: boolean, label = ''): string => {
+  const handleRunPCA = (vars: string[], k: number, standardize: boolean, label = '', missing: MissingStrategy = 'median'): string => {
       const t = freshTableRef.current ?? processedData;
       if (!t || !activeDataset) return 'No dataset loaded.';
       try {
-          const res = runPCA(t, vars, { k, standardize, label });
+          const res = runPCA(t, vars, { k, standardize, label, missing });
           freshTableRef.current = res.table;
           const topContributors = Object.fromEntries(
               Object.entries(res.loadings).map(([pc, rows]) => [pc, rows.slice(0, 5)])
@@ -2180,7 +2246,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const run: PcaRun = {
               label: res.label, columns: cols, variables: vars, k: res.k, standardize,
               savedAt: new Date().toISOString(), varianceExplained: res.varianceExplained,
-              imputed: res.imputed,
+              missing: res.missing,
           };
           setDatasets(prev => prev.map(d => {
               if (d.id !== activeId) return d;
@@ -2210,7 +2276,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const replacedNote = res.replaced.length
               ? ` Replaced the previous ${res.label ? `"${res.label}"` : 'unnamed'} run (${res.replaced.join(', ')}).`
               : '';
-          const impNote = imputationNote(res.imputed, t.nRows);
+          const impNote = missingNote(res.missing, t.nRows);
           const msg = res.k === 1
               ? `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept the top component as composite "${cols[0]}" — ${pct} of variance.${replacedNote} It is plotted on the X axis.${impNote}`
               : `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%).${replacedNote} Scores added as ${res.label ? `${res.label}-labeled` : 'PC'} columns and plotted.${impNote}`;
@@ -2281,7 +2347,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               label: r.label || '(unnamed)', columns: r.columns, variables: r.variables,
               standardize: r.standardize, savedAt: r.savedAt,
               varianceExplained: r.varianceExplained.map(v => Math.round(v * 1000) / 1000),
-              imputedCells: r.imputed?.cells ?? 0,
+              missing: r.missing && { strategy: r.missing.strategy, imputedCells: r.missing.imputedCells, rowsUsed: r.missing.rowsUsed, rowsDropped: r.missing.rowsDropped },
           })),
       }),
 
@@ -2367,7 +2433,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const stdNote = useStd
               ? ` Variables were z-scored first${method === 'DBSCAN' ? ' (eps is in SD units)' : ''}.`
               : ' Variables were used on their raw scales.';
-          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote}${imputationNote(imp, t.nRows)} Points are now colored by cluster.`;
+          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote}${missingNote({ strategy: 'median', imputedCells: imp.cells, totalCells: imp.total, byVariable: imp.byVariable, rowsUsed: t.nRows, rowsDropped: 0 }, t.nRows)} Points are now colored by cluster.`;
       },
 
       getClusterBreakdown: (attribute) => {
@@ -2467,7 +2533,8 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;
           const label = sanitizeLabel(opts.label ?? '');
           if (opts.label && !label) return `"${opts.label}" is not usable as a run label — use letters, digits, _ or -.`;
-          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 1), 10), opts.standardize ?? true, label);
+          const missing: MissingStrategy = opts.missing === 'complete' ? 'complete' : 'median';
+          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 1), 10), opts.standardize ?? true, label, missing);
       },
 
       correlate: (colA, colB) => {

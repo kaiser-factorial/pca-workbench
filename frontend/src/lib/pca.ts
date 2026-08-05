@@ -16,14 +16,29 @@ export type PCAResult = {
   variables: string[];
   k: number;
   /**
-   * How much of the input was filled in rather than observed. `cells` counts
-   * imputed values across the whole variable x row grid; `byVariable` lists only
-   * the variables that needed any, worst first. Reported because median
-   * imputation shrinks variance and attenuates correlations in proportion to
-   * how much was imputed — "we impute" is a disclaimer, "we imputed 47 of 1,800
-   * cells" is a disclosure the reader can act on.
+   * What happened to the incomplete rows. Reported because both strategies
+   * change the answer: median imputation shrinks variance and attenuates
+   * correlations in proportion to how much was filled in, while complete-case
+   * changes n and can bias the sample if missingness is not random.
+   * "we impute" is a disclaimer; "we imputed 47 of 1,800 cells" is a disclosure
+   * the reader can act on.
    */
-  imputed: { cells: number; total: number; byVariable: { var: string; n: number }[] };
+  missing: MissingReport;
+};
+
+export type MissingStrategy = 'median' | 'complete';
+
+export type MissingReport = {
+  strategy: MissingStrategy;
+  /** Cells filled with a median. Always 0 under complete-case. */
+  imputedCells: number;
+  totalCells: number;
+  /** Rows missing at least one value, per variable, worst first. */
+  byVariable: { var: string; n: number }[];
+  /** Rows the decomposition actually used. */
+  rowsUsed: number;
+  /** Rows excluded for having any gap. Always 0 under median imputation. */
+  rowsDropped: number;
 };
 
 // Run labels become column-name fragments — keep them word-shaped
@@ -124,9 +139,10 @@ const jacobiEigen = (A: number[][]): { values: number[]; vectors: number[][] } =
 export const runPCA = (
   table: DataTable,
   variables: string[],
-  opts: { k?: number; standardize?: boolean; label?: string } = {},
+  opts: { k?: number; standardize?: boolean; label?: string; missing?: MissingStrategy } = {},
 ): PCAResult => {
   const standardize = opts.standardize ?? true;
+  const strategy: MissingStrategy = opts.missing ?? 'median';
   const label = sanitizeLabel(opts.label ?? '');
   const p = variables.length;
   if (p < 2) throw new Error('Pick at least two numeric variables for a PCA.');
@@ -136,34 +152,56 @@ export const runPCA = (
   // workflow (run per item subset, keep the top PC of each as a named score)
   const k = Math.max(1, Math.min(opts.k ?? 3, p));
 
-  // median-impute, center, optionally scale (population sd, sklearn-style)
-  const X: number[][] = Array.from({ length: n }, () => new Array(p));
-  const missingByVar: { var: string; n: number }[] = [];
-  for (let j = 0; j < p; j++) {
-    const raw = (table.data[variables[j]] ?? []).map(v => {
-      if (typeof v === 'number' && Number.isFinite(v)) return v;
-      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+  // Coerce every selected variable once: null marks "not observed as a number",
+  // which is what both strategies key off.
+  const cols: (number | null)[][] = variables.map(v =>
+    (table.data[v] ?? []).map(x => {
+      if (typeof x === 'number' && Number.isFinite(x)) return x;
+      if (typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x))) return Number(x);
       return null;
-    });
-    const nums = numericValues(raw);
-    if (nums.length === 0) throw new Error(`"${variables[j]}" has no numeric values.`);
-    // Anything not observed as a finite number gets the median, including rows
-    // past the end of a short column.
-    if (nums.length < n) missingByVar.push({ var: variables[j], n: n - nums.length });
-    const med = median(nums);
+    }));
+  const missingByVar: { var: string; n: number }[] = [];
+  cols.forEach((col, j) => {
+    const have = numericValues(col).length;
+    if (have === 0) throw new Error(`"${variables[j]}" has no numeric values.`);
+    // Rows past the end of a short column count as missing too.
+    if (have < n) missingByVar.push({ var: variables[j], n: n - have });
+  });
+
+  // Which rows the decomposition runs on. Complete-case keeps only rows with no
+  // gap in ANY selected variable, so adding a poorly-covered variable can drop a
+  // lot of rows at once — hence rowsDropped is reported, not just inferred.
+  const rows: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (strategy === 'median' || cols.every(c => typeof c[i] === 'number')) rows.push(i);
+  }
+  if (strategy === 'complete' && rows.length < 3) {
+    throw new Error(
+      `Complete-case analysis leaves only ${rows.length} row${rows.length === 1 ? '' : 's'} with no missing values across these ${p} variables — too few for a PCA. Use median imputation, or drop the variables with the most missing data.`
+    );
+  }
+  const m = rows.length;
+
+  // centre, optionally scale (population sd, sklearn-style)
+  const X: number[][] = Array.from({ length: m }, () => new Array(p));
+  for (let j = 0; j < p; j++) {
+    const col = cols[j];
+    // Under complete-case the median is never consulted; under imputation it is
+    // computed from the observed values only, which is the standard definition.
+    const med = median(numericValues(col));
     let sum = 0;
-    for (let i = 0; i < n; i++) {
-      const v = raw[i] ?? med;
-      X[i][j] = v;
+    for (let r = 0; r < m; r++) {
+      const v = col[rows[r]] ?? med;
+      X[r][j] = v;
       sum += v;
     }
-    const mean = sum / n;
+    const mean = sum / m;
     let sq = 0;
-    for (let i = 0; i < n; i++) sq += (X[i][j] - mean) ** 2;
-    const sd = Math.sqrt(sq / n);
-    if (standardize && sd === 0) throw new Error(`"${variables[j]}" is constant — drop it or turn off standardization.`);
+    for (let r = 0; r < m; r++) sq += (X[r][j] - mean) ** 2;
+    const sd = Math.sqrt(sq / m);
+    if (standardize && sd === 0) throw new Error(`"${variables[j]}" is constant${strategy === 'complete' ? ' across the complete cases' : ''} — drop it or turn off standardization.`);
     const div = standardize ? sd : 1;
-    for (let i = 0; i < n; i++) X[i][j] = (X[i][j] - mean) / div;
+    for (let r = 0; r < m; r++) X[r][j] = (X[r][j] - mean) / div;
   }
 
   // covariance (= correlation when standardized) matrix
@@ -171,8 +209,8 @@ export const runPCA = (
   for (let i = 0; i < p; i++) {
     for (let j = i; j < p; j++) {
       let s = 0;
-      for (let r = 0; r < n; r++) s += X[r][i] * X[r][j];
-      C[i][j] = C[j][i] = s / n;
+      for (let r = 0; r < m; r++) s += X[r][i] * X[r][j];
+      C[i][j] = C[j][i] = s / m;
     }
   }
 
@@ -186,13 +224,15 @@ export const runPCA = (
     return vec[maxIdx] < 0 ? vec.map(v => -v) : vec;
   });
 
-  // scores: X̃ · component
-  const scoreCols: number[][] = comps.map(vec => {
-    const col = new Array<number>(n);
-    for (let r = 0; r < n; r++) {
+  // scores: X̃ · component, written back at the ORIGINAL row positions so the
+  // columnar table keeps its shape. Rows excluded by complete-case get null
+  // rather than a fabricated score — they are genuinely unscored.
+  const scoreCols: (number | null)[][] = comps.map(vec => {
+    const col = new Array<number | null>(n).fill(null);
+    for (let r = 0; r < m; r++) {
       let s = 0;
       for (let j = 0; j < p; j++) s += X[r][j] * vec[j];
-      col[r] = s;
+      col[rows[r]] = s;
     }
     return col;
   });
@@ -226,11 +266,15 @@ export const runPCA = (
     return acc;
   }, []);
 
-  const imputed = {
-    cells: missingByVar.reduce((s, m) => s + m.n, 0),
-    total: n * p,
-    byVariable: missingByVar.sort((a, b) => b.n - a.n),
+  const byVariable = missingByVar.sort((a, b) => b.n - a.n);
+  const missing: MissingReport = {
+    strategy,
+    imputedCells: strategy === 'median' ? byVariable.reduce((s, v) => s + v.n, 0) : 0,
+    totalCells: n * p,
+    byVariable,
+    rowsUsed: m,
+    rowsDropped: n - m,
   };
 
-  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k, imputed };
+  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k, missing };
 };

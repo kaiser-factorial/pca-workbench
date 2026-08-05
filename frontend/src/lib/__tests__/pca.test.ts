@@ -187,22 +187,22 @@ describe('runPCA — imputation accounting (finding A9)', () => {
 
   it('counts imputed cells against the full variable x row grid', () => {
     const res = runPCA(table, ['a', 'b', 'c'], { k: 2 });
-    expect(res.imputed.cells).toBe(3);
-    expect(res.imputed.total).toBe(18); // 3 variables x 6 rows
+    expect(res.missing.imputedCells).toBe(3);
+    expect(res.missing.totalCells).toBe(18); // 3 variables x 6 rows
   });
 
   it('names the affected variables worst-first and omits complete ones', () => {
     const res = runPCA(table, ['a', 'b', 'c'], { k: 2 });
-    expect(res.imputed.byVariable).toEqual([{ var: 'b', n: 2 }, { var: 'a', n: 1 }]);
+    expect(res.missing.byVariable).toEqual([{ var: 'b', n: 2 }, { var: 'a', n: 1 }]);
   });
 
   it('reports nothing when the selected variables are complete', () => {
     const res = runPCA(table, ['c', 'a'], { k: 2 });
-    expect(res.imputed.byVariable.map(m => m.var)).toEqual(['a']);
+    expect(res.missing.byVariable.map(m => m.var)).toEqual(['a']);
     const clean: DataTable = {
       columns: ['p', 'q'], data: { p: [1, 2, 3, 4], q: [2, 1, 4, 3] }, nRows: 4,
     };
-    expect(runPCA(clean, ['p', 'q'], { k: 2 }).imputed.cells).toBe(0);
+    expect(runPCA(clean, ['p', 'q'], { k: 2 }).missing.imputedCells).toBe(0);
   });
 
   it('counts rows past the end of a short column as imputed', () => {
@@ -211,9 +211,71 @@ describe('runPCA — imputation accounting (finding A9)', () => {
       data: { x: [1, 2, 3, 4], y: [1, 3] }, // y stops early
       nRows: 4,
     };
-    expect(runPCA(short, ['x', 'y'], { k: 2 }).imputed).toMatchObject({
-      cells: 2,
+    expect(runPCA(short, ['x', 'y'], { k: 2 }).missing).toMatchObject({
+      imputedCells: 2,
       byVariable: [{ var: 'y', n: 2 }],
     });
+  });
+});
+
+describe('runPCA — complete-case analysis', () => {
+  // Rows 2 and 4 each have a gap; complete-case should use the other four.
+  const table: DataTable = {
+    columns: ['a', 'b'],
+    data: {
+      a: [1, 2, null, 4, 5, 6],
+      b: [2, 4, 6, 8, null, 12],
+    },
+    nRows: 6,
+  };
+
+  it('drops incomplete rows and reports how many', () => {
+    const res = runPCA(table, ['a', 'b'], { k: 2, missing: 'complete' });
+    expect(res.missing.strategy).toBe('complete');
+    expect(res.missing.rowsUsed).toBe(4);
+    expect(res.missing.rowsDropped).toBe(2);
+    expect(res.missing.imputedCells).toBe(0);
+  });
+
+  it('leaves dropped rows unscored rather than fabricating a score', () => {
+    const res = runPCA(table, ['a', 'b'], { k: 2, missing: 'complete' });
+    const pc1 = res.table.data.PC1 as (number | null)[];
+    expect(pc1).toHaveLength(6);          // table shape preserved
+    expect(pc1[2]).toBeNull();            // gap in a
+    expect(pc1[4]).toBeNull();            // gap in b
+    expect(pc1.filter(v => typeof v === 'number')).toHaveLength(4);
+  });
+
+  it('median imputation still scores every row', () => {
+    const res = runPCA(table, ['a', 'b'], { k: 2, missing: 'median' });
+    expect(res.missing.rowsUsed).toBe(6);
+    expect(res.missing.rowsDropped).toBe(0);
+    expect((res.table.data.PC1 as (number | null)[]).every(v => typeof v === 'number')).toBe(true);
+  });
+
+  it('the two strategies genuinely disagree when data are missing', () => {
+    const a = runPCA(table, ['a', 'b'], { k: 2, missing: 'median' });
+    const b = runPCA(table, ['a', 'b'], { k: 2, missing: 'complete' });
+    expect(a.varianceExplained[0]).not.toBeCloseTo(b.varianceExplained[0], 6);
+  });
+
+  it('is identical to median imputation when nothing is missing', () => {
+    const clean: DataTable = {
+      columns: ['p', 'q'], data: { p: [1, 2, 3, 4, 5], q: [2, 1, 4, 3, 6] }, nRows: 5,
+    };
+    const a = runPCA(clean, ['p', 'q'], { k: 2, missing: 'median' });
+    const b = runPCA(clean, ['p', 'q'], { k: 2, missing: 'complete' });
+    expect(b.varianceExplained[0]).toBeCloseTo(a.varianceExplained[0], 12);
+    expect(b.missing.rowsDropped).toBe(0);
+  });
+
+  it('refuses when too few complete cases remain, naming the way out', () => {
+    const sparse: DataTable = {
+      columns: ['a', 'b'],
+      data: { a: [1, null, null, 4], b: [null, 2, 3, null] },
+      nRows: 4,
+    };
+    expect(() => runPCA(sparse, ['a', 'b'], { k: 2, missing: 'complete' }))
+      .toThrow(/Complete-case analysis leaves only 0 rows/);
   });
 });

@@ -41,6 +41,7 @@ export type AppBridge = {
     pcaRuns: {
       label: string; columns: string[]; variables: string[];
       standardize: boolean; savedAt: string; varianceExplained: number[];
+      missing?: { strategy: 'median' | 'complete'; imputedCells: number; rowsUsed: number; rowsDropped: number };
     }[];
   };
   setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
@@ -54,7 +55,7 @@ export type AppBridge = {
   pinView: () => string;
   loadDemoData: () => Promise<string>;
   // analysis (aggregates only)
-  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string }) => string;
+  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string; missing?: 'median' | 'complete' }) => string;
   correlate: (colA: string, colB: string) => string;
   compareGroups: (numericCol: string, groupCol: string) => string;
   suggestK: (maxK: number) => string;
@@ -104,7 +105,7 @@ export const TUTORIAL: Record<string, string> = {
   plotting:
     'The View section ("5. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
   pca:
-    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. A run on a variable subset can be given a label (auto-suggested from the item names): its columns become PC1_<label>…, or COMP_<label> when keeping just the top component — the composite-score workflow for building one named score per item group and plotting them against each other. Re-running a label replaces that run\'s columns (confirmed by a dialog); differently-labeled runs coexist. An unlabeled run adds plain PC1…PCk. The scree bars show variance explained, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
+    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. "Missing values" chooses between Median impute (default; keeps every row, shrinks variance) and Complete cases (drops any row with a gap in the selected variables, so those rows get no score); the panel shows how many rows survive, flags any variable over 50% missing, and every run reports what it filled or dropped. A run on a variable subset can be given a label (auto-suggested from the item names): its columns become PC1_<label>…, or COMP_<label> when keeping just the top component — the composite-score workflow for building one named score per item group and plotting them against each other. Re-running a label replaces that run\'s columns (confirmed by a dialog); differently-labeled runs coexist. An unlabeled run adds plain PC1…PCk. The scree bars show variance explained, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
     'In "4. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. The "Standardize variables (z-score)" checkbox gives every variable equal weight in the distance — its default follows the data: on for mixed scales, off for PC scores and shared-scale items (where it is a deliberate methodological choice). Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates. Choose Viridis, Inferno, or Greens and use "Save heatmap" to download a PNG with its 0–100% colour scale legend.',
   compare_pin:
@@ -296,6 +297,11 @@ const TOOLS: ChatCompletionTool[] = [
           variables: { type: 'array', items: { type: 'string' }, description: 'Numeric columns to include (default: all numeric non-component columns)' },
           n_components: { type: 'integer', description: '1-10, default 3. 1 = keep only the top component as a COMP_<label> composite score' },
           standardize: { type: 'boolean', description: 'Default true (correlation-based PCA)' },
+          missing: {
+            type: 'string',
+            enum: ['median', 'complete'],
+            description: 'How to handle rows with missing values. "median" (default) fills each gap with that variable\'s median, keeping every row but shrinking variance and attenuating correlations. "complete" drops any row with a gap in the selected variables, keeping the covariance structure honest but reducing n and potentially biasing the sample if missingness is not random. With substantial missingness, running both and comparing is the recommended check — see get_methods_reference topic pca_caveats.',
+          },
           label: {
             type: 'string',
             description: 'Short semantic name for a subset run (e.g. "openness"). Letters/digits/underscore. Omit only for a full-variable-set PCA (bare PC1..PCk).',
@@ -524,7 +530,7 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
   return `You are the built-in assistant of Scatter Lab, a browser-based workbench where researchers explore tabular data as interactive 2D/3D scatter plots, project data through PCA components, run DBSCAN/K-Means clustering, and compare pinned views. The user is typically a survey researcher.
 
-You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, configure and save a cluster-composition heatmap, save PNG, interactive HTML, rotating GIF, or active-dataset CSV exports, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
+You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, configure and save a cluster-composition heatmap, save PNG, interactive HTML, rotating GIF, or active-dataset CSV exports, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items; it reports how much data was imputed or dropped, which you should mention when it is not negligible), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
 You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
 
