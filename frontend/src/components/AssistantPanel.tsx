@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { Sparkles, Settings2, Minus, CornerDownLeft, Info, ThumbsUp, ThumbsDown, PanelRight, PanelBottom, PictureInPicture2 } from 'lucide-react';
+import { Sparkles, Settings2, Minus, CornerDownLeft, ThumbsUp, ThumbsDown, PanelRight, PanelBottom, PictureInPicture2 } from 'lucide-react';
 import {
   AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
   runAssistantTurn, fetchModels, suggestModels, describeApiError,
@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { startOpenRouterOAuth, completeOpenRouterOAuth } from '@/lib/openrouterAuth';
 import { feedbackEnabled, submitFeedback, flushFeedback } from '@/lib/feedback';
+import { InfoTip } from '@/components/InfoTip';
 
 // Chat entries for display; the wire-format history is kept separately
 type ChatEntry = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string };
@@ -454,12 +455,6 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
 };
 
 // Small ⓘ with the long-form explanation as a native tooltip
-const InfoTip = ({ text }: { text: string }) => (
-  <span title={text} className="inline-flex align-middle ml-1 opacity-50 hover:opacity-100 cursor-help">
-    <Info className="w-3 h-3" />
-  </span>
-);
-
 const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authError, onConnect, onSave, onClearKey }: {
   primary: boolean, inputCls: string,
   apiKey: string, model: string, baseURL: string, models: ModelInfo[],

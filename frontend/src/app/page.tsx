@@ -16,6 +16,7 @@ import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
 import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames } from "@/lib/pca";
 import { isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
+import { InfoTip } from "@/components/InfoTip";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
 
 
@@ -842,9 +843,10 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                 <span className="opacity-70">Components: <b>{Math.min(k, maxK)}</b>{Math.min(k, maxK) === 1 ? ' (composite)' : ''}</span>
                 <input type="range" min={1} max={maxK} step={1} value={Math.min(k, maxK)} onChange={e => setK(parseInt(e.target.value))} className="w-32" />
             </label>
-            <label className="flex items-center gap-2 cursor-pointer select-none" title="On: correlation-based PCA (each variable weighted equally — right when scales differ). Off: covariance-based (high-variance variables dominate).">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
                 <span className="opacity-80">Standardize variables (correlation PCA)</span>
+                <InfoTip topic="standardize_pca" />
             </label>
             <input
                 type="text"
@@ -866,6 +868,10 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             >
                 Run PCA
             </button>
+            <p className="text-[10px] leading-snug opacity-60">
+                Missing values are filled with the column median before the decomposition.
+                <InfoTip topic="median_imputation" />
+            </p>
             {pendingRun && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setPendingRun(null)}>
                     <div
@@ -906,7 +912,9 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             )}
             {lastRun && (
                 <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
-                    <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">Variance explained</div>
+                    <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">
+                        Variance explained<InfoTip topic="variance_explained" />
+                    </div>
                     <div className="flex items-end gap-1" style={{ height: `${screeHeight}px` }}>
                         {lastRun.varianceExplained.map((v, i) => (
                             <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`PC${i + 1}: ${(v * 100).toFixed(1)}% (cumulative ${(lastRun.cumulative[i] * 100).toFixed(1)}%)`}>
@@ -2889,7 +2897,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 </div>
                 {activeDataset?.summary?.top_contributors && (
                   <details className="text-xs">
-                    <summary className="cursor-pointer font-bold uppercase tracking-wider opacity-60 text-[10px]">Top PC contributors</summary>
+                    <summary className="cursor-pointer font-bold uppercase tracking-wider opacity-60 text-[10px]">
+                      Top PC contributors
+                    </summary>
+                    <div className="text-[10px] opacity-60 pt-1">
+                      Unit-norm eigenvector weights (scikit-learn <code>components_</code>).
+                      <InfoTip topic="pca_loadings" />
+                    </div>
                     <div className="pt-1 space-y-1">
                       {Object.entries(activeDataset.summary.top_contributors).map(([pc, vars]: [string, any]) => (
                         <div key={pc} className="leading-snug">
@@ -2981,37 +2995,66 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               <SidebarSection title="Cluster" step={4} hasBorder theme={theme} guide="cluster" order={4}>
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
-                    <option value="DBSCAN">DBSCAN</option>
-                    <option value="KMEANS">K-Means</option>
+                    <option value="DBSCAN">DBSCAN (density-based)</option>
+                    <option value="KMEANS">K-Means (deterministic)</option>
                 </select>
-                
+
+                {/* B3: clustering runs on the plotted axes and nothing else. Naming
+                    them live also makes the limitation self-evident the moment
+                    someone plots two arbitrary raw columns. */}
+                {clusterMethod !== "NONE" && activeDataset && (
+                    <div className="text-[11px] leading-snug opacity-70">
+                        Clusters on the plotted {viewMode === "2D" ? 'axes' : 'axes'}:{' '}
+                        <b>{[axNow?.x, axNow?.y, axNow?.z].filter(Boolean).join(' · ')}</b>
+                        <InfoTip topic="clusters_plotted_axes" />
+                    </div>
+                )}
+
                 {clusterMethod === "DBSCAN" && (
                     <div className="space-y-2 text-sm">
-                        <label className="flex justify-between"><span className="opacity-70">EPS:</span> <span>{eps}</span></label>
+                        <label className="flex justify-between">
+                            <span className="opacity-70">
+                                EPS <span className="opacity-70">({standardize ? 'SD units' : 'axis units'})</span>:
+                                <InfoTip topic="dbscan_parameters" />
+                            </span>
+                            <span>{eps}</span>
+                        </label>
                         <input type="range" min="0.1" max="5" step="0.1" value={eps} onChange={e => setEps(parseFloat(e.target.value))} className="w-full" />
                         <label className="flex justify-between"><span className="opacity-70">Min Samples:</span> <span>{minSamples}</span></label>
                         <input type="range" min="1" max="50" step="1" value={minSamples} onChange={e => setMinSamples(parseInt(e.target.value))} className="w-full" />
+                        {minSamples < 2 && (
+                            <p className="text-[10px] leading-snug text-[var(--p-red)]">
+                                At min samples = 1 every point is its own core point, so eps stops affecting the result.
+                            </p>
+                        )}
                     </div>
                 )}
                 {clusterMethod === "KMEANS" && (
                     <div className="space-y-2 text-sm">
-                        <label className="flex justify-between"><span className="opacity-70">K (Clusters):</span> <span>{k}</span></label>
+                        <label className="flex justify-between">
+                            <span className="opacity-70">K (Clusters):<InfoTip topic="kmeans_deterministic" /></span>
+                            <span>{k}</span>
+                        </label>
                         <input type="range" min="2" max="20" step="1" value={k} onChange={e => setK(parseInt(e.target.value))} className="w-full" />
                     </div>
                 )}
                 {clusterMethod !== "NONE" && (
-                    <label
-                        className="flex items-center gap-2 text-xs cursor-pointer select-none"
-                        title={"Z-score each variable before the distance math, giving all variables equal weight. Suggested ON for mixed scales (e.g. Age with survey items), OFF for PC scores (their variance ordering is the point) and for items sharing a response scale (variance differences are signal). With DBSCAN, eps is then in SD units."}
-                    >
+                    <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
                         <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
                         <span className="opacity-80">Standardize variables (z-score)</span>
+                        <InfoTip topic="standardize_clustering" />
                     </label>
                 )}
                 {clusterMethod !== "NONE" && (
                     <button onClick={handleCluster} disabled={isClustering} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--abaci)]'}`}>
                         {isClustering ? "Clustering..." : "Run Clustering"}
                     </button>
+                )}
+                {clusterMethod !== "NONE" && (
+                    <p className="text-[10px] leading-snug opacity-60">
+                        Missing values are filled with the column median before the distance maths.
+                        <InfoTip topic="median_imputation" />
+                    </p>
                 )}
                 {processedData.columns.includes('Cluster') && (
                     <ClusterBreakdown

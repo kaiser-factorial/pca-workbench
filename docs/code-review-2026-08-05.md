@@ -246,7 +246,7 @@ Every fact in this section is already written down somewhere in the repo. None i
 
 The last two rows are the model to copy: an honest label *and* a tooltip explaining the methodological trade-off.
 
-### B1 · OPAQUE — say that K-Means is the deterministic variant
+### B1 · FIXED (2026-08-05) — say that K-Means is the deterministic variant
 
 The `<select>` option reads *"K-Means"*. Nothing on screen says repeated runs give byte-identical clusters, which
 is unusual enough that a researcher will assume the opposite and may re-run "to check stability" while learning
@@ -257,7 +257,7 @@ subsamples is still the check that matters.
 
 `page.tsx:2970-2974` · facts at `cluster.ts:94, 116, 119`
 
-### B2 · OPAQUE — say that missing values are median-imputed
+### B2 · FIXED (2026-08-05) — say that missing values are median-imputed
 
 The Variables panel already shows *"· 12 NA"* per column — the one place a user meets their missingness. It never
 says what becomes of those 12 on Run PCA or Run Clustering. One line under each Run button, plus the imputed
@@ -265,7 +265,7 @@ count from A9.
 
 `page.tsx:627-632` · `page.tsx:862-868, 2999-3003`
 
-### B3 · OPAQUE — the Cluster section never says which columns it clusters on
+### B3 · FIXED (2026-08-05) — the Cluster section never said which columns it clusters on
 
 Method, parameters, standardize, Run — and no statement that the input is the 2–3 columns currently on the axes.
 The assistant's tool result *does* say it ("DBSCAN done on 3 axes (PC1, PC2, PC3)"); a user who never opens the
@@ -274,7 +274,32 @@ Outstanding #9: "axes are the feature selection"), so naming it is both a transp
 real constraint. Suggested: a live line above the Run button — *"Clusters on the plotted axes: PC1 · PC2 · PC3"* —
 which also makes the limitation self-evident the moment someone plots two arbitrary raw columns.
 
-`page.tsx:2969-3003` · input selection at `page.tsx:1747-1750`
+**Resolved (B1–B3).** The method-vs-result split turned out to be the important design call, so it is recorded
+here: facts *about the method* (k-means determinism, what eps does, correlation vs covariance PCA) sit behind an
+"(i)"; facts *about this run* (which columns were clustered) are inline and unmissable. A tooltip cannot tell you
+that 40% of a column was imputed, so putting run-specific facts behind hover would have reproduced the exact
+failure this section describes.
+
+- **B1** — the method dropdown reads "K-Means (deterministic)" and "DBSCAN (density-based)", with the full
+  seeding/initialisation detail behind the (i) next to k, including the corollary that determinism is
+  reproducibility rather than evidence of stable structure.
+- **B2** — a line under both Run buttons states that missing values are filled with the column median, with the
+  variance/attenuation caveat behind the (i). Per-run imputed counts remain open as A9.
+- **B3** — a live line above Run Clustering: *"Clusters on the plotted axes: PetalLengthCm · PetalWidthCm ·
+  SepalLengthCm"*. It updates with the axes, which makes the limitation self-evident the moment someone plots two
+  arbitrary raw columns.
+- Also: the eps slider now labels its unit ("SD units" / "axis units") per B5, and warns at min samples = 1.
+
+New `src/lib/disclosures.ts` is the single source for these strings, so the sidebar, a future information page and
+the assistant cannot drift apart — which is how A3 happened. `src/components/InfoTip.tsx` replaces the
+`<span title>` in `AssistantPanel.tsx`: `title` never fires on touch and a span is not keyboard-focusable, so the
+old one was invisible to anyone not using a mouse.
+
+Verified on screen rather than by compilation, which caught two bugs the type-checker could not: the panel was
+being painted over by later siblings, and clipped by the sidebar's `overflow-y-auto`. It is now portalled to
+`<body>` with fixed positioning and clamped to the viewport.
+
+`page.tsx` Cluster and PCA sections · `disclosures.ts` · `InfoTip.tsx`
 
 ### B4 · OPAQUE — the scree chart is truncated at k, so it cannot be used to choose k
 
@@ -555,7 +580,13 @@ The workflow's only step is `npx vitest run`: no `next build`, no `tsc --noEmit`
 broken build reaches Vercel before it reaches CI, which matters more than usual given HANDOFF Outstanding #3
 (local builds not trusted).
 
-`.github/workflows/test.yml`
+**Partly unblocked (2026-08-05):** `eslint` was unusable as a gate because `public/vendor/**` — the 1.7 MB
+minified Plotly bundle the `prebuild` hook copies in — was being linted, reporting ~4,450 problems on top of the
+~135 real ones. It is now in `globalIgnores`. Adding `tsc --noEmit` and `eslint` to the workflow is now a
+reasonable next step; the 128 pre-existing errors are almost all deliberate `any` on the columnar cell type, so
+they would need either a baseline or a rule exemption first.
+
+`.github/workflows/test.yml` · `eslint.config.mjs`
 
 ### E4 · PARTLY FIXED (2026-08-05) — the untested files are where the confirmed bugs are
 
