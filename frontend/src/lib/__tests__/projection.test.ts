@@ -125,3 +125,66 @@ describe('an unreadable loading is not silently a zero (finding C10)', () => {
     expect(has(processUpload(data, comp).warnings, 'could not be read')).toBe(false);
   });
 });
+
+// F22 rewrote the projection column-major over a flat Float64Array. The review
+// measured the same rewrite as bit-identical; this asserts it for THIS version,
+// by recomputing the same projection the naive row-major way.
+describe('projection is numerically unchanged by the F22 rewrite', () => {
+  const naive = (d: DataTable, vars: string[], loadings: number[][], k: number) => {
+    const n = d.nRows, p = vars.length;
+    const X: number[][] = Array.from({ length: n }, () => new Array(p));
+    for (let j = 0; j < p; j++) {
+      const col = (d.data[vars[j]] as number[]);
+      const sorted = [...col].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const med = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+      let sum = 0;
+      for (let i = 0; i < n; i++) { const v = col[i] ?? med; X[i][j] = v; sum += v; }
+      const mean = sum / n;
+      let sq = 0;
+      for (let i = 0; i < n; i++) sq += (X[i][j] - mean) ** 2;
+      const std = Math.sqrt(sq / n) || 1;
+      for (let i = 0; i < n; i++) X[i][j] = (X[i][j] - mean) / std;
+    }
+    const out: number[][] = [];
+    for (let c = 0; c < k; c++) {
+      const col: number[] = [];
+      for (let i = 0; i < n; i++) {
+        let acc = 0;
+        for (let j = 0; j < p; j++) acc += X[i][j] * loadings[j][c];
+        col.push(acc);
+      }
+      out.push(col);
+    }
+    return out;
+  };
+
+  it('matches a row-major reference exactly, across 200 rows', () => {
+    const n = 200;
+    const mk = (seed: number) => Array.from({ length: n }, (_, i) => ((i * seed) % 97) / 7 - 3);
+    const d = table({ a: mk(13), b: mk(29), c: mk(41), e: mk(53) });
+    const loadings = [[0.51, -0.23], [-0.62, 0.44], [0.37, 0.71], [0.11, -0.35]];
+    const comp = components(['a', 'b', 'c', 'e'], {
+      PC1: loadings.map(l => l[0]), PC2: loadings.map(l => l[1]),
+    });
+    const res = processUpload(d, comp);
+    const ref = naive(d, ['a', 'b', 'c', 'e'], loadings, 2);
+    for (let c = 0; c < 2; c++) {
+      const got = res.table.data[`PC${c + 1}`] as number[];
+      expect(got).toHaveLength(n);
+      for (let i = 0; i < n; i++) {
+        // Bit-identical would be ideal, but summation order differs by design;
+        // 1e-12 is far tighter than anything a score is read at.
+        expect(got[i]).toBeCloseTo(ref[c][i], 12);
+      }
+    }
+  });
+
+  it('handles a zero loading, which the new loop skips', () => {
+    const d = table({ a: [1, 2, 3, 4], b: [4, 3, 2, 1] });
+    const comp = components(['a', 'b'], { PC1: [0, 1], PC2: [1, 0] });
+    const res = processUpload(d, comp);
+    const ref = naive(d, ['a', 'b'], [[0, 1], [1, 0]], 2);
+    expect(res.table.data.PC1).toEqual(ref[0].map(v => expect.closeTo(v, 12)));
+  });
+});

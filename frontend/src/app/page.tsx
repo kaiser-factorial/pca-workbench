@@ -2245,6 +2245,7 @@ export default function Home() {
           canvas.width = W; canvas.height = H;
           const ctx = canvas.getContext('2d')!;
           const gif = GIFEncoder();
+          let palette: ReturnType<typeof quantize> | undefined;
           const progressNode = gifButtonRef.current;
           for (let i = 0; i < FRAMES; i++) {
               if (progressNode) progressNode.textContent = `Rendering ${i + 1}/${FRAMES}…`;
@@ -2267,7 +2268,15 @@ export default function Home() {
               ctx.fillRect(0, 0, W, H);
               ctx.drawImage(img, 0, 0, W, H);
               const { data: rgba } = ctx.getImageData(0, 0, W, H);
-              const palette = quantize(rgba, 256);
+              // Quantize once and reuse the palette (finding F16). Building a
+              // fresh 256-colour palette per frame measured 313 ms/frame at 50k
+              // points, ~36 ms when reused — and rotation is the case where
+              // reuse is safe by construction: every frame shows the same points
+              // in the same colours, only from a different angle, so frame 0's
+              // palette already covers the sequence. (A palette built per frame
+              // can also make flat regions shimmer between frames, so this is
+              // marginally better looking as well as much faster.)
+              palette ??= quantize(rgba, 256);
               gif.writeFrame(applyPalette(rgba, palette), W, H, { palette, delay: 80 });
           }
           gif.finish();
