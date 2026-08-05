@@ -1,4 +1,6 @@
 import { median, numericValues } from './table';
+// Deterministic PRNG so repeated runs give identical clusters (random_state analog)
+import { mulberry32 } from './random';
 
 // DBSCAN + KMeans over plot coordinates, replacing the sklearn endpoints.
 // Sizes here are survey-scale (hundreds to low thousands of points), so the
@@ -113,14 +115,6 @@ export const dbscan = (colData: (number | null)[][], eps: number, minSamples: nu
     }
   }
   return labels.map(l => (l === -1 ? 'Noise' : `Cluster ${l}`));
-};
-
-// Deterministic PRNG so repeated runs give identical clusters (random_state analog)
-const mulberry32 = (seed: number) => () => {
-  seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
 export const kmeans = (colData: (number | null)[][], k: number): string[] => {

@@ -85,7 +85,7 @@ export const DISCLOSURES = {
   group_stats: {
     title: 'How group statistics are computed',
     text:
-      'Standard deviations are population values, dividing by n rather than n-1. Eta-squared is the share of variance accounted for by group membership: a descriptive effect size, not a significance test, and upwardly biased with small groups. Always read it alongside the per-group means and ns.',
+      'Standard deviations are population values, dividing by n rather than n-1. Eta-squared is the share of variance accounted for by group membership; omega-squared is the same quantity corrected for the upward bias that grows with the number of groups, and is the one to prefer when there are many. Both are descriptive effect sizes, not significance tests, and a sizable value can be driven by one small extreme group — so always read them alongside the per-group means and ns. Comparing by a column with one row per group is refused: eta-squared would be exactly 1.000 by construction.',
     methodsTopic: 'eta_squared',
   },
 

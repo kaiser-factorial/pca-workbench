@@ -2565,8 +2565,30 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (!t.columns.includes(groupCol)) return `"${groupCol}" is not a column.`;
           const res = statsCompareGroups(t.data[numericCol], t.data[groupCol]);
           if (!res.groups.length) return 'No complete observations to compare.';
+
+          // A grouping with (nearly) one row per group is an identifier, not a
+          // grouping: eta-squared is 1.000 by construction and means nothing.
+          // Refusing beats reporting a number that reads as a perfect result.
+          if (res.nGroups >= res.overall.n) {
+              return `"${groupCol}" has ${res.nGroups} distinct values across ${res.overall.n} observations — one per row. That is an identifier rather than a grouping, and eta-squared would be exactly 1.000 by construction. Pick a column with repeated values (a condition, demographic, or cluster).`;
+          }
+          if (res.nGroups > res.overall.n / 2) {
+              return `"${groupCol}" has ${res.nGroups} distinct values across only ${res.overall.n} observations (smallest group n=${res.minGroupN}). Group means are not estimable at that granularity and eta-squared would be inflated to near 1 by construction. Pick a coarser grouping.`;
+          }
+
           const lines = res.groups.map(g => `${g.group}: mean=${g.mean.toFixed(2)}, sd=${g.sd.toFixed(2)}, n=${g.n}`);
-          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd.toFixed(2)}, n=${res.overall.n}):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group).`;
+          // Caveats the number cannot carry on its own.
+          const caveats: string[] = [];
+          if (res.singletonGroups) {
+              caveats.push(`${res.singletonGroups} group${res.singletonGroups === 1 ? ' has' : 's have'} a single observation, so their sd is 0 by construction rather than by finding`);
+          }
+          if (res.minGroupN < 30) {
+              caveats.push(`the smallest group has n=${res.minGroupN}, so its mean is unstable`);
+          }
+          if (res.etaSquared != null && res.omegaSquared != null && res.etaSquared - res.omegaSquared > 0.05) {
+              caveats.push(`eta-squared is inflated here by the number of groups — omega-squared is the corrected figure`);
+          }
+          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd.toFixed(2)} [population], n=${res.overall.n}, ${res.nGroups} groups):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'}, omega-squared=${res.omegaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group; descriptive effect sizes, not significance tests).${caveats.length ? ` Note: ${caveats.join('; ')}.` : ''}`;
       },
 
       suggestK: (maxK) => {

@@ -1,6 +1,8 @@
 // Aggregate statistics for the assistant's analysis tools. Everything here
 // returns summaries, never row-level data — that is the privacy contract.
 
+import { sampleIndices } from './random';
+
 type Cell = number | null | undefined | string;
 
 const numericPairs = (a: Cell[], b: Cell[]): [number, number][] => {
@@ -55,11 +57,31 @@ export const correlation = (a: Cell[], b: Cell[]): { n: number; pearson: number 
 
 export type GroupStat = { group: string; n: number; mean: number; sd: number };
 
-// Per-group mean/sd of a numeric column plus eta² (share of variance explained
-// by group membership) — the standard effect size for "does this differ by group"
+export type GroupComparison = {
+  groups: GroupStat[];
+  overall: { n: number; mean: number; sd: number };
+  etaSquared: number | null;
+  /**
+   * Omega-squared: eta² corrected for the upward bias that grows with the
+   * number of groups. methods.ts (eta_squared) names it as the fix and the app
+   * did not compute it, which mattered most in exactly the case eta² misleads —
+   * many small groups. Can go slightly negative when group means differ less
+   * than chance would predict; that is meaningful, so it is not clamped.
+   */
+  omegaSquared: number | null;
+  nGroups: number;
+  /** Size of the smallest group, for judging whether the numbers are stable. */
+  minGroupN: number;
+  /** Groups with a single observation — their sd is 0 by construction, not by finding. */
+  singletonGroups: number;
+};
+
+// Per-group mean/sd of a numeric column plus eta²/omega² — the standard effect
+// sizes for "does this differ by group". Note sd is the POPULATION sd (divide
+// by n), consistent with the rest of the app.
 export const compareGroups = (
   numeric: Cell[], groups: Cell[],
-): { groups: GroupStat[]; overall: { n: number; mean: number; sd: number }; etaSquared: number | null } => {
+): GroupComparison => {
   const byGroup = new Map<string, number[]>();
   const all: number[] = [];
   const n = Math.min(numeric.length, groups.length);
@@ -76,7 +98,9 @@ export const compareGroups = (
     const sd = Math.sqrt(vals.reduce((s, v) => s + (v - m) ** 2, 0) / vals.length);
     return { n: vals.length, mean: m, sd };
   };
-  if (all.length === 0) return { groups: [], overall: { n: 0, mean: NaN, sd: NaN }, etaSquared: null };
+  if (all.length === 0) {
+    return { groups: [], overall: { n: 0, mean: NaN, sd: NaN }, etaSquared: null, omegaSquared: null, nGroups: 0, minGroupN: 0, singletonGroups: 0 };
+  }
   const overall = stats(all);
   const groupStats: GroupStat[] = Array.from(byGroup.entries())
     .map(([group, vals]) => ({ group, ...stats(vals) }))
@@ -84,13 +108,36 @@ export const compareGroups = (
   let ssBetween = 0, ssTotal = 0;
   for (const g of groupStats) ssBetween += g.n * (g.mean - overall.mean) ** 2;
   for (const v of all) ssTotal += (v - overall.mean) ** 2;
-  return { groups: groupStats, overall, etaSquared: ssTotal > 0 ? ssBetween / ssTotal : null };
+
+  const kGroups = groupStats.length;
+  const dfWithin = all.length - kGroups;
+  const msWithin = dfWithin > 0 ? (ssTotal - ssBetween) / dfWithin : null;
+  // omega² = (SS_between - (k-1)·MS_within) / (SS_total + MS_within)
+  const omegaSquared = msWithin != null && ssTotal + msWithin > 0
+    ? (ssBetween - (kGroups - 1) * msWithin) / (ssTotal + msWithin)
+    : null;
+
+  return {
+    groups: groupStats,
+    overall,
+    etaSquared: ssTotal > 0 ? ssBetween / ssTotal : null,
+    omegaSquared,
+    nGroups: kGroups,
+    minGroupN: Math.min(...groupStats.map(g => g.n)),
+    singletonGroups: groupStats.filter(g => g.n === 1).length,
+  };
 };
 
 // --- Clustering diagnostics -------------------------------------------------
 
-// Rows from columnar axis data, dropping incomplete rows; subsampled evenly
-// so the O(n²) work below stays fast on large tables
+// Rows from columnar axis data, dropping incomplete rows, then subsampled so
+// the O(n²) work below stays fast on large tables.
+//
+// The sample is SEEDED RANDOM, not evenly strided. Striding is fine on shuffled
+// data and wrong on ordered data — one row per participant per wave, blocks of
+// trials, cases sorted by condition — where a stride landing on the period
+// samples one stratum and calls it the dataset. Seeded so repeated runs still
+// agree, which the app's determinism promise depends on.
 const toMatrix = (cols: Cell[][], cap = 1200): number[][] => {
   const n = Math.min(...cols.map(c => c.length));
   const rows: number[][] = [];
@@ -99,10 +146,7 @@ const toMatrix = (cols: Cell[][], cap = 1200): number[][] => {
     if (row.every(v => typeof v === 'number')) rows.push(row as number[]);
   }
   if (rows.length <= cap) return rows;
-  const step = rows.length / cap;
-  const sampled: number[][] = [];
-  for (let i = 0; i < cap; i++) sampled.push(rows[Math.floor(i * step)]);
-  return sampled;
+  return sampleIndices(rows.length, cap).map(i => rows[i]);
 };
 
 const distMatrix = (X: number[][]): Float64Array => {

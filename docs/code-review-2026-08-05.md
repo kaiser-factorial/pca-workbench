@@ -37,9 +37,9 @@ chunk.
 
 1. **A3** — `suggest_eps` is off by one, and contradicts the app's own methods reference.
 2. **C1** — PapaParse errors are discarded; ragged rows, unterminated quotes and Qualtrics title rows destroy data silently.
-3. **A7** — `compare_groups` reports η² = 1.000 on an ID column.
+3. ~~**A7** — `compare_groups` reports η² = 1.000 on an ID column.~~ **FIXED**
 4. **B1–B3** — the four disclosures (deterministic k-means, median imputation, plotted-axes-only clustering, population sd). All four are already written down elsewhere in the repo.
-5. **A4** — cluster diagnostics subsample by stride, not at random.
+5. ~~**A4** — cluster diagnostics subsample by stride, not at random.~~ **FIXED**
 6. **E1** — `xlsx@0.18.5` has an unfixable-on-npm high-severity advisory, and it parses untrusted user files.
 7. **F1** — the OpenAI SDK and markdown stack ship in the initial bundle.
 8. **F9 + F10** — the rotation loop: drive the camera with `Plotly.relayout` instead of React state, and memoize the assistant panel. Dataset-size-independent.
@@ -126,15 +126,27 @@ an eps at which DBSCAN really does form clusters, and that a hair under it does 
 
 `stats.ts:171-206` · `page.tsx:2467-2479` · `assistant.ts:362` · tests in `stats.test.ts`, `cluster.test.ts`
 
-### A4 · WRONG — cluster diagnostics subsample by stride, not at random
+### A4 · FIXED (2026-08-05) — cluster diagnostics subsample by stride, not at random
 
-`toMatrix` caps at 1,200 rows for silhouette and 2,000 for the k-distance curve, then keeps
+`toMatrix` caps at 1,200 rows for silhouette and 2,000 for the k-distance curve, then kept
 `rows[Math.floor(i * step)]`. Even striding is fine on shuffled data and wrong on periodic data — four rows per
 participant, blocks per condition, one row per longitudinal wave. At n = 4,800 the step is exactly 4, so the
-diagnostic sees one wave while the clustering runs on all four. Fix: seeded random sample using the
-`mulberry32` generator already in `cluster.ts`.
+diagnostic saw one wave while the clustering ran on all four.
 
-`stats.ts:127-139` · callers `stats.ts:191, 210`
+**Resolved.** New `src/lib/random.ts` holds the seeded PRNG the app already depended on, and `sampleIndices(n,
+cap, seed)` draws a random subset by partial Fisher–Yates — O(cap) swaps, no duplicates, returned in ascending
+order so downstream row order is unchanged. `toMatrix` now calls it. The seed is fixed, so `suggest_k` and
+`suggest_eps` still return byte-identical answers across runs; the determinism promise did not depend on
+striding, only on not calling `Math.random`.
+
+`cluster.ts` kept its own private copy of `mulberry32` for k-means++ seeding. That copy is gone — two
+generators that could drift apart was the same failure mode as the duplicated k-distance convention in A3, so
+there is now one.
+
+Checked empirically across four n/cap combinations: on the four-stratum fixture the sample splits
+496/521/484/499 where a stride gives 2000/0/0/0.
+
+`random.ts` (new) · `stats.ts` `toMatrix` · `cluster.ts` · tests in `stats.test.ts`
 
 ### A5 · OPAQUE — mean silhouette skips singleton clusters instead of scoring them zero
 
@@ -154,14 +166,35 @@ leave those.
 
 `stats.ts:107-111` · `page.tsx:2449`
 
-### A7 · WRONG — `compare_groups` has no cardinality guard, so η² = 1.000 on an identifier column
+### A7 · FIXED (2026-08-05) — `compare_groups` has no cardinality guard, so η² = 1.000 on an identifier column
 
 Verified: 50 rows, 50 distinct group values → `etaSquared = 1.0`, every group `n = 1`, every `sd = 0`. The bridge
-passes that through as *"eta-squared=1.000 (share of variance explained by group)"* and the assistant will relay
-it. Nothing stops `compare_groups(PetalLengthCm, Id)`. Refuse when the group count approaches the row count or
-any group has `n < 2`, and return `nGroups` and the minimum group size alongside η².
+passed that through as *"eta-squared=1.000 (share of variance explained by group)"* and the assistant would relay
+it. Nothing stopped `compare_groups(PetalLengthCm, Id)`.
 
-`stats.ts:93-121` (line 120) · `page.tsx:2442-2451` · `assistant.ts:328-340`
+**Resolved, in two parts.**
+
+*The guard.* `compareGroups` now returns a named `GroupComparison` carrying `nGroups`, `minGroupN` and
+`singletonGroups` alongside the effect sizes, so the caller can see why a number is what it is. The bridge
+refuses two cases outright rather than reporting them: one group per row (*"That is an identifier rather than a
+grouping — eta-squared would be 1.000 by construction"*) and more groups than half the rows (*"Pick a coarser
+grouping"*). Below that it reports and annotates: singleton groups are named as having sd = 0 by construction,
+`minGroupN < 30` earns an instability note.
+
+*The bias.* The deeper problem is that η² is upward-biased and the bias grows with the group count, so the
+identifier case is only the limit of a gradient — 25 groups of 3 drawn from **one** distribution still gives
+η² = 0.377. `methods.ts` already named ω² as the correction and the app did not compute it. It does now:
+
+    ω² = (SS_between − (k − 1)·MS_within) / (SS_total + MS_within)
+
+Both are reported. ω² is not clamped at zero: a negative value means the group means differ *less* than chance
+predicts, which is information. When the two disagree by more than 0.05 the output says which to trust. On the
+25×3 noise fixture η² = 0.377 while ω² = 0.078 — a fivefold difference, and the second number is the honest one.
+(In the identifier case ω² is `null`, because with one row per group there are no within-group degrees of
+freedom left to estimate error from — which is itself the answer.)
+
+`stats.ts` `GroupComparison` · `page.tsx` (bridge + tool description) · `disclosures.ts` `group_stats` ·
+tests in `stats.test.ts`
 
 ### A8 · OPAQUE — "loadings" are unit-norm eigenvector weights, and the methods reference gives a threshold for the other quantity
 
