@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2 } from "lucide-react";
+import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2, Info } from "lucide-react";
 import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
@@ -18,8 +18,9 @@ import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
 import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, type MissingReport, type MissingStrategy } from "@/lib/pca";
-import { isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
+import { isIdentifierColumn, valuesAreRowLevel, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
 import { InfoTip } from "@/components/InfoTip";
+import { InfoDialog } from "@/components/InfoDialog";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
 
 
@@ -1425,6 +1426,7 @@ export default function Home() {
   // Sheets in the selected workbook, and which one to read. Empty string means
   // "let the parser choose", which is the right default — it picks the first
   // sheet that actually has data rather than blindly the first sheet.
+  const [showInfo, setShowInfo] = useState(false);
   const [sheetOptions, setSheetOptions] = useState<SheetInfo[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>("");
   const [uploadStatus, setUploadStatus] = useState<string>("");
@@ -2356,11 +2358,19 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               else counts.set(String(v), (counts.get(String(v)) ?? 0) + 1);
           }
           if (isNumeric) return { name: col, kind: 'numeric' as const, min, max, missing };
+          // Withhold the values themselves when they are effectively one per
+          // row — an email column's "top 8 by frequency" is 8 arbitrary rows
+          // with a count of 1, which is exactly the raw data this app promises
+          // never to send (D8). nUnique still goes, so the assistant knows the
+          // column exists and why it cannot enumerate it.
+          const rowLevel = isIdentifierColumn(col) || valuesAreRowLevel(counts.size, vals.length);
           return {
               name: col, kind: 'categorical' as const, missing, nUnique: counts.size,
-              topCategories: Array.from(counts.entries())
-                  .sort((a, b) => b[1] - a[1]).slice(0, 8)
-                  .map(([value, count]) => ({ value, count })),
+              ...(rowLevel ? {} : {
+                  topCategories: Array.from(counts.entries())
+                      .sort((a, b) => b[1] - a[1]).slice(0, 8)
+                      .map(([value, count]) => ({ value, count })),
+              }),
           };
       });
   };
@@ -2492,6 +2502,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               return `"${attribute}" is not a column. Categorical columns: ${cats.join(', ')}.`;
           }
           const attrVals = t.data[attribute];
+          // Same guard as the column profile: breaking clusters down by a column
+          // with one value per row would emit those values verbatim, and would
+          // be meaningless anyway — every cell would read "value 100% (1)" (D8).
+          const nUniqueAttr = new Set(attrVals.filter(v => v != null).map(String)).size;
+          if (isIdentifierColumn(attribute) || valuesAreRowLevel(nUniqueAttr, t.nRows)) {
+              return `"${attribute}" has ${nUniqueAttr} distinct values across ${t.nRows} rows — close to one per row, so a breakdown would just list individual values rather than describe the clusters. Pick a column with repeated categories.`;
+          }
           const byCluster: Record<string, { total: number, counts: Record<string, number> }> = {};
           for (let i = 0; i < t.nRows; i++) {
               const c = String(clusterCol[i] ?? 'N/A');
@@ -2894,6 +2911,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 {APP_NAME}
             </h1>
             <button
+                data-guide="about"
+                onClick={() => setShowInfo(true)}
+                title="About Scatter Lab — what it does to your data, and the methods behind it"
+                aria-label="About Scatter Lab"
+                className={`p-2 border ${theme === 'primary' ? 'bauhaus-btn bg-white text-[var(--border)]' : 'border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)] rounded'}`}
+            >
+                <Info className="w-4 h-4" />
+            </button>
+            <button
                 onClick={() => setTheme(theme === 'dark' || theme === 'terminal' ? 'primary' : 'terminal')}
                 title={theme === 'terminal' ? 'Switch to Bauhaus theme' : 'Switch to Terminal theme'}
                 className={`p-2 border ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)] rounded'}`}
@@ -2902,10 +2928,17 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             </button>
         </div>
 
-        <div className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70" title="All parsing, projection, and clustering run in your browser. Nothing is uploaded anywhere.">
+        {/* The privacy claim is the app's headline promise, so it links to the
+            page that explains its one exception (the assistant) rather than
+            relying on a `title` nobody sees on touch. */}
+        <button
+          onClick={() => setShowInfo(true)}
+          className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70 hover:opacity-100 cursor-pointer text-left"
+          title="All parsing, projection, and clustering run in your browser. Nothing is uploaded anywhere."
+        >
           <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
           All local — data never leaves your browser
-        </div>
+        </button>
 
         <SidebarGroup theme={theme}>
 
@@ -3301,6 +3334,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
         </div>
         <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} dock={assistantDock} onDockChange={changeDock} />
       </main>
+      <InfoDialog open={showInfo} onClose={() => setShowInfo(false)} theme={theme} />
     </div>
   );
 }

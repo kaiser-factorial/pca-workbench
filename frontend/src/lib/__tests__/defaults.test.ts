@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isBooleanLike, isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy } from '../defaults';
+import { isBooleanLike, isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy, valuesAreRowLevel } from '../defaults';
 import type { DataTable } from '../table';
 
 const table = (columns: Record<string, any[]>): DataTable => ({
@@ -41,5 +41,33 @@ describe('smart upload defaults', () => {
     const input = table({ Id: [1, 2, 3], Score: [10, 20, 30] });
     expect(pickDefaultColorBy(input, 'Score')).toBe('Score');
     expect(pickDefaultColorBy(input, '')).toBe('Score');
+  });
+});
+
+// The assistant's privacy contract is "aggregates, never rows". The column
+// profile it sends carries each categorical column's most frequent values —
+// which on an email or free-text column is eight arbitrary rows with a count of
+// 1, i.e. exactly the raw data the contract excludes (finding D8).
+describe('valuesAreRowLevel — where a category list stops being an aggregate', () => {
+  it('withholds a column with one distinct value per row', () => {
+    expect(valuesAreRowLevel(200, 200)).toBe(true);   // emails, names, free text
+    expect(valuesAreRowLevel(180, 200)).toBe(true);   // near-unique is the same problem
+  });
+
+  it('allows genuine categories, which are what make the assistant useful', () => {
+    expect(valuesAreRowLevel(3, 150)).toBe(false);    // Species in iris
+    expect(valuesAreRowLevel(2, 200)).toBe(false);    // condition
+    expect(valuesAreRowLevel(7, 500)).toBe(false);    // Likert
+  });
+
+  it('caps on absolute count too, not just the ratio', () => {
+    // 4,000 values across 50,000 rows is a small ratio and still not a category
+    // set anyone wants listed.
+    expect(valuesAreRowLevel(4000, 50000)).toBe(true);
+    expect(valuesAreRowLevel(50, 50000)).toBe(false);
+  });
+
+  it('handles an empty table without dividing by zero', () => {
+    expect(valuesAreRowLevel(0, 0)).toBe(false);
   });
 });

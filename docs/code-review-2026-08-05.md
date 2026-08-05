@@ -779,10 +779,52 @@ graceful degradation.
 
 `AssistantPanel.tsx:68, 176` · `assistant.ts:672-681`
 
+### D8 · WRONG, FIXED (2026-08-05) — the column profile sent to the model API could contain raw rows
+
+Found by a question rather than by reading: the assistant only *sends* column-level data, but what can it
+*reach*? The bridge closures run inside the page and close over `latestTable()`, so structurally every raw cell
+is reachable — the boundary is not isolation, it is what each tool chooses to return. No tool is designed to
+return rows (there is no `get_rows`; `snapshot`/`restore` are internal undo, not model tools). But one aggregate
+was not an aggregate.
+
+`columnProfiles` sent each categorical column's eight most frequent values. On `Species` those eight strings *are*
+the aggregate, and are what makes the assistant useful. On an email address, a participant name or a free-text
+answer, every value is unique — so "the top eight by frequency" are eight arbitrary rows with a count of 1.
+Demonstrated on a 200-row fixture:
+
+```
+nUnique: 200 of 200 rows
+topCategories: [ {"value":"participant0@university.edu","count":1},
+                 {"value":"participant1@university.edu","count":1}, … ]
+```
+
+Eight real addresses, leaving the browser on every `get_app_state`, in the one case where it matters most. The
+system prompt's claim — *"You see column metadata and aggregate statistics only; you never see raw data rows"* —
+was very nearly true and false exactly where a reader would care.
+
+**Resolved.** `valuesAreRowLevel(nUnique, nRows)` in `defaults.ts` decides when a value list has stopped being an
+aggregate: more than 50 distinct values, or more than half the rows. Both conditions are needed — the ratio
+catches a 200-row file with 200 values, the cap catches a 50,000-row file with 4,000. When it fires (or the name
+matches `isIdentifierColumn`), the values are withheld and only `nUnique` is sent, so the assistant still knows
+the column exists and why it cannot enumerate it.
+
+`get_cluster_breakdown` got the same guard, which it wanted anyway: a breakdown by a one-value-per-row column
+would have printed each value verbatim and told the user nothing, every cell reading `value 100% (1)`. It now
+refuses, in the same spirit as the A7 identifier guard.
+
+The information page states the resulting behaviour rather than the comfortable version of it.
+
+`page.tsx` `columnProfiles` / `getClusterBreakdown` · `defaults.ts` `valuesAreRowLevel` ·
+`InfoDialog.tsx` · tests in `defaults.test.ts`
+
 ### OK — what the assistant integration gets right
 
-The privacy contract holds — all 24 tools checked, none can emit a raw row; `getState`, `correlate`,
-`compareGroups` and `getClusterBreakdown` all return aggregates only. The bridge-ref indirection plus the
+The privacy contract holds **as of D8** — but this line originally read "all 24 tools checked, none can emit a
+raw row", and that was wrong. `getState` and `getClusterBreakdown` both emitted verbatim values from
+high-cardinality columns, which on an email or free-text column are rows. Auditing the tools for whether they
+*return* aggregates was the wrong question; the right one was whether the aggregate can degenerate into rows on
+some input. With D8 fixed, `getState`, `correlate`, `compareGroups` and `getClusterBreakdown` do all return
+aggregates only. The bridge-ref indirection plus the
 double-`requestAnimationFrame` yield genuinely solves the stale-state problem, and `freshTableRef` correctly
 covers the within-turn case the yield can't. Tool errors are validation-first and instructive, listing the valid
 column names. The download tools are all told to wait for explicit consent. The OAuth PKCE flow scrubs `?code=`
