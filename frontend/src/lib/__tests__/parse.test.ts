@@ -138,13 +138,30 @@ describe('readTable — dispatch', () => {
 // reported "needs at least two numeric columns" — pointing the user at their
 // data when the real problem was the file. These use the extract shape the
 // worker posts back, so neither a Worker nor SheetJS is needed to exercise them.
-describe('xlsxExtractToTable — a corrupt workbook is named as corrupt (finding C14)', () => {
-  const extract = (columns: string[], sheetNames = ['Sheet1']) => ({
+// The shape the worker posts back. Defaults describe the ordinary case — one
+// sheet, chosen automatically — so each test states only what it is about.
+const makeExtract = (o: {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  sheetNames?: string[];
+  sheetName?: string;
+  autoSelected?: boolean;
+}) => {
+  const sheetNames = o.sheetNames ?? ['Sheet1'];
+  const sheetName = o.sheetName ?? sheetNames[0];
+  return {
     sheetNames,
-    sheetName: sheetNames[0],
-    columns,
-    rows: [Object.fromEntries(columns.map(c => [c, 1]))],
-  });
+    sheets: sheetNames.map(name => ({ name, rows: name === sheetName ? o.rows.length : 0, columns: o.columns.length })),
+    sheetName,
+    autoSelected: o.autoSelected ?? true,
+    rows: o.rows,
+    columns: o.columns,
+  };
+};
+
+describe('xlsxExtractToTable — a corrupt workbook is named as corrupt (finding C14)', () => {
+  const extract = (columns: string[], sheetNames = ['Sheet1']) =>
+    makeExtract({ columns, sheetNames, rows: [Object.fromEntries(columns.map(c => [c, 1]))] });
 
   it('refuses a sheet whose headers are mostly binary', () => {
     expect(() => xlsxExtractToTable(extract(['{\x01\xe70', '\x1d\xfa[', 'a', '\x00\x07'])))
@@ -173,12 +190,93 @@ describe('xlsxExtractToTable — a corrupt workbook is named as corrupt (finding
 
   it('still reports the other things it silently did', () => {
     const { warnings } = xlsxExtractToTable(extract(['a', 'b'], ['Data', 'Readme']));
-    expect(warnsAbout(warnings, 'only the first sheet')).toBe(true);
+    expect(warnsAbout(warnings, 'only the "data" sheet was read')).toBe(true);
     expect(warnsAbout(warnings, 'readme')).toBe(true);
   });
 
-  it('names the other sheets when the first one is empty', () => {
-    expect(() => xlsxExtractToTable({ sheetNames: ['Empty', 'Actual'], sheetName: 'Empty', columns: [], rows: [] }))
+  it('names the other sheets when the chosen one is empty', () => {
+    expect(() => xlsxExtractToTable(makeExtract({ sheetNames: ['Empty', 'Actual'], columns: [], rows: [] })))
       .toThrow(/also contains "Actual"/);
+  });
+});
+
+// Reading sheet 1 unconditionally breaks the Readme-then-Data workbook, which
+// is a common export shape: the app read the Readme, found nothing, and stopped
+// without the user learning that a Data sheet was sitting right there.
+describe('xlsxExtractToTable — which sheet was read, and why (finding C4)', () => {
+  const cols = ['a', 'b'];
+  const rows = [{ a: 1, b: 2 }, { a: 3, b: 4 }];
+
+  it('says which sheet it read and that the others exist', () => {
+    const { warnings } = xlsxExtractToTable(makeExtract({ columns: cols, rows, sheetNames: ['Data', 'Readme', 'Codebook'] }));
+    expect(warnsAbout(warnings, 'only the "data" sheet was read')).toBe(true);
+    expect(warnsAbout(warnings, '"Readme", "Codebook"')).toBe(true);
+    expect(warnsAbout(warnings, 'sheet list')).toBe(true);   // points at the control
+  });
+
+  it('explains an automatic skip past an empty first sheet', () => {
+    const { warnings, table } = xlsxExtractToTable(
+      makeExtract({ columns: cols, rows, sheetNames: ['Readme', 'Data'], sheetName: 'Data' }),
+    );
+    expect(warnsAbout(warnings, '"Readme" has no data rows, so "Data" was read instead')).toBe(true);
+    expect(table.nRows).toBe(2);
+    // A sheet the sentence already named must not be re-listed as an "also".
+    expect(warnings[0].match(/Readme/g)).toHaveLength(1);
+    expect(warnsAbout(warnings, 'also contains')).toBe(false);
+  });
+
+  it('still lists the sheets it has not named when skipping', () => {
+    const { warnings } = xlsxExtractToTable(
+      makeExtract({ columns: cols, rows, sheetNames: ['Readme', 'Data', 'Codebook'], sheetName: 'Data' }),
+    );
+    expect(warnsAbout(warnings, 'also contains "Codebook"')).toBe(true);
+    expect(warnings[0].match(/Readme/g)).toHaveLength(1);
+  });
+
+  it('does not claim a skip when the user asked for that sheet', () => {
+    const { warnings } = xlsxExtractToTable(
+      makeExtract({ columns: cols, rows, sheetNames: ['Readme', 'Data'], sheetName: 'Data', autoSelected: false }),
+    );
+    expect(warnsAbout(warnings, 'no data rows')).toBe(false);
+    expect(warnsAbout(warnings, 'only the "data" sheet was read')).toBe(true);
+  });
+
+  it('stays quiet about sheets when there is only one', () => {
+    const { warnings } = xlsxExtractToTable(makeExtract({ columns: cols, rows }));
+    expect(warnings).toEqual([]);
+  });
+});
+
+// Without cellDates a date cell arrives as the Excel serial number 46024 — a
+// plottable, PCA-able, clusterable "measurement" with nothing marking it as a
+// date. The worker now sets cellDates, so these arrive as Date objects.
+describe('xlsxExtractToTable — dates are dates, and say so (finding C5)', () => {
+  it('names date columns and explains what was traded away', () => {
+    const { warnings, table } = xlsxExtractToTable(makeExtract({
+      columns: ['when', 'score'],
+      rows: [{ when: new Date('2026-01-15T00:00:00Z'), score: 10 }, { when: new Date('2026-02-20T00:00:00Z'), score: 20 }],
+    }));
+    expect(warnsAbout(warnings, '"when"')).toBe(true);
+    expect(warnsAbout(warnings, 'read as text')).toBe(true);
+    expect(warnsAbout(warnings, 'cannot be plotted')).toBe(true);
+    // ISO, so it at least sorts correctly as text
+    expect(table.data.when[0]).toBe('2026-01-15T00:00:00.000Z');
+    expect(table.data.score).toEqual([10, 20]);
+  });
+
+  it('does not mention dates when there are none', () => {
+    const { warnings } = xlsxExtractToTable(makeExtract({
+      columns: ['a'], rows: [{ a: 1 }, { a: 2 }],
+    }));
+    expect(warnsAbout(warnings, 'dates')).toBe(false);
+  });
+
+  it('flags a column that is only partly dates', () => {
+    // Mixed columns are the ones most likely to be misread, so a single Date is
+    // enough to earn the warning.
+    const { warnings } = xlsxExtractToTable(makeExtract({
+      columns: ['mixed'], rows: [{ mixed: 'n/a' }, { mixed: new Date('2026-03-01T00:00:00Z') }],
+    }));
+    expect(warnsAbout(warnings, '"mixed"')).toBe(true);
   });
 });

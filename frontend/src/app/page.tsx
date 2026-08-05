@@ -7,7 +7,7 @@ import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { Accordion, AccordionItem, Separator } from "puxel";
-import { readTable } from "@/lib/parse";
+import { readTable, listSheets, type SheetInfo } from "@/lib/parse";
 import { processUpload } from "@/lib/engine";
 import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
@@ -1418,6 +1418,11 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [datasetFile, setDatasetFile] = useState<File | null>(null);
   const [componentsFile, setComponentsFile] = useState<File | null>(null);
+  // Sheets in the selected workbook, and which one to read. Empty string means
+  // "let the parser choose", which is the right default — it picks the first
+  // sheet that actually has data rather than blindly the first sheet.
+  const [sheetOptions, setSheetOptions] = useState<SheetInfo[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState<string>("");
   const [uploadStatus, setUploadStatus] = useState<string>("");
   const [isUploading, setIsUploading] = useState(false);
   const [isExporting, setIsExporting] = useState("");
@@ -1557,12 +1562,24 @@ export default function Home() {
     return () => { if (reqRef.current) cancelAnimationFrame(reqRef.current); }
   }, [isRotating, viewMode]);
 
+  // Peek at a workbook's sheets as soon as it is chosen, so the user can pick
+  // one BEFORE pressing Add Dataset rather than discovering afterwards that the
+  // wrong sheet was read. Costs one structure-only read; no cell conversion.
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedSheet("");
+    if (!datasetFile) { setSheetOptions([]); return; }
+    listSheets(datasetFile).then(sheets => { if (!cancelled) setSheetOptions(sheets); });
+    return () => { cancelled = true; };
+  }, [datasetFile]);
+
   // Everything happens in the browser: parse → (optionally) project → plot.
   // No network round-trip, no server, data never leaves the machine.
   const uploadFiles = async (
     dsFile: File,
     compFile: File | null,
     initialView?: InitialUploadView,
+    sheet?: string,
   ): Promise<DataTable | null> => {
     setIsUploading(true);
     setUploadStatus("Processing…");
@@ -1570,7 +1587,7 @@ export default function Home() {
       // Yield a frame so the busy state paints before heavy parsing starts
       await new Promise(r => setTimeout(r, 30));
       const [dsParsed, compParsed] = await Promise.all([
-        readTable(dsFile),
+        readTable(dsFile, { sheet }),
         compFile ? readTable(compFile) : Promise.resolve(null),
       ]);
       const result = processUpload(dsParsed.table, compParsed?.table ?? null);
@@ -1588,7 +1605,9 @@ export default function Home() {
       const axes = initialView?.axes ?? pickDefaultAxes(table);
       const dataset: Dataset = {
         id,
-        name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
+        // Naming the sheet matters now that two sheets of one workbook can be
+        // loaded as two datasets — otherwise both arrive with the same name.
+        name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, '') + (sheet ? ` — ${sheet}` : ''),
         table,
         summary: result.topContributors ? { top_contributors: result.topContributors } : null,
         axes,
@@ -1617,7 +1636,7 @@ export default function Home() {
     }
   };
 
-  const handleUpload = () => { if (datasetFile) uploadFiles(datasetFile, componentsFile); };
+  const handleUpload = () => { if (datasetFile) uploadFiles(datasetFile, componentsFile, undefined, selectedSheet || undefined); };
 
   // Demo data ships with the app (public/demo) so the empty state can offer a
   // zero-friction first run: the public Iris CSV, no projection file required.
@@ -2962,6 +2981,27 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                   : <span className="text-xs font-medium opacity-50 text-center">{zone.empty}</span>}
               </div>
             ))}
+            {sheetOptions.length > 1 && (
+              // Only shown for a genuine multi-sheet workbook. The default is
+              // the parser's own choice (first sheet with data), so a Readme-
+              // then-Data file works without touching this at all.
+              <label className="flex flex-col gap-1 text-[11px]">
+                <span className="opacity-70">Sheet ({sheetOptions.length} in this workbook)</span>
+                <select
+                  data-guide="sheet-picker"
+                  value={selectedSheet}
+                  onChange={e => setSelectedSheet(e.target.value)}
+                  className={`w-full text-xs px-2 py-1 border cursor-pointer ${theme === 'primary' ? 'border-[3px] border-[var(--border)] bg-white' : 'bg-[var(--input)] border-[var(--border)]'}`}
+                >
+                  <option value="">Choose automatically</option>
+                  {sheetOptions.map(s => (
+                    <option key={s.name} value={s.name} disabled={s.rows === 0}>
+                      {s.name}{s.rows === 0 ? ' — empty' : ` — ${s.rows.toLocaleString()} row${s.rows === 1 ? '' : 's'} × ${s.columns}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button
               data-guide="components-toggle"
               onClick={() => { if (showComponents) setComponentsFile(null); setShowComponents(!showComponents); }}

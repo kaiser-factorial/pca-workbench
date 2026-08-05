@@ -458,22 +458,65 @@ name the text columns it rejected.
 
 `parse.ts` · `engine.ts:289-293` · `parse.test.ts`
 
-### C4 · WRONG — XLSX reads only the first sheet, silently
+### C4 · FIXED (2026-08-05) — XLSX reads only the first sheet, silently
 
 `wb.Sheets[wb.SheetNames[0]]`, unconditionally. Verified on a `["Readme","Data"]` workbook — an extremely common
-shape — the app reads `Readme`, gets zero rows, and reports *"First sheet is empty"* without mentioning that a
-`Data` sheet exists. At minimum list the sheet names in that error; better, offer a picker when there is more than
-one.
+export shape — the app read `Readme`, got zero rows, and reported *"First sheet is empty"* without mentioning
+that a `Data` sheet was sitting right there.
 
-`parse.ts:320-329`
+**Resolved, in two halves, because the default matters more than the control.**
 
-### C5 · WRONG — XLSX dates become Excel serial numbers
+*A better default.* The worker now picks the first sheet that actually **has data rows** rather than index 0, so
+the Readme-then-Data workbook simply works with nothing to click. Sheet dimensions come from each sheet's stored
+`!ref` range rather than by converting it, so this costs almost nothing on a twelve-sheet workbook. The choice is
+then explained rather than hidden:
 
-`XLSX.read` is called without `cellDates: true`, so a date column arrives as `46024`: a plottable, PCA-able,
-clusterable "measurement" with no indication it is a date. The `v instanceof Date` branch in `sanitizeCell` is
-dead code on this path. Verified.
+> ⚠ "Readme" has no data rows, so "Data" was read instead. This workbook also contains "Codebook". Use the Sheet
+> list to read a different one.
 
-`parse.ts:320-329` · `table.ts:10`
+*The picker.* Selecting an `.xlsx` triggers a structure-only read (`namesOnly`), and a **Sheet** dropdown appears
+under the dropzone whenever the workbook has more than one — before Add Dataset is pressed, so the choice is made
+in advance rather than discovered afterwards. Each option carries its size, and empty sheets are listed but
+disabled, which is how the user learns the Readme is empty rather than guessing:
+
+    Choose automatically
+    Readme — empty            (disabled)
+    Data — 40 rows × 4
+    Codebook — 1 row × 2
+
+Because a specific sheet can now be requested, two sheets of one workbook can be loaded as two datasets — so the
+dataset name gains the sheet (`readme-first — Codebook`) when one is chosen explicitly, otherwise they would
+collide.
+
+Verified in a real browser across every path: automatic selection, an explicit pick, a single-sheet workbook and
+a CSV (the picker appears for neither). Rendered colours were sampled rather than eyeballed, and the select
+confirmed to be the topmost element at its own centre in both themes — the check this sidebar has now needed
+three times.
+
+`xlsx.worker.ts` (`describe`, `namesOnly`, data-first selection) · `parse.ts` (`listSheets`, `readTable` opts) ·
+`page.tsx` (picker + `selectedSheet`) · tests in `parse.test.ts`
+
+### C5 · FIXED (2026-08-05) — XLSX dates become Excel serial numbers
+
+`XLSX.read` was called without `cellDates: true`, so a date column arrived as `46024`: a plottable, PCA-able,
+clusterable "measurement" with nothing marking it as a date. The `v instanceof Date` branch in `sanitizeCell` was
+dead code on this path.
+
+**Resolved.** The worker sets `cellDates: true`, and structured clone preserves `Date` across the worker
+boundary, so that branch is now live and dates land as ISO 8601 strings — sortable, unambiguous, and *not*
+numeric, which is the point. Detection happens in `xlsxExtractToTable` immediately before `rowsToTable`, the last
+moment at which a date is still distinguishable from the string it is about to become.
+
+The trade is real and is therefore stated rather than assumed away — reading dates as text means a date column
+can no longer go on an axis, which some users will want:
+
+> ⚠ Column "visit_date" holds dates, which were read as text (ISO 8601) rather than numbers, so it cannot be
+> plotted on an axis or entered into a PCA. Convert to a number — days since a start date, for instance — if you
+> need to analyse by time.
+
+A single `Date` in a column earns the warning, since mixed columns are the ones most likely to be misread.
+
+`xlsx.worker.ts` (`cellDates`) · `parse.ts` · `table.ts:10` (no longer dead) · tests in `parse.test.ts`
 
 ### C6 · OPAQUE — Excel columns formatted as Text vanish from the app, though the PCA math handles them
 

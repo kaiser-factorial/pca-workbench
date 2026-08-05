@@ -2,7 +2,9 @@ import Papa from 'papaparse';
 import { DataTable, rowsToTable, sanitizeCell } from './table';
 // Types only — importing the worker module for its values would pull SheetJS
 // back into the page bundle and undo the isolation it exists to provide.
-import type { WorkbookExtract, XlsxRequest, XlsxResponse } from './xlsx.worker';
+import type { SheetInfo, WorkbookExtract, XlsxRequest, XlsxResponse } from './xlsx.worker';
+
+export type { SheetInfo };
 
 export const SUPPORTED_EXTENSIONS = ['.csv', '.xlsx', '.parquet'];
 
@@ -138,14 +140,13 @@ const parseCSV = async (file: File): Promise<ParsedTable> => parseCSVText(await 
 // these occur in a header a human typed, in any script — so they are the
 // signature of bytes being read as text that were never text. Tab, newline and
 // carriage return are deliberately excluded: Excel puts them in wrapped headers.
-// eslint-disable-next-line no-control-regex
 const BINARY_JUNK = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/;
 
 // Everything below operates on the plain data the worker sends back, never on
 // SheetJS objects — see xlsx.worker.ts for why that boundary exists. Split out
 // as a pure function for the same reason parseCSVText is: the warnings are the
 // part worth testing, and they should not need a Worker to exercise.
-export const xlsxExtractToTable = ({ sheetNames, sheetName, rows, columns }: WorkbookExtract): ParsedTable => {
+export const xlsxExtractToTable = ({ sheetNames, sheetName, autoSelected, rows, columns }: WorkbookExtract): ParsedTable => {
   // SheetJS does not throw on a file that is not a spreadsheet: handed random
   // bytes it returns a plausible-looking workbook whose headers are binary
   // garbage. The failure then surfaced downstream as "needs at least two
@@ -160,16 +161,27 @@ export const xlsxExtractToTable = ({ sheetNames, sheetName, rows, columns }: Wor
 
   if (!columns.length) {
     // Naming the other sheets matters: a Readme-then-Data workbook is common,
-    // and "First sheet is empty" alone sends the user looking in the wrong place.
-    const others = sheetNames.slice(1);
+    // and "This sheet is empty" alone sends the user looking in the wrong place.
+    const others = sheetNames.filter(s => s !== sheetName);
     throw new Error(
-      `Sheet "${sheetName}" is empty.${others.length ? ` This workbook also contains ${others.map(s => `"${s}"`).join(', ')} — only the first sheet is read, so move the data there or save it as its own file.` : ''}`
+      `Sheet "${sheetName}" is empty.${others.length ? ` This workbook also contains ${others.map(s => `"${s}"`).join(', ')} — pick one of those from the Sheet list, or save it as its own file.` : ''}`
     );
   }
 
   const warnings: string[] = [];
   if (sheetNames.length > 1) {
-    warnings.push(`Only the first sheet ("${sheetName}") was read. This workbook also contains ${sheetNames.slice(1).map(s => `"${s}"`).join(', ')}.`);
+    // Say WHY this sheet, not just which: silently skipping past an empty first
+    // sheet is helpful, and is exactly the kind of help that should be visible.
+    const skipped = autoSelected && sheetName !== sheetNames[0];
+    const lead = skipped
+      ? `"${sheetNames[0]}" has no data rows, so "${sheetName}" was read instead`
+      : `Only the "${sheetName}" sheet was read`;
+    // Don't re-list a sheet the sentence has already named.
+    const named = new Set([sheetName, ...(skipped ? [sheetNames[0]] : [])]);
+    const others = sheetNames.filter(s => !named.has(s));
+    warnings.push(
+      `${lead}.${others.length ? ` This workbook also contains ${others.map(s => `"${s}"`).join(', ')}.` : ''} Use the Sheet list to read a different one.`,
+    );
   }
   // Below the refusal threshold, say it rather than silently keeping a column
   // the user cannot match to anything in their sheet.
@@ -183,6 +195,16 @@ export const xlsxExtractToTable = ({ sheetNames, sheetName, rows, columns }: Wor
     warnings.push(`${plural(empties.length, 'column')} had no header cell and ${empties.length === 1 ? 'was' : 'were'} named ${empties.slice(0, 3).map(c => `"${c}"`).join(', ')}. If the sheet has a title row above the header, the first data row is being used as the column names.`);
   }
 
+  // Date cells survive the worker boundary as Date objects (structured clone
+  // preserves them), and rowsToTable is about to render them as ISO strings —
+  // so this is the last point at which they are identifiable. Worth saying:
+  // reading them as text is a deliberate choice with a real cost, since a date
+  // column can no longer go on an axis.
+  const dateColumns = columns.filter(c => rows.some(r => r[c] instanceof Date));
+  if (dateColumns.length) {
+    warnings.push(`${dateColumns.length === 1 ? 'Column' : 'Columns'} ${dateColumns.slice(0, 3).map(c => `"${c}"`).join(', ')}${dateColumns.length > 3 ? ', …' : ''} ${dateColumns.length === 1 ? 'holds dates, which were' : 'hold dates, which were'} read as text (ISO 8601) rather than numbers, so ${dateColumns.length === 1 ? 'it cannot' : 'they cannot'} be plotted on an axis or entered into a PCA. Convert to a number — days since a start date, for instance — if you need to analyse by time.`);
+  }
+
   const table = rowsToTable(rows, columns);
   return { table, warnings: [...warnings, ...numericTextWarnings(table)] };
 };
@@ -193,7 +215,7 @@ export const xlsxExtractToTable = ({ sheetNames, sheetName, rows, columns }: Wor
 // environment is unusual, which is the wrong direction to fail. Workers are more
 // widely supported than the WebGL this app already requires, so a browser that
 // cannot run one cannot run the app either.
-const parseXLSX = async (file: File): Promise<ParsedTable> => {
+const runXlsxWorker = async (file: File, req: Omit<XlsxRequest, 'buffer'>): Promise<WorkbookExtract> => {
   if (typeof Worker === 'undefined') {
     throw new Error('This browser cannot read XLSX files (no Web Worker support). Save the sheet as CSV instead.');
   }
@@ -206,12 +228,32 @@ const parseXLSX = async (file: File): Promise<ParsedTable> => {
       // waits forever on a spinner rather than seeing the failure.
       worker.onerror = (e) => reject(new Error(e.message || 'The XLSX reader crashed.'));
       worker.onmessageerror = () => reject(new Error('The XLSX reader returned data that could not be read.'));
-      worker.postMessage({ buffer } satisfies XlsxRequest, [buffer]);
+      worker.postMessage({ ...req, buffer } satisfies XlsxRequest, [buffer]);
     });
     if (!res.ok) throw new Error(res.error);
-    return xlsxExtractToTable(res.extract);
+    return res.extract;
   } finally {
     worker.terminate();
+  }
+};
+
+const parseXLSX = async (file: File, sheet?: string): Promise<ParsedTable> =>
+  xlsxExtractToTable(await runXlsxWorker(file, { sheet }));
+
+/**
+ * Sheet names and sizes without converting any of them, for the picker. Costs
+ * one workbook read; the dimensions come from each sheet's stored range.
+ * Returns [] for anything that is not a workbook, so callers need no branch.
+ */
+export const listSheets = async (file: File): Promise<SheetInfo[]> => {
+  if (!file.name.toLowerCase().endsWith('.xlsx')) return [];
+  try {
+    return (await runXlsxWorker(file, { namesOnly: true })).sheets;
+  } catch {
+    // A corrupt file still has to reach the user through the normal parse path,
+    // where the error message is specific. Failing the peek silently avoids
+    // reporting it twice, in two different voices.
+    return [];
   }
 };
 
@@ -229,10 +271,10 @@ const parseParquet = async (file: File): Promise<ParsedTable> => {
   return { table: rowsToTable(fixed, columns), warnings: [] };
 };
 
-export const readTable = async (file: File): Promise<ParsedTable> => {
+export const readTable = async (file: File, opts: { sheet?: string } = {}): Promise<ParsedTable> => {
   const name = file.name.toLowerCase();
   if (name.endsWith('.csv')) return parseCSV(file);
-  if (name.endsWith('.xlsx')) return parseXLSX(file);
+  if (name.endsWith('.xlsx')) return parseXLSX(file, opts.sheet);
   if (name.endsWith('.parquet')) return parseParquet(file);
   throw new Error(`Unsupported file type — use one of: ${SUPPORTED_EXTENSIONS.join(', ')}`);
 };
