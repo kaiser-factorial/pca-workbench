@@ -28,7 +28,7 @@ import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDista
 import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, isPCColumn, type MissingReport, type MissingStrategy } from "@/lib/pca";
 import { isIdentifierColumn, valueIsTooRare, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
 import { InfoTip } from "@/components/InfoTip";
-import { applyRecode, describeRecode, scanForCodes } from "@/lib/recode";
+import { applyRecode, describeRecode } from "@/lib/recode";
 import { InfoDialog } from "@/components/InfoDialog";
 import { RecodeDialog } from "@/components/RecodeDialog";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
@@ -1760,7 +1760,8 @@ export default function Home() {
   // Plot state
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
   const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": true, "2D": true });
-  const [showRecode, setShowRecode] = useState(false);
+  // 'ask' is the free post-upload question; 'configure' runs the scan.
+  const [showRecode, setShowRecode] = useState<null | 'ask' | 'configure'>(null);
   // Box shape for 3-D. Cube by default: it orbits uniformly and always fits.
   const [aspect, setAspect] = useState<AspectMode>(DEFAULT_ASPECT);
   const [camera, setCamera] = useState(DEFAULT_CAMERA);
@@ -1997,10 +1998,11 @@ export default function Home() {
       };
       setDatasets(prev => [...prev, dataset]);
       setActiveId(id);
-      // The detector already warned about these in `warnings`; opening the dialog
-      // turns that notice into something the user can act on. Only when it found
-      // something itself — a clean import must not be interrupted.
-      if (scanForCodes(table).length) setShowRecode(true);
+      // Ask, don't scan: the question costs nothing, and the detector runs only
+      // if the user says yes. (Import used to scan every column here, which was
+      // measurable latency on wide survey tables.) The demo is curated and known
+      // clean — it arrives with an initialView, and is not worth interrupting.
+      if (!initialView) setShowRecode('ask');
       setColorBy(initialView?.colorBy ?? pickDefaultColorBy(table, colorBy));
       // Ordinary uploads preserve a compatible shape channel; the demo supplies
       // an initial view specifically so it can start with shape unassigned.
@@ -3592,7 +3594,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             </button>
             {processedData && (
               <button
-                onClick={() => setShowRecode(true)}
+                onClick={() => setShowRecode('configure')}
                 title="Declare missing-value codes (9, -99, 999...) and blank them, choosing per column."
                 className={`scatterlab-action-button w-full text-xs font-bold py-1.5 border ${theme === 'primary' ? 'border-[var(--border)] bg-[var(--input)] hover:bg-[var(--p-yellow)]' : 'border-[var(--system-green)]/40 bg-[var(--input)] text-[var(--system-green)]/80 hover:bg-[var(--system-green)]/10'} cursor-pointer`}
               >
@@ -3916,10 +3918,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           account of what changed so the user sees the effect rather than a
           silent success. */}
       <RecodeDialog
-        open={showRecode}
+        stage={showRecode}
         table={processedData}
         theme={theme}
-        onClose={() => setShowRecode(false)}
+        onProceed={() => setShowRecode('configure')}
+        onClose={() => setShowRecode(null)}
         onApply={(plan) => {
           if (!activeDataset) return ['No dataset loaded.'];
           const result = applyRecode(activeDataset.table, plan);

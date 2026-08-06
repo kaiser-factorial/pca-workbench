@@ -12,7 +12,7 @@
 // should have to show its work.
 
 import { DataTable, asNumber } from './table';
-import { detectSentinels } from './sentinels';
+import { scanColumnForCodes } from './sentinels';
 
 export type RecodePlan = {
   /** Column name -> the exact values to blank in it. */
@@ -171,18 +171,25 @@ export const scanForCodes = (table: DataTable, declared: number[] = []): ColumnC
   const out: ColumnCodes[] = [];
 
   for (const column of table.columns) {
-    const nums = (table.data[column] ?? []).map(asNumber);
-    if (!nums.some(v => v !== null)) continue;   // nothing numeric to look at
+    // One pass per column — coercion, detection and counting together. The
+    // previous version mapped the column through asNumber into a fresh array,
+    // ran the multi-pass detector over it, then counted in yet another pass.
+    const scan = scanColumnForCodes(table.data[column] ?? [], decl.size ? decl : undefined);
+    if (!scan.numericCount) continue;   // nothing numeric to look at
 
-    const detected = detectSentinels(nums).map(f => f.value);
-    const wanted = new Set<number>([...detected, ...decl]);
+    const wanted = new Map<number, number>();
+    for (const f of scan.findings) wanted.set(f.value, f.count);
+    for (const d of decl) {
+      if (wanted.has(d)) continue;
+      const c = scan.candidateCounts.get(d) ?? scan.declaredOnlyCounts.get(d) ?? 0;
+      if (c > 0) wanted.set(d, c);
+    }
     if (!wanted.size) continue;
 
+    const values = [...wanted.keys()].sort((a, b) => a - b);
     const counts: Record<number, number> = {};
-    for (const v of nums) if (v !== null && wanted.has(v)) counts[v] = (counts[v] ?? 0) + 1;
-
-    const values = Object.keys(counts).map(Number).sort((a, b) => a - b);
-    if (values.length) out.push({ column, values, counts, detected });
+    for (const [v, c] of wanted) counts[v] = c;
+    out.push({ column, values, counts, detected: scan.findings.map(f => f.value) });
   }
 
   return out;

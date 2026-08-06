@@ -103,7 +103,7 @@ export const InfoTip = ({
           role="tooltip"
           onMouseDown={e => e.stopPropagation()}
           style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999, width: 240 }}
-          className="scatterlab-infotip fixed z-[200] p-2 text-[11px] leading-snug normal-case tracking-normal font-normal text-left
+          className="scatterlab-infotip fixed z-[400] p-2 text-[11px] leading-snug normal-case tracking-normal font-normal text-left
             bg-[var(--card)] text-[var(--foreground)] border"
         >
           <span className="block font-bold mb-1">{name}</span>

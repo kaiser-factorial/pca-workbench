@@ -49,46 +49,77 @@ const MIN_ROWS = 8;
  */
 const MAX_SCALE_LEVELS = 20;
 
+import { asNumber } from './table';
+
 export type SentinelFinding = {
   value: number;
   /** How many rows carry it. */
   count: number;
 };
 
+/** Everything one pass over a column can tell the code machinery. */
+export type ColumnCodeScan = {
+  /** The detector's own findings: sentinel-shaped AND suspiciously placed. */
+  findings: SentinelFinding[];
+  /** Row count for every sentinel-SHAPED value present, flagged or not. */
+  candidateCounts: Map<number, number>;
+  /** Row count for declared values that are not sentinel-shaped. */
+  declaredOnlyCounts: Map<number, number>;
+  /** Cells that held a usable number at all. */
+  numericCount: number;
+};
+
 /**
- * Sentinel-shaped values sitting far outside the rest of a numeric column.
- * Returns [] when there is nothing to say, which is the common case.
+ * ONE pass over the raw column: coercion, candidate counting, declared-value
+ * counting and the core statistics all happen in the same loop, with no
+ * intermediate arrays.
+ *
+ * This used to be map(asNumber) into a fresh array, then a counting pass, then
+ * a filter building the core array, then min/max/integer/distinct passes over
+ * that — and the import path ran the whole thing twice per column. On a
+ * survey-shaped table (the author's is 3,105 x 1,156) those allocations were
+ * the visible upload latency.
  */
-export const detectSentinels = (values: (number | null)[]): SentinelFinding[] => {
-  const nums: number[] = [];
-  for (const v of values) if (typeof v === 'number' && Number.isFinite(v)) nums.push(v);
-  if (nums.length < MIN_ROWS) return [];
-
-  const counts = new Map<number, number>();
-  for (const v of nums) if (SENTINEL_CANDIDATES.has(v)) counts.set(v, (counts.get(v) ?? 0) + 1);
-  if (!counts.size) return [];
-
-  // Every candidate is measured against the same sentinel-free core, rather
-  // than each against "everything but itself". Testing against the global
-  // extreme found only the outermost code, and SPSS routinely uses two in one
-  // column — -99 for "refused" beside -999 for "not applicable" — where the
-  // inner one is exactly as damaging and would have gone unmentioned.
-  const core = nums.filter(v => !SENTINEL_CANDIDATES.has(v));
-  if (core.length < 2) return [];
+export const scanColumnForCodes = (
+  values: readonly unknown[],
+  declared?: ReadonlySet<number>,
+): ColumnCodeScan => {
+  const candidateCounts = new Map<number, number>();
+  const declaredOnlyCounts = new Map<number, number>();
+  let numericCount = 0;
+  let coreCount = 0;
   let coreMin = Infinity, coreMax = -Infinity;
   let integerCore = true;
   const distinct = new Set<number>();
-  for (const v of core) {
+
+  for (const cell of values) {
+    const v = asNumber(cell);
+    if (v === null) continue;
+    numericCount++;
+    if (SENTINEL_CANDIDATES.has(v)) {
+      candidateCounts.set(v, (candidateCounts.get(v) ?? 0) + 1);
+      continue;
+    }
+    // Declared values that are not sentinel-shaped stay in the core: detection
+    // is independent of what the user declared, exactly as before the merge.
+    if (declared?.has(v)) declaredOnlyCounts.set(v, (declaredOnlyCounts.get(v) ?? 0) + 1);
+    coreCount++;
     if (v < coreMin) coreMin = v;
     if (v > coreMax) coreMax = v;
-    if (!Number.isInteger(v)) integerCore = false;
+    if (integerCore && !Number.isInteger(v)) integerCore = false;
     if (distinct.size <= MAX_SCALE_LEVELS) distinct.add(v);
   }
+
+  const empty = { candidateCounts, declaredOnlyCounts, numericCount };
+  if (numericCount < MIN_ROWS) return { findings: [], ...empty };
+  if (!candidateCounts.size) return { findings: [], ...empty };
+  if (coreCount < 2) return { findings: [], ...empty };
+
   const distinctCore = distinct.size;
   const spread = coreMax - coreMin;
 
   const found: SentinelFinding[] = [];
-  for (const [candidate, count] of counts) {
+  for (const [candidate, count] of candidateCounts) {
     // Distance from the data, zero for anything sitting inside it — a
     // sentinel-shaped value in the middle of the distribution is just data.
     const gap = candidate < coreMin ? coreMin - candidate
@@ -120,8 +151,15 @@ export const detectSentinels = (values: (number | null)[]): SentinelFinding[] =>
     if (impossibleSign || integerHole || gap > spread * GAP_RATIO) found.push({ value: candidate, count });
   }
 
-  return found.sort((a, b) => b.count - a.count || a.value - b.value);
+  return { findings: found.sort((a, b) => b.count - a.count || a.value - b.value), ...empty };
 };
+
+/**
+ * Sentinel-shaped values sitting far outside the rest of a numeric column.
+ * Returns [] when there is nothing to say, which is the common case.
+ */
+export const detectSentinels = (values: readonly unknown[]): SentinelFinding[] =>
+  scanColumnForCodes(values).findings;
 
 /** One sentence naming what was found, or null. Shared by every surface. */
 export const describeSentinels = (column: string, found: SentinelFinding[]): string | null => {

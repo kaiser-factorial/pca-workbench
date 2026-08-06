@@ -6,23 +6,37 @@ import { scanForCodes, parseDeclaredCodes, type RecodePlan } from '@/lib/recode'
 import type { DataTable } from '@/lib/table';
 import { InfoTip } from '@/components/InfoTip';
 
-// Declaring missing-value codes and blanking them, per column.
+// Declaring missing-value codes and blanking them, per column — in two stages.
 //
-// The whole point is that the choice is PER COLUMN. Declaring that 9 means
-// "Don't Know" finds it in a Likert item and in a child's age alike, and only
-// the researcher can say which of those is a code and which is a measurement. So
-// this offers a checkbox for every column/value pair rather than a single
-// "replace all the 9s" button, which would be the wrong tool.
+// STAGE 'ask' appears after an upload and costs nothing: it is one question and
+// two buttons, and NO scan has run yet. Import used to scan every column for
+// sentinel codes synchronously, which was measurable latency on wide survey
+// tables; now the scan runs only when the user says yes.
 //
-// Nothing is applied until the button is pressed, and what it did is reported
-// afterwards rather than assumed.
+// STAGE 'configure' runs the detector, takes declared codes, and offers a
+// checkbox for every column/value pair. The choice is PER COLUMN on purpose:
+// declaring that 9 means "Don't Know" finds it in a Likert item and in a
+// child's age alike, and only the researcher can say which is which.
+//
+// The stage lives in the PARENT ('ask' | 'configure' | null), so opening from
+// an upload starts at the question while the sidebar button jumps straight to
+// the scan — and this component needs no state-syncing effect.
+//
+// JSX seam rule, learned twice now: the compiler trims leading whitespace per
+// LINE of a multi-line text node, so a space after an inline tag survives only
+// if the text stays on that line. Every seam below is either {' '} or a line
+// break directly after the tag (a newline adjacent to text becomes one space).
+
+export type RecodeStage = 'ask' | 'configure';
 
 export const RecodeDialog = ({
-  open, table, theme, onClose, onApply,
+  stage, table, theme, onProceed, onClose, onApply,
 }: {
-  open: boolean;
+  stage: RecodeStage | null;
   table: DataTable | null;
   theme?: string;
+  /** Advance from the question to the scan. */
+  onProceed: () => void;
   onClose: () => void;
   /** Applies the plan and returns a plain-language account of what changed. */
   onApply: (plan: RecodePlan) => string[];
@@ -34,17 +48,18 @@ export const RecodeDialog = ({
   const panel = useRef<HTMLDivElement>(null);
   const closeBtn = useRef<HTMLButtonElement>(null);
 
+  const open = stage !== null;
   const declared = useMemo(() => parseDeclaredCodes(declaredText), [declaredText]);
+
+  // The scan runs only in the configure stage — the question itself is free.
   const hits = useMemo(
-    () => (open && table ? scanForCodes(table, declared) : []),
-    [open, table, declared],
+    () => (stage === 'configure' && table ? scanForCodes(table, declared) : []),
+    [stage, table, declared],
   );
 
   // Every found value defaults to checked — the user opened this to act on them —
   // but that is DERIVED, not seeded into state by an effect. `checked` holds only
-  // the boxes the user has explicitly toggled, and absent means on. Seeding it
-  // from `hits` inside an effect cascaded a render on every re-scan, which is
-  // every keystroke in the declaration box.
+  // the boxes the user has explicitly toggled, and absent means on.
   const isOn = (key: string) => checked[key] ?? true;
 
   // Closing discards the report, so re-opening never shows a stale account of an
@@ -95,7 +110,7 @@ export const RecodeDialog = ({
     >
       <div
         ref={panel}
-        className={`w-full max-w-2xl my-auto border bg-[var(--card)] text-[var(--foreground)] ${
+        className={`w-full ${stage === 'ask' ? 'max-w-md' : 'max-w-2xl'} my-auto border bg-[var(--card)] text-[var(--foreground)] ${
           bauhaus ? 'border-[3px] border-[var(--border)]' : 'border-[var(--border)]'}`}
       >
         <header className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${
@@ -116,95 +131,107 @@ export const RecodeDialog = ({
           </button>
         </header>
 
-        <div className="px-4 py-4 space-y-4 text-[12px] leading-relaxed">
-          <p className="opacity-80">
-            Codes like <code>-99</code> or <code>9</code> mean &ldquo;refused&rdquo; or &ldquo;don&apos;t know&rdquo;,
-            but arrive as ordinary numbers. Blanking them keeps them out of means, correlations, the PCA and the
-            distances used for clustering.{' '}
-            <strong>Choose per column</strong> — the same code can be real data in one variable and a code in
-            another.
-            <InfoTip topic="missing_value_codes" />
-          </p>
-
-          <label className="block">
-            <span className="opacity-70">Codes used in your data (optional — comma separated)</span>
-            <input
-              type="text"
-              value={declaredText}
-              onChange={e => setDeclaredText(e.target.value)}
-              placeholder="e.g. 9, 99, -99"
-              className="mt-1 w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none"
-            />
-            <span className="opacity-60 text-[11px]">
-              Declared codes are searched for exactly, with no plausibility test. Anything the detector spotted on
-              its own is listed below already.
-            </span>
-          </label>
-
-          {hits.length === 0 ? (
-            <p className="opacity-70">
-              Nothing found. Type the codes your survey used above, and any column containing them will appear here.
+        {stage === 'ask' ? (
+          <div className="px-4 py-4 space-y-4 text-[12px] leading-relaxed">
+            <p className="opacity-90">
+              Scan for sentinel codes?{' '}
+              <span className="opacity-70">(e.g. 9 = &ldquo;Don&apos;t Know&rdquo;)</span>
+              <InfoTip topic="missing_value_codes" />
             </p>
-          ) : (
-            <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
-              {hits.map(h => (
-                <div key={h.column} className="border-b pb-2" style={{ borderColor: rule }}>
-                  <div className="font-bold" style={{ color: accent }}>{h.column}</div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-                    {h.values.map(v => {
-                      const k = `${h.column} ${v}`;
-                      return (
-                        <label key={v} className="flex items-center gap-1.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={isOn(k)}
-                            onChange={e => setChecked(c => ({ ...c, [k]: e.target.checked }))}
-                          />
-                          <span>
-                            <b>{v}</b>
-                            <span className="opacity-60"> · {h.counts[v]} row{h.counts[v] === 1 ? '' : 's'}</span>
-                            {!h.detected.includes(v) && <span className="opacity-50"> · declared</span>}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {report && (
-            <div className="border p-2 space-y-1" style={{ borderColor: rule }}>
-              <div className="font-bold" style={{ color: accent }}>What changed</div>
-              {report.map((line, i) => (
-                <div key={i} className={/INTERNAL ERROR/.test(line) ? 'text-[var(--p-red)] font-bold' : 'opacity-80'}>
-                  {line}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <span className="opacity-60 text-[11px]">
-              {nCols === 0
-                ? 'Nothing selected.'
-                : `${totalCells} cell${totalCells === 1 ? '' : 's'} in ${nCols} column${nCols === 1 ? '' : 's'} will be blanked.`}
-            </span>
-            <div className="flex gap-2">
-              <button className={btn('quiet')} onClick={close}>
-                {report ? 'Done' : 'Not now'}
-              </button>
-              <button
-                className={btn('go')}
-                disabled={nCols === 0}
-                onClick={() => setReport(onApply(plan))}
-              >
-                Replace with blanks
-              </button>
+            <div className="flex justify-end gap-2">
+              <button className={btn('quiet')} onClick={close}>No thanks</button>
+              <button className={btn('go')} onClick={onProceed}>Yes, check</button>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="px-4 py-4 space-y-4 text-[12px] leading-relaxed">
+            <p className="opacity-80">
+              <strong>Choose per column</strong>{' '}
+              — the same code can be real data in one variable and a code in another.
+              <InfoTip topic="missing_value_codes" />
+            </p>
+
+            <label className="block">
+              <span className="opacity-70">Known sentinel codes (optional — comma separated)</span>
+              <input
+                type="text"
+                value={declaredText}
+                onChange={e => setDeclaredText(e.target.value)}
+                placeholder="e.g. 9, 99, -99"
+                className="mt-1 w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none"
+              />
+              <span className="opacity-60 text-[11px]">
+                Declared codes are matched exactly, with no plausibility test. Anything the detector spotted on
+                its own is listed below already.
+              </span>
+            </label>
+
+            {hits.length === 0 ? (
+              <p className="opacity-70">
+                Nothing found. Type the codes your survey used above, and any column containing them will appear
+                here.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
+                {hits.map(h => (
+                  <div key={h.column} className="border-b pb-2" style={{ borderColor: rule }}>
+                    <div className="font-bold" style={{ color: accent }}>{h.column}</div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                      {h.values.map(v => {
+                        const k = `${h.column} ${v}`;
+                        return (
+                          <label key={v} className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={isOn(k)}
+                              onChange={e => setChecked(c => ({ ...c, [k]: e.target.checked }))}
+                            />
+                            <span>
+                              <b>{v}</b>
+                              <span className="opacity-60"> · {h.counts[v]} row{h.counts[v] === 1 ? '' : 's'}</span>
+                              {!h.detected.includes(v) && <span className="opacity-50"> · declared</span>}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {report && (
+              <div className="border p-2 space-y-1" style={{ borderColor: rule }}>
+                <div className="font-bold" style={{ color: accent }}>What changed</div>
+                {report.map((line, i) => (
+                  <div key={i} className={/INTERNAL ERROR/.test(line) ? 'text-[var(--p-red)] font-bold' : 'opacity-80'}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <span className="opacity-60 text-[11px]">
+                {nCols === 0
+                  ? 'Nothing selected.'
+                  : `${totalCells} cell${totalCells === 1 ? '' : 's'} in ${nCols} column${nCols === 1 ? '' : 's'} will be blanked.`}
+              </span>
+              <div className="flex gap-2">
+                <button className={btn('quiet')} onClick={close}>
+                  {report ? 'Done' : 'Not now'}
+                </button>
+                <button
+                  className={btn('go')}
+                  disabled={nCols === 0}
+                  onClick={() => setReport(onApply(plan))}
+                >
+                  Replace with blanks
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>,
     document.body,
