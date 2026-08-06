@@ -1704,7 +1704,7 @@ const ViewPlot = memo(({ view, title, colorBy, axesOn, aspect, window2d, camera,
             // frame, and Plots.resize is not free.
             cancelAnimationFrame(raf);
             raf = requestAnimationFrame(async () => {
-                const gd = document.getElementById(divId) as any;
+                const gd = document.getElementById(divId) as (HTMLElement & { _fullLayout?: unknown }) | null;
                 if (dead || !gd?._fullLayout) return;
                 const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
                 if (dead || !gd._fullLayout) return;   // unmounted while importing

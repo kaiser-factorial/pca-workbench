@@ -42,6 +42,13 @@ const GAP_RATIO = 0.5;
 /** The minimum column length at which "far outside the distribution" means anything. */
 const MIN_ROWS = 8;
 
+/**
+ * Above this many distinct non-code values a column is being treated as
+ * continuous, and the integer-hole rule below stops applying. A response scale
+ * has a handful of levels; a measurement has many.
+ */
+const MAX_SCALE_LEVELS = 20;
+
 export type SentinelFinding = {
   value: number;
   /** How many rows carry it. */
@@ -69,7 +76,15 @@ export const detectSentinels = (values: (number | null)[]): SentinelFinding[] =>
   const core = nums.filter(v => !SENTINEL_CANDIDATES.has(v));
   if (core.length < 2) return [];
   let coreMin = Infinity, coreMax = -Infinity;
-  for (const v of core) { if (v < coreMin) coreMin = v; if (v > coreMax) coreMax = v; }
+  let integerCore = true;
+  const distinct = new Set<number>();
+  for (const v of core) {
+    if (v < coreMin) coreMin = v;
+    if (v > coreMax) coreMax = v;
+    if (!Number.isInteger(v)) integerCore = false;
+    if (distinct.size <= MAX_SCALE_LEVELS) distinct.add(v);
+  }
+  const distinctCore = distinct.size;
   const spread = coreMax - coreMin;
 
   const found: SentinelFinding[] = [];
@@ -88,7 +103,21 @@ export const detectSentinels = (values: (number | null)[]): SentinelFinding[] =>
     // all have genuinely negative data and never reach this branch.
     const impossibleSign = candidate < 0 && coreMin >= 0;
 
-    if (impossibleSign || gap > spread * GAP_RATIO) found.push({ value: candidate, count });
+    // A HOLE in a small integer scale. The gap ratio is the wrong instrument for
+    // the commonest survey code of all: a 1-7 Likert with 9 = "Don't Know" has a
+    // spread of 6 and a gap of only 2, so the ratio rejects it — the exact case
+    // this detector exists for went unreported. Measured, not assumed: see
+    // sentinel-sweep.test.ts, where that case failed before this rule.
+    //
+    // What separates a code from data on a short scale is not distance but
+    // discontinuity. 1-7 with a 9 leaves 8 unused; a genuine 1-9 Likert or a
+    // 0-10 rating runs continuously up to its top and leaves no hole. So the
+    // candidate must clear the core by at least 2 on an all-integer scale with
+    // few levels.
+    const scaleLike = integerCore && distinctCore <= MAX_SCALE_LEVELS && Number.isInteger(candidate);
+    const integerHole = scaleLike && gap >= 2;
+
+    if (impossibleSign || integerHole || gap > spread * GAP_RATIO) found.push({ value: candidate, count });
   }
 
   return found.sort((a, b) => b.count - a.count || a.value - b.value);
