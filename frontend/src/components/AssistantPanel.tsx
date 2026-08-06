@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo, useMemo } from 'react';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { Sparkles, Settings2, Minus, CornerDownLeft, Info, ThumbsUp, ThumbsDown, PanelRight, PanelBottom, PictureInPicture2 } from 'lucide-react';
+import { Sparkles, Settings2, Minus, CornerDownLeft, ThumbsUp, ThumbsDown, PanelRight, PanelBottom, PictureInPicture2 } from 'lucide-react';
 import {
   AppBridge, DEFAULT_BASE_URL, DEFAULT_MODEL, MUTATING_TOOLS, ModelInfo,
   runAssistantTurn, fetchModels, suggestModels, describeApiError,
@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { startOpenRouterOAuth, completeOpenRouterOAuth } from '@/lib/openrouterAuth';
 import { feedbackEnabled, submitFeedback, flushFeedback } from '@/lib/feedback';
+import { InfoTip } from '@/components/InfoTip';
 
 // Chat entries for display; the wire-format history is kept separately
 type ChatEntry = { kind: 'user' | 'assistant' | 'tool' | 'error'; text: string };
@@ -49,7 +50,20 @@ const MD_COMPONENTS = {
 
 export type DockMode = 'right' | 'bottom' | 'float';
 
-export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }: {
+// Markdown parsing is memoized per message (finding F10).
+//
+// The remark pipeline measures ~1.06 ms for a 1 KB reply, and the transcript was
+// re-parsed on every render of the panel — which during auto-rotation was sixty
+// times a second. A ten-turn conversation therefore added ~11 ms per frame of
+// pure re-parsing, and twenty turns blew the 16.7 ms budget on the 150-row iris
+// demo. Nothing to do with the data: it was the largest rotation cost at small
+// and medium sizes.
+const AssistantMarkdown = memo(({ text }: { text: string }) => (
+  <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={MD_COMPONENTS}>{text}</ReactMarkdown>
+));
+AssistantMarkdown.displayName = 'AssistantMarkdown';
+
+const AssistantPanelInner = ({ bridgeRef, theme, askRef, dock, onDockChange }: {
   bridgeRef: React.MutableRefObject<AppBridge>,
   theme: string | undefined,
   askRef?: React.MutableRefObject<((q: string) => void) | null>,
@@ -254,7 +268,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
   const primary = theme === 'primary';
   const panelCls = primary
     ? 'bg-white border-[3px] border-[#111111] shadow-[6px_6px_0px_#111111]'
-    : 'bg-black/85 border border-[var(--system-green)]/50 backdrop-blur-sm';
+    : 'bg-black/85 border border-[var(--system-green)]/50';
   const headerCls = primary
     ? 'bg-[#111111] text-white'
     : 'bg-transparent text-[var(--system-green)] border-b border-[var(--system-green)]/30';
@@ -387,7 +401,7 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
                   : e.kind === 'error' ? 'text-red-500' : ''}`}>
                   {e.kind === 'user' && <span className="opacity-50">&gt; </span>}
                   {e.kind === 'assistant'
-                    ? <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={MD_COMPONENTS}>{e.text}</ReactMarkdown>
+                    ? <AssistantMarkdown text={e.text} />
                     : e.text}
                   {busy && i === chat.length - 1 && e.kind === 'assistant' && <span className="animate-pulse">▌</span>}
                   {feedbackEnabled() && e.kind === 'assistant' && e.text && !(busy && i === chat.length - 1) && (
@@ -454,12 +468,6 @@ export const AssistantPanel = ({ bridgeRef, theme, askRef, dock, onDockChange }:
 };
 
 // Small ⓘ with the long-form explanation as a native tooltip
-const InfoTip = ({ text }: { text: string }) => (
-  <span title={text} className="inline-flex align-middle ml-1 opacity-50 hover:opacity-100 cursor-help">
-    <Info className="w-3 h-3" />
-  </span>
-);
-
 const SettingsForm = ({ primary, inputCls, apiKey, model, baseURL, models, authError, onConnect, onSave, onClearKey }: {
   primary: boolean, inputCls: string,
   apiKey: string, model: string, baseURL: string, models: ModelInfo[],
@@ -639,3 +647,10 @@ const FeedbackControls = ({ primary, state, onRate, onReason, onDismiss }: {
     </div>
   );
 };
+
+// Memoized (finding F10). The panel is not affected by the camera, so a
+// rotation frame — or a slider tick, or a workspace-name keystroke — has no
+// business re-rendering a ten-turn transcript. `bridgeRef` and `askRef` are refs
+// and `onDockChange` is stable at the call site, so the props really do hold.
+export const AssistantPanel = memo(AssistantPanelInner);
+AssistantPanel.displayName = 'AssistantPanel';

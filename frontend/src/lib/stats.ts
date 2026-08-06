@@ -1,13 +1,18 @@
 // Aggregate statistics for the assistant's analysis tools. Everything here
 // returns summaries, never row-level data — that is the privacy contract.
 
+import { sampleIndices } from './random';
+import { asNumber } from './table';
+
 type Cell = number | null | undefined | string;
 
 const numericPairs = (a: Cell[], b: Cell[]): [number, number][] => {
   const out: [number, number][] = [];
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
-    if (typeof a[i] === 'number' && typeof b[i] === 'number') out.push([a[i] as number, b[i] as number]);
+    // asNumber, so a text-formatted column correlates like any other (C6)
+    const x = asNumber(a[i]), y = asNumber(b[i]);
+    if (x !== null && y !== null) out.push([x, y]);
   }
   return out;
 };
@@ -53,30 +58,63 @@ export const correlation = (a: Cell[], b: Cell[]): { n: number; pearson: number 
   return { n: pairs.length, pearson, spearman };
 };
 
-export type GroupStat = { group: string; n: number; mean: number; sd: number };
+export type GroupStat = { group: string; n: number; mean: number; /** Sample sd (n-1); null when n = 1. */ sd: number | null };
 
-// Per-group mean/sd of a numeric column plus eta² (share of variance explained
-// by group membership) — the standard effect size for "does this differ by group"
+export type GroupComparison = {
+  groups: GroupStat[];
+  overall: { n: number; mean: number; sd: number | null };
+  etaSquared: number | null;
+  /**
+   * Omega-squared: eta² corrected for the upward bias that grows with the
+   * number of groups. methods.ts (eta_squared) names it as the fix and the app
+   * did not compute it, which mattered most in exactly the case eta² misleads —
+   * many small groups. Can go slightly negative when group means differ less
+   * than chance would predict; that is meaningful, so it is not clamped.
+   */
+  omegaSquared: number | null;
+  nGroups: number;
+  /** Size of the smallest group, for judging whether the numbers are stable. */
+  minGroupN: number;
+  /** Groups with a single observation — no sample sd exists for them. */
+  singletonGroups: number;
+};
+
+// Per-group mean/sd of a numeric column plus eta²/omega² — the standard effect
+// sizes for "does this differ by group". sd here is the SAMPLE sd (n-1); see
+// the note on `stats` below for why this one differs from the rest of the app.
 export const compareGroups = (
   numeric: Cell[], groups: Cell[],
-): { groups: GroupStat[]; overall: { n: number; mean: number; sd: number }; etaSquared: number | null } => {
+): GroupComparison => {
   const byGroup = new Map<string, number[]>();
   const all: number[] = [];
   const n = Math.min(numeric.length, groups.length);
   for (let i = 0; i < n; i++) {
-    const v = numeric[i];
-    if (typeof v !== 'number' || groups[i] == null) continue;
+    const v = asNumber(numeric[i]);
+    if (v === null || groups[i] == null) continue;
     const g = String(groups[i]);
     if (!byGroup.has(g)) byGroup.set(g, []);
     byGroup.get(g)!.push(v);
     all.push(v);
   }
+  // SAMPLE sd (÷ n-1), unlike the rest of the app.
+  //
+  // Everything else here uses the population form, matching sklearn, and that is
+  // right for numbers feeding further computation — the PCA covariance matrix,
+  // z-scoring. These numbers are different: they are a descriptive summary a
+  // researcher copies into a manuscript, where n-1 is the reporting convention,
+  // and they were labelled only "sd" so nobody could tell which they had
+  // (finding A6). n = 1 has no sample sd, so it is null rather than a
+  // conveniently zero-looking 0.
   const stats = (vals: number[]) => {
     const m = vals.reduce((s, v) => s + v, 0) / vals.length;
-    const sd = Math.sqrt(vals.reduce((s, v) => s + (v - m) ** 2, 0) / vals.length);
+    const sd = vals.length > 1
+      ? Math.sqrt(vals.reduce((s, v) => s + (v - m) ** 2, 0) / (vals.length - 1))
+      : null;
     return { n: vals.length, mean: m, sd };
   };
-  if (all.length === 0) return { groups: [], overall: { n: 0, mean: NaN, sd: NaN }, etaSquared: null };
+  if (all.length === 0) {
+    return { groups: [], overall: { n: 0, mean: NaN, sd: null }, etaSquared: null, omegaSquared: null, nGroups: 0, minGroupN: 0, singletonGroups: 0 };
+  }
   const overall = stats(all);
   const groupStats: GroupStat[] = Array.from(byGroup.entries())
     .map(([group, vals]) => ({ group, ...stats(vals) }))
@@ -84,25 +122,45 @@ export const compareGroups = (
   let ssBetween = 0, ssTotal = 0;
   for (const g of groupStats) ssBetween += g.n * (g.mean - overall.mean) ** 2;
   for (const v of all) ssTotal += (v - overall.mean) ** 2;
-  return { groups: groupStats, overall, etaSquared: ssTotal > 0 ? ssBetween / ssTotal : null };
+
+  const kGroups = groupStats.length;
+  const dfWithin = all.length - kGroups;
+  const msWithin = dfWithin > 0 ? (ssTotal - ssBetween) / dfWithin : null;
+  // omega² = (SS_between - (k-1)·MS_within) / (SS_total + MS_within)
+  const omegaSquared = msWithin != null && ssTotal + msWithin > 0
+    ? (ssBetween - (kGroups - 1) * msWithin) / (ssTotal + msWithin)
+    : null;
+
+  return {
+    groups: groupStats,
+    overall,
+    etaSquared: ssTotal > 0 ? ssBetween / ssTotal : null,
+    omegaSquared,
+    nGroups: kGroups,
+    minGroupN: Math.min(...groupStats.map(g => g.n)),
+    singletonGroups: groupStats.filter(g => g.n === 1).length,
+  };
 };
 
 // --- Clustering diagnostics -------------------------------------------------
 
-// Rows from columnar axis data, dropping incomplete rows; subsampled evenly
-// so the O(n²) work below stays fast on large tables
+// Rows from columnar axis data, dropping incomplete rows, then subsampled so
+// the O(n²) work below stays fast on large tables.
+//
+// The sample is SEEDED RANDOM, not evenly strided. Striding is fine on shuffled
+// data and wrong on ordered data — one row per participant per wave, blocks of
+// trials, cases sorted by condition — where a stride landing on the period
+// samples one stratum and calls it the dataset. Seeded so repeated runs still
+// agree, which the app's determinism promise depends on.
 const toMatrix = (cols: Cell[][], cap = 1200): number[][] => {
   const n = Math.min(...cols.map(c => c.length));
   const rows: number[][] = [];
   for (let i = 0; i < n; i++) {
-    const row = cols.map(c => c[i]);
-    if (row.every(v => typeof v === 'number')) rows.push(row as number[]);
+    const row = cols.map(c => asNumber(c[i]));
+    if (row.every((v): v is number => v !== null)) rows.push(row);
   }
   if (rows.length <= cap) return rows;
-  const step = rows.length / cap;
-  const sampled: number[][] = [];
-  for (let i = 0; i < cap; i++) sampled.push(rows[Math.floor(i * step)]);
-  return sampled;
+  return sampleIndices(rows.length, cap).map(i => rows[i]);
 };
 
 const distMatrix = (X: number[][]): Float64Array => {
@@ -131,7 +189,11 @@ export const meanSilhouette = (D: Float64Array, labels: number[]): number => {
   let total = 0, counted = 0;
   for (let i = 0; i < n; i++) {
     const own = clusters.get(labels[i])!;
-    if (own.length <= 1) continue;
+    // Rousseeuw (1987) assigns a singleton s = 0, and that is not a technicality
+    // here: skipping them instead RAISED the mean, most at high k and with
+    // outliers — exactly where suggest_k should be discouraging the user rather
+    // than rewarding them for splitting off one-point clusters (finding A5).
+    if (own.length <= 1) { counted++; continue; }
     let a = 0;
     for (const j of own) if (j !== i) a += D[i * n + j];
     a /= own.length - 1;
@@ -168,15 +230,28 @@ export const silhouetteByK = (
   return out;
 };
 
-// k-distance curve for DBSCAN eps selection: each point's distance to its
-// k-th nearest neighbor, summarized as percentiles. eps near the "knee"
-// (between the 90th and 95th percentile) is a common starting point.
+// k-distance curve for DBSCAN eps selection, summarized as percentiles: eps
+// near the "knee" (between the 90th and 95th percentile) is a common starting
+// point (Ester et al. 1996).
+//
+// The parameter is DBSCAN's `minSamples`, NOT the neighbor rank, because the
+// two differ by one and getting it wrong makes every suggestion too generous.
+// `dbscan` counts the point itself toward minSamples (matching sklearn), so a
+// point becomes a core point once minSamples - 1 OTHER points lie within eps —
+// which means the curve to read is the distance to the (minSamples - 1)-th
+// nearest neighbor, excluding self. That is the convention the methods
+// reference documents (`standardize_clustering` / `dbscan_interpretation`).
+//
+// minSamples <= 1 has no meaningful curve: every point is its own core point at
+// any eps, so eps stops controlling anything. Returns null rather than guessing.
 export const kDistancePercentiles = (
-  cols: Cell[][], k: number,
-): { n: number; percentiles: Record<string, number> } | null => {
+  cols: Cell[][], minSamples: number,
+): { n: number; kthNeighbor: number; percentiles: Record<string, number> } | null => {
+  const kth = Math.floor(minSamples) - 1;   // neighbor rank, excluding self
+  if (kth < 1) return null;
   const X = toMatrix(cols, 2000);
   const n = X.length;
-  if (n < k + 1) return null;
+  if (n < kth + 1) return null;
   const D = distMatrix(X);
   const kd: number[] = [];
   const row = new Float64Array(n - 1);
@@ -184,12 +259,13 @@ export const kDistancePercentiles = (
     let m = 0;
     for (let j = 0; j < n; j++) if (j !== i) row[m++] = D[i * n + j];
     const sorted = Array.from(row).sort((a, b) => a - b);
-    kd.push(sorted[k - 1]);
+    kd.push(sorted[kth - 1]);
   }
   kd.sort((a, b) => a - b);
   const pct = (p: number) => kd[Math.min(n - 1, Math.floor((p / 100) * n))];
   return {
     n,
+    kthNeighbor: kth,
     percentiles: { p50: pct(50), p75: pct(75), p90: pct(90), p95: pct(95), max: kd[n - 1] },
   };
 };

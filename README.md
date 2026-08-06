@@ -6,18 +6,29 @@ survey and questionnaire research, useful for any table of numbers.
 
 **Live:** [scatter-lab.vercel.app](https://scatter-lab.vercel.app)
 
-**Everything runs in the browser.** Parsing, PCA, clustering, statistics, and
-persistence all happen locally — your data never leaves your machine. There is
-no backend; the app deploys as a static site.
+**All computation runs locally in the browser.** Parsing, PCA, clustering,
+statistics, and persistence all happen in the tab, and your dataset is never
+uploaded to a server. There is no backend; the app deploys as a static site.
+
+The one exception is the optional AI assistant. If you connect an API key,
+column names and aggregate summaries — never raw rows — are sent to whichever
+provider that key belongs to. See
+[The assistant](#the-assistant-optional-bring-your-own-key) below; leave it
+disconnected and nothing leaves the tab at all.
 
 ## Demo data
 
-The built-in demo uses the classic Iris Species dataset, downloaded from
-Kaggle's [Iris Species](https://www.kaggle.com/datasets/uciml/iris) dataset
-(`uciml/iris`, `Iris.csv`) on 2026-08-04. It is a public 150-row flower
-measurement dataset with three species classes; see
-[`frontend/public/demo/iris.SOURCE.md`](frontend/public/demo/iris.SOURCE.md)
-for the preserved-file checksum and usage note.
+The built-in demo is Fisher's iris data, taken from the UCI Machine Learning
+Repository's `bezdekIris.data` ([doi.org/10.24432/C56C76](https://doi.org/10.24432/C56C76)).
+
+The file matters more than it sounds. The widely-mirrored Kaggle copy carries
+UCI's documented errata in rows 35 and 38, which is enough to move the first
+principal component from 72.96% to 72.77% — a difference that reads as a bug in
+the eigensolver rather than a difference in the data. `bezdekIris.data` is the
+corrected version, and the app's PCA now agrees with R's `prcomp` to four
+decimal places. Provenance, both checksums and a one-line reproduction command
+are in
+[`frontend/public/demo/iris.SOURCE.md`](frontend/public/demo/iris.SOURCE.md).
 
 ## Features
 
@@ -25,9 +36,21 @@ for the preserved-file checksum and usage note.
   (type, range, missing values, live mini-histograms) with one-click X/Y/Z/color
   assignment from the Variables panel. Smart first-view defaults avoid explicit
   ID columns and prefer a small non-boolean categorical grouping for colour.
+  Multi-sheet workbooks offer a sheet picker, and a sheet with no data rows is
+  skipped rather than reported as empty.
+- **It tells you what it did to your file** — ragged rows, unterminated quotes,
+  duplicate or blank headers, numbers written with decimal commas or thousands
+  separators, dates read as text, and values that look like SPSS/Qualtrics
+  missing-value codes (`-99`, `-999`, `9999`) are all reported rather than
+  silently absorbed. Nothing is auto-corrected: which code means what is the
+  researcher's knowledge, not the app's.
 - **In-app PCA** — pick variables, pick components, run: a browser-side
   eigensolver produces scores, loadings, and a scree chart (correlation- or
-  covariance-based). A precomputed components/loadings file works too
+  covariance-based). Missing values can be median-imputed, reconstructed by
+  regularized iterative PCA (the missMDA `imputePCA` method), or dropped
+  complete-case; every run reports exactly what it filled or dropped, and in
+  which variables. A precomputed components/loadings file works too, and now
+  says how much of itself it actually matched
 - **Clustering** — DBSCAN and K-Means (k-means++, deterministic) with live
   parameter sliders, per-cluster composition breakdowns, and diagnostics
   (silhouette-by-k, k-distance percentiles for eps). Save composition heatmaps
@@ -54,10 +77,23 @@ app.
   OpenAI-compatible endpoint works, including local runtimes (Ollama) for a
   fully offline assistant. Keys live in your browser only
 - **Privacy contract:** requests carry column names and aggregate statistics —
-  never raw data rows
+  never raw data rows. A categorical value is only named if it covers at least
+  five rows, so an email address, a participant name or a free-text answer is
+  counted but never sent
 - **Undo** for anything the assistant changes; optional thumbs-up/down feedback
   per reply (stored write-only, used to improve the assistant)
 - Dockable right/bottom or floating, resizable, markdown-rendering chat
+
+## Methods, stated in the app
+
+Because users never see the code, the choices the app makes on their behalf are
+written into the interface: small **(i)** markers next to the controls they
+apply to, and an **About** page reachable from the header. Both read from one
+source (`src/lib/disclosures.ts`), so a tooltip, the About page and the
+assistant's own reference cannot drift apart. They cover the things that change
+an answer — that K-Means here is the deterministic variant, that clustering runs
+on the plotted axes only, what standardizing does, and which of the two
+conventions the reported loadings follow.
 
 ## Development
 
@@ -65,8 +101,13 @@ app.
 cd frontend
 npm install
 npm run dev        # http://localhost:3000
-npx vitest run     # unit tests (PCA math, statistics, methods retrieval)
+npx vitest run     # unit tests
+npx tsc --noEmit   # types
+npx next build     # production build
 ```
+
+CI runs all four on every push and pull request, plus a lint gate that allows
+the existing warning count to fall but never rise.
 
 Feedback storage is env-gated: copy `.env.local.example` to `.env.local` and
 fill the Supabase values to enable it (unset = feedback UI hidden). Pushes to

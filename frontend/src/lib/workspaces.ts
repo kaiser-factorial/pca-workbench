@@ -40,9 +40,33 @@ export const listWorkspaces = async (): Promise<WorkspaceMeta[]> => {
     .sort((a, b) => b.saved_at.localeCompare(a.saved_at));
 };
 
+/**
+ * Approximate the stored size from the table dimensions instead of serialising
+ * the payload to measure it (finding F21).
+ *
+ * `bytes` is display-only — it renders as "12.4 MB" beside the workspace name —
+ * and buying it with a full JSON.stringify meant every save serialised the whole
+ * payload twice: once to measure, once again when IndexedDB structured-cloned
+ * it. On a 200k × 30 table that measured 510 ms to stringify a 38.6 MB string
+ * plus 1,080 ms to clone: about 1.6 s of blocked main thread and +77 MB
+ * transient, for a number nothing reads back.
+ *
+ * The estimate walks only the table shapes, not the cells. Roughly 12 bytes per
+ * cell is what mixed numeric/short-string JSON averages; being off by a third on
+ * a label is immaterial, and it is honest about being an estimate.
+ */
+const estimateBytes = (payload: unknown): number => {
+  const p = payload as { tables?: Record<string, { columns?: unknown[]; nRows?: number }> };
+  let cells = 0;
+  for (const t of Object.values(p?.tables ?? {})) {
+    cells += (t?.columns?.length ?? 0) * (t?.nRows ?? 0);
+  }
+  // 2 KB covers the settings, notes and axis labels riding alongside.
+  return cells * 12 + 2048;
+};
+
 export const saveWorkspace = async (name: string, payload: any): Promise<void> => {
-  const bytes = new Blob([JSON.stringify(payload)]).size;
-  const stored: Stored = { payload, saved_at: new Date().toISOString().slice(0, 19), bytes };
+  const stored: Stored = { payload, saved_at: new Date().toISOString().slice(0, 19), bytes: estimateBytes(payload) };
   await tx('readwrite', s => s.put(stored, name));
 };
 
@@ -64,11 +88,96 @@ export const exportWorkspaceFile = (name: string, payload: any) => {
   URL.revokeObjectURL(a.href);
 };
 
-export const importWorkspaceFile = async (file: File): Promise<{ name: string; payload: any }> => {
-  const parsed = JSON.parse(await file.text());
-  if (!parsed || typeof parsed !== 'object' || !parsed.version) {
-    throw new Error('Not a workspace file.');
+/** The payload shape this build knows how to apply. */
+export const WORKSPACE_VERSION = 1;
+
+// `unknown` rather than `any` throughout: this is the one place in the app that
+// handles a value nobody typed, so the narrowing has to be real.
+type Rec = Record<string, unknown>;
+const isRecord = (v: unknown): v is Rec => !!v && typeof v === 'object' && !Array.isArray(v);
+
+const isTable = (t: unknown): boolean => {
+  if (!isRecord(t)) return false;
+  return Array.isArray(t.columns)
+    && t.columns.every((c: unknown) => typeof c === 'string')
+    && isRecord(t.data)
+    && typeof t.nRows === 'number' && Number.isFinite(t.nRows) && t.nRows >= 0;
+};
+
+/**
+ * Reject a workspace this build cannot apply, with a reason.
+ *
+ * The check used to be `!parsed.version` and nothing else, so a truncated,
+ * hand-edited or half-written file got as far as `applyWorkspace`, which
+ * rehydrated a dangling table reference to `undefined` and left render to
+ * dereference `d.table.nRows`. That threw inside React and white-screened the
+ * app with no way back except a reload (finding C11). Everything below is
+ * cheap; the point is that it happens BEFORE any state is replaced.
+ */
+export const validateWorkspace = (parsed: unknown): void => {
+  if (!isRecord(parsed)) {
+    throw new Error('Not a workspace file — expected a JSON object.');
   }
-  const name = typeof parsed.name === 'string' && parsed.name ? parsed.name : file.name.replace(/\.scatterlab\.json$|\.json$/i, '');
+  if (typeof parsed.version !== 'number' || !Number.isFinite(parsed.version)) {
+    throw new Error('Not a workspace file — it has no version number.');
+  }
+  // version is written on save and was never read back, so there was no
+  // forward-compatibility story either. Now a newer file says so plainly
+  // instead of failing somewhere further in.
+  if (parsed.version > WORKSPACE_VERSION) {
+    throw new Error(`This workspace was saved by a newer version of Scatter Lab (format ${parsed.version}, this build reads ${WORKSPACE_VERSION}).`);
+  }
+
+  if (parsed.tables != null && !isRecord(parsed.tables)) {
+    throw new Error('Workspace file is damaged: its "tables" section is not an object.');
+  }
+  const tables: Rec = isRecord(parsed.tables) ? parsed.tables : {};
+  for (const [id, t] of Object.entries(tables)) {
+    if (!isTable(t)) throw new Error(`Workspace file is damaged: table "${id}" is not a valid table.`);
+  }
+  // A string is a reference into `tables`; anything else is an inline table.
+  const resolve = (ref: unknown) => (typeof ref === 'string' ? tables[ref] : ref);
+
+  if (parsed.datasets != null && !Array.isArray(parsed.datasets)) {
+    throw new Error('Workspace file is damaged: its "datasets" section is not a list.');
+  }
+  // The failure that actually white-screened the app: a dataset naming a table
+  // that is not in the file.
+  (Array.isArray(parsed.datasets) ? parsed.datasets : []).forEach((d: unknown, i: number) => {
+    if (!isRecord(d)) throw new Error(`Workspace file is damaged: dataset #${i + 1} is not an object.`);
+    const where = typeof d.name === 'string' && d.name ? `"${d.name}"` : `#${i + 1}`;
+    const t = resolve(d.table);
+    if (t === undefined) {
+      throw new Error(`Workspace file is damaged: dataset ${where} refers to a table ("${String(d.table)}") that the file does not contain.`);
+    }
+    if (!isTable(t)) throw new Error(`Workspace file is damaged: dataset ${where} has no usable table.`);
+  });
+
+  if (parsed.pinnedViews != null && !Array.isArray(parsed.pinnedViews)) {
+    throw new Error('Workspace file is damaged: its "pinnedViews" section is not a list.');
+  }
+  (Array.isArray(parsed.pinnedViews) ? parsed.pinnedViews : []).forEach((v: unknown, i: number) => {
+    const t = isRecord(v) ? resolve(v.data) : undefined;
+    if (t === undefined || !isTable(t)) {
+      throw new Error(`Workspace file is damaged: pinned view #${i + 1} has no usable data.`);
+    }
+  });
+};
+
+export const importWorkspaceFile = async (file: File): Promise<{ name: string; payload: unknown }> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    // JSON.parse's own message ("Unexpected token < in JSON at position 0") is
+    // not something to show a researcher who picked the wrong file.
+    throw new Error('That file is not valid JSON, so it is not a workspace file.');
+  }
+  validateWorkspace(parsed);
+  // validateWorkspace has established this is a record; narrow for the name.
+  const rec = parsed as Rec;
+  const name = typeof rec.name === 'string' && rec.name
+    ? rec.name
+    : file.name.replace(/\.scatterlab\.json$|\.json$/i, '');
   return { name, payload: parsed };
 };

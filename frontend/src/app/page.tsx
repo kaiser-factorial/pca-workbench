@@ -1,21 +1,34 @@
 "use client";
-import { useEffect, useState, useRef, useMemo } from "react";
-import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2 } from "lucide-react";
+import { useEffect, useState, useRef, useMemo, memo, useCallback } from "react";
+import { createPortal } from "react-dom";
+import { UploadCloud, Play, Square, Download, Pin, Layers, Monitor, X, Trash2, Info } from "lucide-react";
 import dynamic from 'next/dynamic';
 import { useTheme } from "next-themes";
 import { TmuxGrid } from "@/components/TmuxGrid";
 import { CyberStackGroup, CyberContainer, CyberPanel } from "ccru/components";
 import { Accordion, AccordionItem, Separator } from "puxel";
-import { readTable } from "@/lib/parse";
+import { readTable, listSheets, type SheetInfo } from "@/lib/parse";
+import { asNumber, isNumericColumn } from "@/lib/table";
+import { scanTable, numericColumnsOf, categoricalColumnsOf } from "@/lib/profile";
+import { CSV_BOM, csvCell } from "@/lib/csv";
 import { processUpload } from "@/lib/engine";
-import { dbscan, kmeans, zscoreCellColumns, suggestStandardize } from "@/lib/cluster";
+import { dbscan, kmeans, zscoreCellColumns, suggestStandardize, countImputed, nonNumericAxes } from "@/lib/cluster";
 import * as wsStore from "@/lib/workspaces";
-import { AssistantPanel } from "@/components/AssistantPanel";
+// Loaded on demand (finding F1). Statically imported, this pulled
+// react-markdown, remark-gfm, remark-breaks and the whole micromark/mdast tree
+// onto the critical path for every visitor — including everyone who never opens
+// the assistant. ssr:false because the panel is entirely client state.
+const AssistantPanel = dynamic(
+    () => import("@/components/AssistantPanel").then(m => m.AssistantPanel),
+    { ssr: false },
+);
 import type { AppBridge, ColumnProfile } from "@/lib/assistant";
 import { GUIDE_TARGETS } from "@/lib/assistant";
 import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDistancePercentiles } from "@/lib/stats";
-import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames } from "@/lib/pca";
-import { isIdentifierColumn, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
+import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, isPCColumn, type MissingReport, type MissingStrategy } from "@/lib/pca";
+import { isIdentifierColumn, valueIsTooRare, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
+import { InfoTip } from "@/components/InfoTip";
+import { InfoDialog } from "@/components/InfoDialog";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
 
 
@@ -40,7 +53,7 @@ const PrimaryCollapsible = ({ title, mode = 'top', defaultOpen = true, width, bu
         );
 
         return (
-            <div className="flex bg-[var(--background)]/90 backdrop-blur-md border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] overflow-hidden transition-all duration-200" style={{ width: isOpen ? width : 36, height: 'fit-content' }}>
+            <div className="flex bg-[var(--background)]/90 border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] overflow-hidden transition-[width] duration-200" style={{ width: isOpen ? width : 36, height: 'fit-content' }}>
                 {buttonPosition === 'left' && buttonNode}
                 <div className="flex-grow min-w-0 transition-opacity duration-200" style={{ opacity: isOpen ? 1 : 0, width: isOpen ? width - 36 : 0 }}>
                     <div className="p-3" style={{ width: width - 36 }}>
@@ -53,7 +66,7 @@ const PrimaryCollapsible = ({ title, mode = 'top', defaultOpen = true, width, bu
     }
 
     return (
-        <div className="bg-[var(--background)]/90 backdrop-blur-md border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] transition-all duration-200 flex flex-col" style={{ width }}>
+        <div className="bg-[var(--background)]/90 border-[3px] border-[var(--border)] shadow-[4px_4px_0px_#111111] transition-[width] duration-200 flex flex-col" style={{ width }}>
             <button 
                 onClick={() => setIsOpen(!isOpen)} 
                 className="w-full flex justify-between items-center p-2 bg-[var(--border)] text-[var(--background)] hover:opacity-80 transition-opacity cursor-pointer"
@@ -245,6 +258,23 @@ type PcaRun = {
     standardize: boolean;
     savedAt: string;
     varianceExplained: number[];
+    missing?: MissingReport;
+};
+
+// One sentence naming what happened to the incomplete rows. Returns '' when
+// there were none, so a complete dataset says nothing at all.
+const missingNote = (rep: MissingReport | undefined, nRows: number): string => {
+    if (!rep || !rep.byVariable.length) return '';
+    const worst = rep.byVariable.slice(0, 3).map(m => `${m.var} ${m.n}/${nRows}`).join(', ');
+    const more = rep.byVariable.length > 3 ? `, +${rep.byVariable.length - 3} more` : '';
+    if (rep.strategy === 'complete') {
+        return ` Complete cases only: ${rep.rowsDropped} of ${nRows} rows were dropped for having a gap, leaving ${rep.rowsUsed} — ${worst}${more}. Those rows have no score.`;
+    }
+    const pct = (rep.imputedCells / Math.max(rep.totalCells, 1)) * 100;
+    const how = rep.strategy === 'iterative'
+        ? `reconstructed by iterative PCA (${rep.iterations} iterations${rep.converged ? '' : ', did NOT converge — treat with caution'})`
+        : 'filled with the column median';
+    return ` ${rep.imputedCells} of ${rep.totalCells} cells (${pct < 0.1 ? '<0.1' : pct.toFixed(1)}%) were missing and ${how} — ${worst}${more}.`;
 };
 
 // A cached upload: processed table, upload-time profile, and its plot-axis choices.
@@ -270,8 +300,10 @@ const effectiveAxes = (d: Dataset, mode: "3D" | "2D"): Axes =>
 const effectiveLabels = (d: Dataset, mode: "3D" | "2D"): AxisLabels =>
     mode === "2D" ? { x: d.labels2d.x, y: d.labels2d.y, z: 'Z' } : d.labels;
 
+// isNumericColumn, not `typeof v === 'number'`: a column Excel formatted as Text
+// is still a measurement, and pca.ts/engine.ts always treated it as one (C6).
 const numericColumns = (table: DataTable) =>
-    table.columns.filter(c => (table.data[c] ?? []).some(v => typeof v === 'number'));
+    table.columns.filter(c => isNumericColumn(table.data[c] ?? []));
 
 const defaultLabels = (axes: Axes): AxisLabels => ({ x: axes.x, y: axes.y, z: axes.z ?? 'Z' });
 
@@ -327,10 +359,25 @@ const markerSizeFor = (mode: "3D" | "2D", symbol?: string) => {
     return 4;
 };
 
-const shapeCategories = (vals: any[]) =>
-    sortCategories(Array.from(new Set(vals.map((v: any) => String(v ?? 'N/A')))));
+// Called from both buildTraces and ThemedLegend. `vals.map(String)` across every
+// row, to discover at most six distinct values, measured 8.4 ms on a 200k table
+// (finding F14). A Set-first loop is 0.0 ms.
+//
+// Stops one past the decision threshold: everything downstream only asks
+// "is this more than MAX_SHAPE_CATEGORIES?", so counting further is wasted. The
+// exact total is therefore NOT available above the cap — the one caller that
+// used to print it now says "more than N", because printing a capped count
+// would be worse than printing none.
+const shapeCategories = (vals: any[]) => {
+    const seen = new Set<string>();
+    for (const v of vals) {
+        seen.add(String(v ?? 'N/A'));
+        if (seen.size > MAX_SHAPE_CATEGORIES) break;
+    }
+    return sortCategories(Array.from(seen));
+};
 
-const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false, shapeField = "") => {
+const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "2D", axes: Axes, labels: AxisLabels, muted: MuteMap = {}, dark = false, shapeField = "", includeFloor = true) => {
     if (!table || table.nRows === 0) return [];
     const n = table.nRows;
     const px = table.data[axes.x] ?? [];
@@ -361,22 +408,30 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         // variable subdivides traces without shifting anybody's colour
         const colorCats = sortCategories(Array.from(new Set(colorVals.map((v: any) => v ?? "N/A"))));
         const colorIdx = new Map(colorCats.map((v, i) => [String(v), i]));
-        const grouped: Record<string, { x: any[], y: any[], z: any[], color: any, shape: string | null }> = {};
+        // Grouping key is a NUMBER, and the lookups behind it are keyed on the
+        // raw values rather than their string forms. The composite
+        // `${cval}␟${sval}` this replaces allocated a string per point per call
+        // and measured as the single most expensive line in the function — 4.8
+        // ms of a 50k total (finding F15). Stringifying for `colorIdx.get`
+        // would have put the same allocation straight back.
+        const colorRank = new Map<any, number>(colorCats.map((v, i) => [v, i]));
+        const shapeRank = new Map<string, number>(shapeCats.map((v, i) => [v, i]));
+        const stride = shapeCats.length + 1;
+        const grouped = new Map<number, { x: any[], y: any[], z: any[], color: any, shape: string | null, ci: number, si: number }>();
         for (let i = 0; i < n; i++) {
             const cval = colorVals[i] ?? "N/A";
             const sval = shapeAt(i);
-            const key = sval == null ? String(cval) : `${cval}␟${sval}`;
-            const g = (grouped[key] ??= { x: [], y: [], z: [], color: cval, shape: sval });
+            const ci = colorRank.get(cval) ?? 0;
+            const si = sval == null ? 0 : (shapeRank.get(sval) ?? -1) + 1;
+            const key = ci * stride + si;
+            let g = grouped.get(key);
+            if (!g) { g = { x: [], y: [], z: [], color: cval, shape: sval, ci, si }; grouped.set(key, g); }
             g.x.push(px[i]);
             g.y.push(py[i]);
             g.z.push(pz[i]);
         }
         // Colour-major, then shape — keeps trace order aligned with the legend
-        const groups = Object.values(grouped).sort((a, b) => {
-            const ca = colorIdx.get(String(a.color)) ?? 0, cb = colorIdx.get(String(b.color)) ?? 0;
-            if (ca !== cb) return ca - cb;
-            return shapeCats.indexOf(a.shape ?? '') - shapeCats.indexOf(b.shape ?? '');
-        });
+        const groups = Array.from(grouped.values()).sort((a, b) => (a.ci - b.ci) || (a.si - b.si));
         groups.forEach(g => {
             // Muted/hidden categories keep their trace slot so colors don't shift:
             // 'muted' renders hollow with a thin grey outline, 'hidden' is invisible
@@ -460,6 +515,8 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         const hasHidden = kind === "categorical" && Object.values(muted).includes('hidden');
         let x_min = Infinity, x_max = -Infinity, y_min = Infinity, y_max = -Infinity, z_min = Infinity, z_max = -Infinity;
         const shadow_x: number[] = [], shadow_y: number[] = [];
+        const SHADOW_TARGET = 4000;
+        const shadowStride = n > SHADOW_TARGET ? Math.ceil(n / SHADOW_TARGET) : 1;
         for (let i = 0; i < n; i++) {
             if (hasHidden && muted[String(colorVals[i] ?? "N/A")] === 'hidden') continue;
             if (px[i] != null) {
@@ -474,7 +531,10 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
                 if (pz[i] < z_min) z_min = pz[i];
                 if (pz[i] > z_max) z_max = pz[i];
             }
-            if (px[i] != null && py[i] != null) {
+            // The shadow is decoration at opacity 0.1 and size 2, so above a few
+            // thousand points a decimated copy is indistinguishable — and it
+            // halves both the array copy and the GPU point count (F15).
+            if (px[i] != null && py[i] != null && (shadowStride === 1 || i % shadowStride === 0)) {
                 shadow_x.push(px[i]);
                 shadow_y.push(py[i]);
             }
@@ -488,6 +548,11 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
         // The shadow floor must contrast with the canvas: near-black on light
         // themes, pale gray on the terminal theme's black background
         const shadowColor = dark ? '#d8d8d8' : '#111111';
+        // The ground shadow and its mesh floor are decoration. In the live view
+        // they read well; in a shared HTML file they are a second full copy of
+        // every x and y plus an n-length array of one repeated constant, which
+        // measured 1,070 KB of a 3,831 KB export (finding F3).
+        if (includeFloor) {
         traces.push({
             x: shadow_x,
             y: shadow_y,
@@ -509,6 +574,7 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
             showlegend: false,
             hoverinfo: 'skip'
         });
+        }
     }
 
     return traces;
@@ -519,15 +585,26 @@ const CHART_COLORS = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#3
 // Inline distribution sparkline for a numeric column
 const MiniHistogram = ({ values, color }: { values: any[], color: string }) => {
     const bars = useMemo(() => {
-        const nums = values.filter(v => typeof v === 'number' && !Number.isNaN(v));
-        if (nums.length < 2) return null;
-        let min = Infinity, max = -Infinity;
-        for (const v of nums) { if (v < min) min = v; if (v > max) max = v; }
-        if (min === max) return null;
+        // Two passes over the column, no copy of it. The `values.filter(...)`
+        // this replaces duplicated the whole column to compute fourteen bins —
+        // 7.9 ms of the component's 12.7 ms at 200k rows (finding F14).
+        let min = Infinity, max = -Infinity, count = 0;
+        for (const v of values) {
+            if (typeof v !== 'number' || Number.isNaN(v)) continue;
+            count++;
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        if (count < 2 || min === max) return null;
         const N = 14;
         const counts = new Array(N).fill(0);
-        for (const v of nums) counts[Math.min(N - 1, Math.floor(((v - min) / (max - min)) * N))]++;
-        const peak = Math.max(...counts);
+        const scale = N / (max - min);
+        for (const v of values) {
+            if (typeof v !== 'number' || Number.isNaN(v)) continue;
+            counts[Math.min(N - 1, Math.floor((v - min) * scale))]++;
+        }
+        let peak = 0;
+        for (const c of counts) if (c > peak) peak = c;
         return counts.map(c => c / peak);
     }, [values]);
     if (!bars) return null;
@@ -579,17 +656,12 @@ const VariablesPanel = ({ dataset, viewMode, colorBy, shapeBy, theme, onAxis, on
 }) => {
     const table = dataset.table;
     const axes = viewMode === "2D" ? { ...dataset.axes2d, z: null as string | null } : dataset.axes;
-    const profiles = useMemo(() => table.columns.map(col => {
-        const vals = table.data[col] ?? [];
-        let missing = 0, isNumeric = false, min = Infinity, max = -Infinity;
-        const distinct = new Set<any>();
-        for (const v of vals) {
-            if (v == null) { missing++; continue; }
-            if (typeof v === 'number') { isNumeric = true; if (v < min) min = v; if (v > max) max = v; }
-            distinct.add(v);
-        }
-        return { col, vals, missing, isNumeric, min, max, nUnique: distinct.size };
-    }), [table]);
+    // The shared scan (F14). This pass used to be written out here, again in
+    // PCASection and again in ClusterBreakdown, three times per table change.
+    const profiles = useMemo(
+        () => scanTable(table).map(s => ({ ...s, vals: table.data[s.col] ?? [] })),
+        [table],
+    );
 
     const fmt = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2).replace(/\.?0+$/, '');
     // Assignment buttons carry the Bauhaus triad in primary; terminal goes green
@@ -760,27 +832,28 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
     table: DataTable,
     datasetId: number,
     theme: string | undefined,
-    lastRun: { varianceExplained: number[]; cumulative: number[] } | null,
+    lastRun: { varianceExplained: number[]; cumulative: number[]; spectrum?: number[]; eigenvalues?: number[]; standardize?: boolean; k?: number; columns?: string[] } | null,
     runs: PcaRun[],
-    onRun: (vars: string[], k: number, standardize: boolean, label: string) => void,
+    onRun: (vars: string[], k: number, standardize: boolean, label: string, missing: MissingStrategy) => void,
 }) => {
     // Component columns (bare or labeled) don't feed new PCAs; COMP_ composites
     // stay selectable on purpose — feeding composites into a second-order PCA
     // is a legitimate technique.
     const numericVars = useMemo(
-        () => numericColumns(table).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster'),
+        () => numericColumnsOf(table).filter(c => !isPCColumn(c) && c !== 'Cluster'),
         [table]
     );
     const [selected, setSelected] = useState<Set<string>>(() => new Set(numericVars));
     const [k, setK] = useState(3);
     const [standardize, setStandardize] = useState(true);
+    const [missing, setMissing] = useState<MissingStrategy>('median');
     const [label, setLabel] = useState('');
     // Auto-suggest tracks the selection until the user types a label of their
     // own; a cleared field re-arms the suggestion.
     const labelTouched = useRef(false);
     // Replacement confirm: what's waiting for an OK, and whether the user has
     // opted out of being asked (persisted).
-    const [pendingRun, setPendingRun] = useState<{ vars: string[]; k: number; standardize: boolean; label: string; replaces: string[] } | null>(null);
+    const [pendingRun, setPendingRun] = useState<{ vars: string[]; k: number; standardize: boolean; label: string; missing: MissingStrategy; replaces: string[] } | null>(null);
     // New dataset → fresh default selection and label. A mere table change
     // (a run adding columns) must NOT reset — that would wipe the user's
     // subset selection mid-iteration — it only prunes columns that vanished.
@@ -794,15 +867,41 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
         setLabel(selected.size === numericVars.length ? '' : (deriveRunLabel(Array.from(selected)) ?? ''));
     }, [selected, numericVars.length]);
 
+    // Per-variable missingness for the picker. methods.ts (pca_workflow) advises
+    // dropping columns above ~50% missing rather than imputing them — at that
+    // level an imputed column is mostly one repeated value, which enters the
+    // correlation matrix as a near-constant.
+    const missingPct = useMemo(() => {
+        const out: Record<string, number> = {};
+        for (const c of numericVars) {
+            const vals = table.data[c] ?? [];
+            let have = 0;
+            for (const v of vals) if (typeof v === 'number') have++;
+            out[c] = table.nRows ? (1 - have / table.nRows) * 100 : 0;
+        }
+        return out;
+    }, [numericVars, table]);
+    const heavilyMissing = Array.from(selected).filter(c => (missingPct[c] ?? 0) > 50);
+    // Rows with no gap across the current selection — what complete-case would keep.
+    const completeRows = useMemo(() => {
+        const sel = Array.from(selected).filter(c => numericVars.includes(c));
+        if (!sel.length) return table.nRows;
+        let count = 0;
+        for (let i = 0; i < table.nRows; i++) {
+            if (sel.every(c => typeof (table.data[c] ?? [])[i] === 'number')) count++;
+        }
+        return count;
+    }, [selected, numericVars, table]);
+
     const toggle = (c: string) => setSelected(prev => {
         const next = new Set(prev);
         if (next.has(c)) next.delete(c); else next.add(c);
         return next;
     });
     const maxK = Math.max(1, Math.min(10, selected.size));
-    const screeMaxBarHeight = lastRun
-        ? Math.max(...lastRun.varianceExplained.map(v => v * 100 * 1.4))
-        : 0;
+    // The full spectrum drives the height, since it is what gets drawn (B4).
+    const screeBars = lastRun ? (lastRun.spectrum ?? lastRun.varianceExplained) : [];
+    const screeMaxBarHeight = screeBars.length ? Math.max(...screeBars.map(v => v * 100 * 1.4)) : 0;
     // Reserve the label line too. A high-variance first component should grow
     // the chart rather than spilling out of a fixed-height bar box.
     const screeHeight = Math.max(56, Math.ceil(screeMaxBarHeight) + 18);
@@ -814,10 +913,10 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
         const existing = runs.find(r => r.label === cleanLabel);
         const suppressed = typeof localStorage !== 'undefined' && localStorage.getItem('scatterlab.pca.confirmReplace') === 'off';
         if (existing && !suppressed) {
-            setPendingRun({ vars, k: effK, standardize, label: cleanLabel, replaces: existing.columns });
+            setPendingRun({ vars, k: effK, standardize, label: cleanLabel, missing, replaces: existing.columns });
             return;
         }
-        onRun(vars, effK, standardize, cleanLabel);
+        onRun(vars, effK, standardize, cleanLabel, missing);
     };
 
     return (
@@ -830,21 +929,33 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                 </span>
             </div>
             <div className="max-h-36 overflow-y-auto space-y-0.5 pr-1 border border-[var(--border)]/30 p-1.5">
-                {numericVars.map(c => (
-                    <label key={c} className="flex items-center gap-2 cursor-pointer hover:opacity-80">
-                        <input type="checkbox" checked={selected.has(c)} onChange={() => toggle(c)} />
-                        <span className="truncate" title={c}>{c}</span>
-                    </label>
-                ))}
+                {numericVars.map(c => {
+                    const miss = missingPct[c] ?? 0;
+                    return (
+                        <label key={c} className="flex items-center gap-2 cursor-pointer hover:opacity-80">
+                            <input type="checkbox" checked={selected.has(c)} onChange={() => toggle(c)} />
+                            <span className="truncate flex-1" title={c}>{c}</span>
+                            {miss > 0 && (
+                                <span
+                                    className={`flex-shrink-0 text-[10px] ${miss > 50 ? 'font-bold text-[var(--p-red)]' : 'opacity-50'}`}
+                                    title={`${miss.toFixed(0)}% of rows are missing this variable`}
+                                >
+                                    {miss.toFixed(0)}% NA
+                                </span>
+                            )}
+                        </label>
+                    );
+                })}
                 {numericVars.length === 0 && <div className="opacity-50 p-1">No numeric variables available.</div>}
             </div>
             <label className="flex justify-between items-center">
                 <span className="opacity-70">Components: <b>{Math.min(k, maxK)}</b>{Math.min(k, maxK) === 1 ? ' (composite)' : ''}</span>
                 <input type="range" min={1} max={maxK} step={1} value={Math.min(k, maxK)} onChange={e => setK(parseInt(e.target.value))} className="w-32" />
             </label>
-            <label className="flex items-center gap-2 cursor-pointer select-none" title="On: correlation-based PCA (each variable weighted equally — right when scales differ). Off: covariance-based (high-variance variables dominate).">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
                 <span className="opacity-80">Standardize variables (correlation PCA)</span>
+                <InfoTip topic="standardize_pca" />
             </label>
             <input
                 type="text"
@@ -859,6 +970,34 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                     → {pcaColumnNames(sanitizeLabel(label), Math.min(k, maxK)).join(', ')}
                 </div>
             )}
+            <div className="space-y-1">
+                <span className="opacity-70">Missing values<InfoTip topic="median_imputation" /></span>
+                <div className="flex gap-1">
+                    {([['median', 'Median'], ['iterative', 'Iterative PCA'], ['complete', 'Complete cases']] as const).map(([v, lbl]) => (
+                        <button
+                            key={v}
+                            onClick={() => setMissing(v)}
+                            className={`flex-1 py-1 text-[10px] font-bold border ${missing === v
+                                ? 'bg-[var(--foreground)] text-[var(--background)] border-[var(--foreground)]'
+                                : 'bg-[var(--input)] border-[var(--border)] opacity-60 hover:opacity-100'}`}
+                        >
+                            {lbl}
+                        </button>
+                    ))}
+                </div>
+                {missing === 'complete' && (
+                    <div className={`text-[10px] leading-snug ${completeRows < 3 ? 'text-[var(--p-red)]' : 'opacity-60'}`}>
+                        {completeRows} of {table.nRows} rows have no gaps in this selection
+                        {completeRows < table.nRows && ' — the rest will have no score'}.
+                    </div>
+                )}
+            </div>
+            {heavilyMissing.length > 0 && (
+                <div className="text-[10px] leading-snug text-[var(--p-red)]">
+                    ⚠ {heavilyMissing.map(c => `"${c}"`).join(', ')} {heavilyMissing.length === 1 ? 'is' : 'are'} over 50% missing.
+                    Imputing that much makes a column mostly one repeated value; dropping it is usually better than filling it.
+                </div>
+            )}
             <button
                 onClick={submit}
                 disabled={selected.size < 2}
@@ -866,7 +1005,16 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
             >
                 Run PCA
             </button>
-            {pendingRun && (
+            <p className="text-[10px] leading-snug opacity-60">
+                Missing values are filled with the column median before the decomposition.
+                <InfoTip topic="median_imputation" />
+            </p>
+            {/* Portalled to <body>: the sidebar is a positioned, scrolling
+                stacking context, so a z-100 backdrop rendered inside it still
+                sits BELOW the plot canvas in <main>. elementFromPoint at the
+                Replace button returned the canvas, and neither Replace nor
+                Cancel could be clicked once a plot was on screen. */}
+            {pendingRun && typeof document !== 'undefined' && createPortal(
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={() => setPendingRun(null)}>
                     <div
                         className={`max-w-sm w-full mx-4 p-4 space-y-3 text-xs bg-[var(--card)] text-[var(--foreground)] ${theme === 'primary' ? 'border-[3px] border-[var(--p-black)]' : 'border border-[var(--system-green)]'}`}
@@ -895,29 +1043,50 @@ const PCASection = ({ table, datasetId, theme, lastRun, runs, onRun }: {
                                 Cancel
                             </button>
                             <button
-                                onClick={() => { onRun(pendingRun.vars, pendingRun.k, pendingRun.standardize, pendingRun.label); setPendingRun(null); }}
+                                onClick={() => { onRun(pendingRun.vars, pendingRun.k, pendingRun.standardize, pendingRun.label, pendingRun.missing); setPendingRun(null); }}
                                 className={`px-3 py-1.5 font-bold cursor-pointer ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--system-green)]/20 border border-[var(--system-green)] text-[var(--system-green)]'}`}
                             >
                                 Replace
                             </button>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body,
             )}
             {lastRun && (
                 <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
-                    <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">Variance explained</div>
+                    <div className="font-bold uppercase tracking-wider opacity-60 text-[10px]">
+                        Scree — all components<InfoTip topic="variance_explained" />
+                    </div>
+                    {/* Every component, with the kept ones solid and the rest
+                        faded (B4). Plotting only the kept ones made the chart
+                        useless for the job the methods reference sends people
+                        here to do: the Cattell elbow is invisible if the plot
+                        stops at the elbow. */}
                     <div className="flex items-end gap-1" style={{ height: `${screeHeight}px` }}>
-                        {lastRun.varianceExplained.map((v, i) => (
-                            <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`PC${i + 1}: ${(v * 100).toFixed(1)}% (cumulative ${(lastRun.cumulative[i] * 100).toFixed(1)}%)`}>
-                                <div className="w-full" style={{ height: `${Math.max(2, v * 100 * 1.4)}px`, backgroundColor: theme === 'primary' ? 'var(--p-blue)' : 'var(--system-green)', opacity: 0.85 }} />
-                                <span className="text-[9px] opacity-60">{i + 1}</span>
-                            </div>
-                        ))}
+                        {screeBars.map((v, i) => {
+                            const kept = i < (lastRun.k ?? lastRun.varianceExplained.length);
+                            return (
+                                <div key={i} className="flex-1 flex flex-col items-center gap-0.5" title={`${lastRun.columns?.[i] ?? `PC${i + 1}`}: ${(v * 100).toFixed(1)}% of variance${lastRun.eigenvalues ? `, eigenvalue ${lastRun.eigenvalues[i].toFixed(2)}` : ''}${kept ? ' — kept' : ' — not kept'}`}>
+                                    <div className="w-full" style={{ height: `${Math.max(2, v * 100 * 1.4)}px`, backgroundColor: theme === 'primary' ? 'var(--p-blue)' : 'var(--system-green)', opacity: kept ? 0.85 : 0.25 }} />
+                                    <span className="text-[9px]" style={{ opacity: kept ? 0.75 : 0.35 }}>{i + 1}</span>
+                                </div>
+                            );
+                        })}
                     </div>
                     <div className="text-[10px] opacity-70">
-                        {lastRun.varianceExplained.map((v, i) => `PC${i + 1} ${(v * 100).toFixed(0)}%`).join(' · ')} — cumulative {(lastRun.cumulative[lastRun.cumulative.length - 1] * 100).toFixed(0)}%
+                        {/* Uses the run's own column names (B6): a COMP_openness
+                            run used to report its bar as "PC1". */}
+                        {lastRun.varianceExplained.map((v, i) => `${lastRun.columns?.[i] ?? `PC${i + 1}`} ${(v * 100).toFixed(0)}%`).join(' · ')} — cumulative {(lastRun.cumulative[lastRun.cumulative.length - 1] * 100).toFixed(0)}%
+                        {screeBars.length > lastRun.varianceExplained.length && (
+                            <> · {screeBars.length - lastRun.varianceExplained.length} more component{screeBars.length - lastRun.varianceExplained.length === 1 ? '' : 's'} shown faded, not kept</>
+                        )}
                     </div>
+                    {lastRun.eigenvalues && lastRun.standardize && (
+                        <div className="text-[10px] opacity-60">
+                            Kaiser criterion (eigenvalue &gt; 1): {lastRun.eigenvalues.filter(e => e > 1).length} component{lastRun.eigenvalues.filter(e => e > 1).length === 1 ? '' : 's'}. A rule of thumb that tends to over-extract — read it beside the elbow, not instead of it.
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -936,7 +1105,7 @@ const ClusterBreakdown = ({ table, attr, onAttrChange, direction, onDirectionCha
     // normalizes away base rates, so dominant groups stop swamping every cluster.
     const [isSaving, setIsSaving] = useState(false);
     const candidates = useMemo(
-        () => table.columns.filter(c => c !== 'Cluster' && getColorFieldKind(table.data[c] ?? []) === 'categorical'),
+        () => categoricalColumnsOf(table).filter(c => c !== 'Cluster'),
         [table]
     );
     const effAttr = candidates.includes(attr) ? attr : candidates[0];
@@ -1025,6 +1194,36 @@ const ClusterBreakdown = ({ table, attr, onAttrChange, direction, onDirectionCha
     );
 };
 
+/**
+ * Do these two datasets appear to be the same respondents in the same order?
+ *
+ * The manual panel has always run this and shown "Check (Id): 140/150 agree ⚠"
+ * in red. The assistant path checked only that the row counts matched — and of
+ * everything the assistant can do, an order-mode transfer is the one operation
+ * that silently produces WRONG SCIENCE rather than a wrong-looking picture, so
+ * it should be the best guarded, not the least (finding D3).
+ *
+ * Deliberately avoids PC/axis columns: those are recomputed per dataset and will
+ * legitimately differ even when the respondents really are aligned.
+ */
+const alignmentProbe = (
+  srcTable: DataTable, tgtTable: DataTable,
+): { col: string; agree: number; total: number } | null => {
+  if (srcTable.nRows !== tgtTable.nRows || tgtTable.nRows === 0) return null;
+  const shared = srcTable.columns.filter(c => tgtTable.columns.includes(c));
+  const isAxisLike = (c: string) => /^(PC\d|Axis|Component|COMP_)/i.test(c);
+  const idLike = shared.find(c => /\bid\b/i.test(c) && !isAxisLike(c));
+  const best = idLike ?? shared
+    .filter(c => !isAxisLike(c))
+    .map(c => ({ c, distinct: new Set(srcTable.data[c]).size }))
+    .sort((a, b) => b.distinct - a.distinct)[0]?.c;
+  if (!best) return null;
+  const a = srcTable.data[best], b = tgtTable.data[best];
+  let agree = 0;
+  for (let i = 0; i < tgtTable.nRows; i++) if (String(a[i]) === String(b[i])) agree++;
+  return { col: best, agree, total: tgtTable.nRows };
+};
+
 // Copy a column (typically a Cluster label) from another dataset into the active
 // one, so e.g. romance-space points can be colored by sex-space clusters. The
 // alignment guard matters: silently mis-joining respondents yields wrong science.
@@ -1039,35 +1238,40 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
     const [name, setName] = useState("");
 
     const src = others.find(d => d.id === sourceId) ?? others[0] ?? null;
-    if (!active || !src) return null;
 
-    const srcCols = src.table.columns;
+    // Every hook below runs unconditionally, and the "nothing to show" return
+    // sits under them. It used to sit HERE, above three useMemos — so a render
+    // where `src` went null (the other dataset removed while this stayed
+    // mounted) would run fewer hooks than the previous one and React would
+    // throw. Latent rather than theoretical; adding a fourth hook made it worth
+    // fixing rather than matching.
+    const srcCols = src?.table.columns ?? [];
     const effSrcCol = srcCols.includes(sourceCol) ? sourceCol : (srcCols.includes('Cluster') ? 'Cluster' : srcCols[0]);
-    const shared = src.table.columns.filter(c => active.table.columns.includes(c));
+    // Memoized because `probe` below depends on it: computed inline this was a
+    // fresh array every render, so the O(n*C) alignment scan re-ran on every
+    // keystroke and every rotation frame whenever two datasets were loaded
+    // (finding F14).
+    const shared = useMemo(
+        () => (src && active ? src.table.columns.filter(c => active.table.columns.includes(c)) : []),
+        [src, active],
+    );
     const effKey = shared.includes(keyCol) ? keyCol : shared[0];
-    const countsMatch = src.table.nRows === active.table.nRows;
-    const defaultName = `${effSrcCol}·${src.name}`;
+    const countsMatch = !!src && !!active && src.table.nRows === active.table.nRows;
+    const defaultName = `${effSrcCol}·${src?.name ?? ''}`;
 
     // Auto alignment probe (order mode): pick a stable identity/demographic column
     // to sanity-check row order — NOT a PC/axis score, which is recomputed per
     // dataset and will legitimately differ even when respondents ARE aligned.
-    const probe = useMemo(() => {
-        if (mode !== 'order' || !shared.length || !countsMatch) return null;
-        const isAxisLike = (c: string) => /^(PC\d|Axis|Component)/i.test(c);
-        const idLike = shared.find(c => /\bid\b/i.test(c) && !isAxisLike(c));
-        const categoricalCandidates = shared.filter(c => !isAxisLike(c) && getColorFieldKind(src.table.data[c] ?? []) === 'categorical');
-        const best = idLike ?? categoricalCandidates
-            .map(c => ({ c, distinct: new Set(src.table.data[c]).size }))
-            .sort((a, b) => b.distinct - a.distinct)[0]?.c;
-        if (!best) return null;
-        const a = src.table.data[best], b = active.table.data[best];
-        let agree = 0;
-        for (let i = 0; i < active.table.nRows; i++) if (String(a[i]) === String(b[i])) agree++;
-        return { col: best, agree, total: active.table.nRows };
-    }, [mode, shared, countsMatch, src, active]);
+    // Shared with the assistant's transfer_column, so both run the same check (D3).
+    const probe = useMemo(
+        () => (src && active && mode === 'order' && countsMatch
+            ? alignmentProbe(src.table, active.table)
+            : null),
+        [mode, countsMatch, src, active],
+    );
 
     const matchStats = useMemo(() => {
-        if (mode !== 'match' || !effKey) return null;
+        if (!src || !active || mode !== 'match' || !effKey) return null;
         const sk = src.table.data[effKey], tk = active.table.data[effKey];
         const srcKeys = new Set(sk.map(String));
         const uniqueSrc = srcKeys.size === src.table.nRows;
@@ -1077,6 +1281,8 @@ const ColumnTransfer = ({ datasets, activeId, onTransfer }: { datasets: Dataset[
     }, [mode, effKey, src, active]);
 
     const canTransfer = mode === 'order' ? countsMatch : (!!effKey && (matchStats?.matched ?? 0) > 0);
+
+    if (!active || !src) return null;
 
     return (
         <div className="space-y-2 text-xs border-t border-[var(--border)] pt-3 mt-1">
@@ -1297,11 +1503,113 @@ const SidebarGroup = ({ children, theme }: { children: React.ReactNode, theme: s
     return <div className="flex-grow flex flex-col gap-6">{children}</div>;
 };
 
-const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRelayout: (e: any) => void }) => {
+// Plot chrome, as a pure function of its inputs.
+//
+// Pulled out of the component for two reasons. Referential stability: it used to
+// be called inline in render, so every pane got a fresh layout object and
+// `react-plotly.js` — which re-plots whenever `prev.layout !== layout`,
+// regardless of `revision` — ran Plotly.react on all four plots on every render
+// (F9, F13). And so it can be memoized where it is used.
+//
+// Colours are CONCRETE. This function used to pass `template: 'plotly_white'`
+// and `var(--foreground)` as font colours; measured in the browser, Plotly
+// resolved the template to `undefined` and every one of those colours to its own
+// default `#444` — the theme-aware chrome the code intended had never once
+// applied (F17). exportHTML always used real hex values, which was the clue.
+const PLOT_CHROME = {
+    light: { fg: '#111111', grid3d: '#bbbbbb', grid2d: '#cccccc', tick: '#888888', zero: '#888888' },
+    dark: { fg: '#10ff50', grid3d: '#3a3a3a', grid2d: '#333333', tick: '#9a9a9a', zero: '#555555' },
+};
+
+type PlotLayoutOpts = {
+    dark: boolean;
+    title: string;
+    colorBy: string;
+    axisNames: AxisLabels;
+    mode: "3D" | "2D";
+    axesOn: boolean;
+    window2d: { x: [number, number], y: [number, number] } | null;
+    camera: { eye: { x: number, y: number, z: number } };
+};
+
+const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window2d, camera }: PlotLayoutOpts) => {
+    const c = dark ? PLOT_CHROME.dark : PLOT_CHROME.light;
+    const baseLayout: any = {
+        autosize: true,
+        // Terminal panes carry their own label — a Plotly title would duplicate it
+        margin: { l: mode === "2D" ? 40 : 0, r: 20, b: mode === "2D" ? 40 : 0, t: dark ? 10 : 40 },
+        ...(dark ? {} : { title: { text: title, font: { color: c.fg } } }),
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        showlegend: false,
+        legend: { title: { text: colorBy, font: { color: c.fg } }, font: { color: c.fg } },
+    };
+
+    if (mode === "3D") {
+        const axis3d = (label: string) => ({
+            showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
+            gridcolor: c.grid3d, zerolinecolor: c.zero,
+            tickfont: { size: 10, color: c.tick },
+            title: { text: label, font: { color: c.fg } },
+        });
+        baseLayout.scene = {
+            camera,
+            xaxis: axis3d(axisNames.x),
+            yaxis: axis3d(axisNames.y),
+            zaxis: axis3d(axisNames.z),
+            bgcolor: 'transparent',
+        };
+    } else {
+        const axis2d = (label: string) => ({
+            showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
+            gridcolor: c.grid2d, zerolinecolor: c.zero,
+            tickfont: { color: c.tick },
+            title: { text: label, font: { color: c.fg } },
+        });
+        baseLayout.xaxis = axis2d(axisNames.x);
+        baseLayout.yaxis = axis2d(axisNames.y);
+        // Each view brings its own viewport — the active one's live state, a
+        // pin's captured one — since these are data-space bounds and pins are
+        // framed on their own columns. `autorange` is set explicitly so a reset
+        // actually refits: dropping `range` alone lets Plotly keep the old window.
+        if (window2d) {
+            baseLayout.xaxis.range = [...window2d.x];
+            baseLayout.yaxis.range = [...window2d.y];
+            baseLayout.xaxis.autorange = false;
+            baseLayout.yaxis.autorange = false;
+        } else {
+            baseLayout.xaxis.autorange = true;
+            baseLayout.yaxis.autorange = true;
+        }
+    }
+
+    return baseLayout;
+};
+
+// Memoized: without it, any state change in Home — a slider tick, a Notes
+// keystroke, a streaming assistant token — re-rendered every pane and, because
+// the layout object was rebuilt inline, made react-plotly.js re-plot all four
+// (F13). None of those values affect the plot.
+const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelayout }: {
+    view: any, title: string, colorBy: string, axesOn: boolean,
+    window2d: { x: [number, number], y: [number, number] } | null,
+    camera: { eye: { x: number, y: number, z: number } },
+    onRelayout: (e: any) => void,
+}) => {
     const { theme } = useTheme();
     const traces = useMemo(
         () => buildTraces(view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted ?? {}, theme === 'terminal', view.shapeBy ?? ""),
         [view.data, view.colorBy, view.viewMode, view.axes, view.labels, view.muted, theme, view.shapeBy]
+    );
+    // The layout object is now stable across renders that do not change it,
+    // which is what react-plotly.js actually keys on: it re-plots whenever
+    // `prev.layout !== layout`, and `revision` does NOT override that.
+    const layout = useMemo(
+        () => buildPlotLayout({
+            dark: theme === 'terminal', title, colorBy,
+            axisNames: view.labels, mode: view.viewMode, axesOn, window2d, camera,
+        }),
+        [theme, title, colorBy, view.labels, view.viewMode, axesOn, window2d, camera],
     );
     return (
         <Plot
@@ -1313,13 +1621,20 @@ const ViewPlot = ({ view, layout, onRelayout }: { view: any, layout: any, onRela
             onRelayout={onRelayout}
         />
     );
-};
+});
+ViewPlot.displayName = 'ViewPlot';
 
 export default function Home() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [datasetFile, setDatasetFile] = useState<File | null>(null);
   const [componentsFile, setComponentsFile] = useState<File | null>(null);
+  // Sheets in the selected workbook, and which one to read. Empty string means
+  // "let the parser choose", which is the right default — it picks the first
+  // sheet that actually has data rather than blindly the first sheet.
+  const [showInfo, setShowInfo] = useState(false);
+  const [sheetOptions, setSheetOptions] = useState<SheetInfo[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState<string>("");
   const [uploadStatus, setUploadStatus] = useState<string>("");
   const [isUploading, setIsUploading] = useState(false);
   const [isExporting, setIsExporting] = useState("");
@@ -1338,11 +1653,20 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
   const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": false, "2D": true });
   const [camera, setCamera] = useState({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+  // The live camera, readable without a re-render. During rotation the angle
+  // changes 60 times a second and React never hears about it (F9) — but pinning,
+  // exporting and saving a workspace all need the angle currently on screen, so
+  // the rAF loop keeps this in step with what it hands Plotly.
+  const cameraRef = useRef(camera);
+  useEffect(() => { cameraRef.current = camera; }, [camera]);
   // 2D viewport, the flat-mode counterpart of `camera`. null = autorange (fit all
   // points). Set by assistant zoom/pan and by the user's own mouse zoom, so a
   // React re-render can't silently snap the plot back to the full extent.
   const [range2d, setRange2d] = useState<{ x: [number, number], y: [number, number] } | null>(null);
   const [isRotating, setIsRotating] = useState(false);
+  // Mirrored into a ref so handleRelayout can stay referentially stable.
+  const isRotatingRef = useRef(false);
+  useEffect(() => { isRotatingRef.current = isRotating; }, [isRotating]);
   const cntRef = useRef(0);
   const reqRef = useRef<number | undefined>(undefined);
 
@@ -1390,7 +1714,7 @@ export default function Home() {
   }, [activeId, activeDataset?.table, shapeBy]);
 
   // PCA state: scree info from the most recent in-app run (per active dataset)
-  const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[] } | null>(null);
+  const [pcaInfo, setPcaInfo] = useState<{ varianceExplained: number[]; cumulative: number[]; spectrum?: number[]; eigenvalues?: number[]; standardize?: boolean; k?: number; columns?: string[] } | null>(null);
   useEffect(() => { setPcaInfo(null); }, [activeId]);
 
   // Clustering state
@@ -1439,50 +1763,104 @@ export default function Home() {
     setMounted(true);
   }, []);
 
+  // Auto-rotation drives Plotly directly instead of going through React (F9).
+  //
+  // `setCamera` in the rAF loop re-rendered the whole Home subtree sixty times a
+  // second — sidebar, Variables panel, PCA section, cluster breakdown, all four
+  // panes and the assistant — and `react-plotly.js` guards on
+  // `prev.layout === layout`, which a freshly-built layout object never
+  // satisfies, so all four plots ran Plotly.react every frame. Writing the eye
+  // straight to the active plot collapses that to one camera write and one
+  // redraw, and the win does not depend on dataset size.
+  //
+  // Only the ACTIVE plot is driven: since F11 a pin holds the angle it was taken
+  // at, so rotating the live view must not move them.
   useEffect(() => {
-    if (isRotating && viewMode === "3D") {
+    if (!(isRotating && viewMode === "3D")) {
+        if (reqRef.current) cancelAnimationFrame(reqRef.current);
+        return;
+    }
+    let cancelled = false;
+    let stopped = false;
+    (async () => {
+        const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
+        if (cancelled) return;
         const rotate = () => {
             cntRef.current += 0.005;
-            setCamera({
-                eye: {
-                    x: 2.2 * Math.cos(cntRef.current),
-                    y: 2.2 * Math.sin(cntRef.current),
-                    z: 0.6
-                }
-            });
+            const eye = {
+                x: 2.2 * Math.cos(cntRef.current),
+                y: 2.2 * Math.sin(cntRef.current),
+                z: 0.6,
+            };
+            cameraRef.current = { eye };
+            const gd = getActivePlotDiv();
+            // `_fullLayout` marks a plot Plotly has actually initialised;
+            // relayout on a div mid-mount throws.
+            if (gd?._fullLayout) Plotly.relayout(gd, { 'scene.camera.eye': eye });
             reqRef.current = requestAnimationFrame(rotate);
         };
         reqRef.current = requestAnimationFrame(rotate);
-    } else {
+    })();
+    return () => {
+        cancelled = true;
+        stopped = true;
         if (reqRef.current) cancelAnimationFrame(reqRef.current);
-    }
-    return () => { if (reqRef.current) cancelAnimationFrame(reqRef.current); }
+        // Commit the angle we stopped on, so an export, a pin or a workspace
+        // save records what the user was looking at rather than where rotation
+        // began. React state is only touched here — once per stop, not per frame.
+        if (stopped) setCamera(cameraRef.current);
+    };
   }, [isRotating, viewMode]);
 
+  // Peek at a workbook's sheets as soon as it is chosen, so the user can pick
+  // one BEFORE pressing Add Dataset rather than discovering afterwards that the
+  // wrong sheet was read. Costs one structure-only read; no cell conversion.
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedSheet("");
+    if (!datasetFile) { setSheetOptions([]); return; }
+    listSheets(datasetFile).then(sheets => { if (!cancelled) setSheetOptions(sheets); });
+    return () => { cancelled = true; };
+  }, [datasetFile]);
+
   // Everything happens in the browser: parse → (optionally) project → plot.
-  // No network round-trip, no server, data never leaves the machine.
+  // No network round-trip, no server, no dataset upload.
   const uploadFiles = async (
     dsFile: File,
     compFile: File | null,
     initialView?: InitialUploadView,
+    sheet?: string,
   ): Promise<DataTable | null> => {
     setIsUploading(true);
     setUploadStatus("Processing…");
     try {
       // Yield a frame so the busy state paints before heavy parsing starts
       await new Promise(r => setTimeout(r, 30));
-      const [dsTable, compTable] = await Promise.all([
-        readTable(dsFile),
+      const [dsParsed, compParsed] = await Promise.all([
+        readTable(dsFile, { sheet }),
         compFile ? readTable(compFile) : Promise.resolve(null),
       ]);
-      const result = processUpload(dsTable, compTable);
-      setUploadStatus(result.message);
+      const result = processUpload(dsParsed.table, compParsed?.table ?? null);
+      // Parser warnings describe things that silently changed the data, so they
+      // lead — the success message is the part the user can already see.
+      const warnings = [
+        ...dsParsed.warnings,
+        ...(compParsed?.warnings ?? []).map(w => `Components file: ${w}`),
+        // What the projection did to the numbers — coverage, fuzzy name
+        // matches, unreadable loadings, fewer than three components (C10).
+        ...result.warnings,
+      ];
+      setUploadStatus(warnings.length
+        ? `${warnings.map(w => `⚠ ${w}`).join('\n')}\n${result.message}`
+        : result.message);
       const id = Date.now();
       const table = result.table;
       const axes = initialView?.axes ?? pickDefaultAxes(table);
       const dataset: Dataset = {
         id,
-        name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, ''),
+        // Naming the sheet matters now that two sheets of one workbook can be
+        // loaded as two datasets — otherwise both arrive with the same name.
+        name: dsFile.name.replace(/\.(csv|xlsx|parquet)$/i, '') + (sheet ? ` — ${sheet}` : ''),
         table,
         summary: result.topContributors ? { top_contributors: result.topContributors } : null,
         axes,
@@ -1511,7 +1889,7 @@ export default function Home() {
     }
   };
 
-  const handleUpload = () => { if (datasetFile) uploadFiles(datasetFile, componentsFile); };
+  const handleUpload = () => { if (datasetFile) uploadFiles(datasetFile, componentsFile, undefined, selectedSheet || undefined); };
 
   // Demo data ships with the app (public/demo) so the empty state can offer a
   // zero-friction first run: the public Iris CSV, no projection file required.
@@ -1569,7 +1947,7 @@ export default function Home() {
       const tables: Record<string, DataTable> = {};
       registry.forEach((id, tbl) => { tables[id] = tbl; });
       return {
-          version: 1,
+          version: wsStore.WORKSPACE_VERSION,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
           activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
           notes, mutedMap,
@@ -1615,6 +1993,10 @@ export default function Home() {
       try {
           const ws = await wsStore.loadWorkspace(name);
           if (!ws) { setWorkspaceBusy(""); setUploadStatus("Workspace not found."); return; }
+          // Stored workspaces get the same check as imported ones: an entry
+          // written by an older build, or half-written when a tab closed, would
+          // otherwise white-screen on render exactly as a bad file did (C11).
+          wsStore.validateWorkspace(ws);
           applyWorkspace(name, ws);
           setWorkspaceBusy("");
       } catch (err: any) {
@@ -1738,6 +2120,31 @@ export default function Home() {
       if (compInputRef.current) compInputRef.current.value = "";
   };
 
+  // eps is a DISTANCE in the units of the plotted axes, so a fixed 0.1–5 range
+  // is meaningless on anything but standardized or small-range data (B5). Scale
+  // the slider to the actual spread; the number box beside it removes the
+  // ceiling entirely.
+  const epsSliderMax = useMemo(() => {
+      if (standardize) return 5;                    // z-scores: 5 SD is already generous
+      if (!processedData || !activeDataset) return 5;
+      const ax = effectiveAxes(activeDataset, viewMode);
+      let span = 0;
+      for (const c of [ax.x, ax.y, ax.z].filter(Boolean) as string[]) {
+          let lo = Infinity, hi = -Infinity;
+          for (const raw of processedData.data[c] ?? []) {
+              const v = asNumber(raw);
+              if (v !== null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+          }
+          if (hi > lo) span = Math.max(span, hi - lo);
+      }
+      // Half the widest axis span is well past where DBSCAN merges everything.
+      return span > 0 ? Math.max(1, Math.round(span / 2)) : 5;
+  }, [standardize, processedData, activeDataset, viewMode]);
+  const epsSliderStep = useMemo(
+      () => Math.max(0.001, Math.round((epsSliderMax / 100) * 1000) / 1000),
+      [epsSliderMax],
+  );
+
   const handleCluster = async () => {
       if (clusterMethod === "NONE" || !processedData) return;
       setIsClustering(true);
@@ -1747,7 +2154,17 @@ export default function Home() {
           const ax = effectiveAxes(activeDataset!, viewMode);
           const rawCols = [processedData.data[ax.x], processedData.data[ax.y]];
           if (ax.z) rawCols.push(processedData.data[ax.z]);
+          const axNames = [ax.x, ax.y, ...(ax.z ? [ax.z] : [])];
+          // Refuse before running: a text axis used to be filled with zeros and
+          // clustered on silently, reporting a full set of sizes (A11).
+          const unusable = nonNumericAxes(rawCols, axNames);
+          if (unusable.length) {
+              setUploadStatus(`Error: ${unusable.map(c => `"${c}"`).join(', ')} ${unusable.length === 1 ? 'has' : 'have'} no numeric values, so ${unusable.length === 1 ? 'it cannot' : 'they cannot'} be used as ${unusable.length === 1 ? 'an axis' : 'axes'} for clustering. Assign a numeric column to each axis first.`);
+              setIsClustering(false);
+              return;
+          }
           const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          const imp = countImputed(rawCols, axNames);
           const labels = clusterMethod === "DBSCAN"
               ? dbscan(cols, eps, minSamples)
               : kmeans(cols, k);
@@ -1760,6 +2177,11 @@ export default function Home() {
           // The pre-cluster coloring is the natural default for composition breakdowns
           if (colorBy !== "Cluster") setBreakdownBy(colorBy);
           setColorBy("Cluster");
+          const sizes = new Map<string, number>();
+          for (const l of labels) sizes.set(l, (sizes.get(l) ?? 0) + 1);
+          setUploadStatus(
+              `${clusterMethod} on ${axNames.join(' · ')} — ${sortCategories(Array.from(sizes.keys())).map(l => `${l}: ${sizes.get(l)}`).join(', ')}.`
+              + missingNote({ strategy: 'median', imputedCells: imp.cells, totalCells: imp.total, byVariable: imp.byVariable, rowsUsed: processedData.nRows, rowsDropped: 0 }, processedData.nRows));
       } catch (err: any) {
           setUploadStatus(`Clustering failed: ${err?.message ?? err}`);
       } finally {
@@ -1767,66 +2189,11 @@ export default function Home() {
       }
   };
 
-  const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null) => {
-      const dark = theme === 'terminal';
-      const baseLayout: any = {
-          autosize: true,
-          // Terminal panes carry their own label — a Plotly title would duplicate it
-          margin: { l: mode === "2D" ? 40 : 0, r: 20, b: mode === "2D" ? 40 : 0, t: dark ? 10 : 40 },
-          template: 'plotly_white',
-          ...(dark ? {} : { title: { text: title, font: { color: 'var(--foreground)', family: 'var(--font-sans)' } } }),
-          paper_bgcolor: 'transparent',
-          plot_bgcolor: 'transparent',
-          showlegend: false,
-          legend: { title: { text: colorBy, font: { color: 'var(--foreground)' } }, font: { color: 'var(--foreground)' } }
-      };
-
-      // Grid/tick colors must read against each theme's canvas
-      const gridC = dark ? '#3a3a3a' : '#bbbbbb';
-      const gridC2d = dark ? '#333333' : '#cccccc';
-      const tickC = dark ? '#9a9a9a' : '#888888';
-      const zeroC = dark ? '#555555' : '#888888';
-
-      if (mode === "3D") {
-          const axis3d = (label: string) => ({
-              showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
-              gridcolor: gridC, zerolinecolor: zeroC,
-              tickfont: { size: 10, color: tickC },
-              title: { text: label, font: { color: 'var(--foreground)' } }
-          });
-          baseLayout.scene = {
-              camera: camera,
-              xaxis: axis3d(customAxisNames.x),
-              yaxis: axis3d(customAxisNames.y),
-              zaxis: axis3d(customAxisNames.z),
-              bgcolor: 'transparent'
-          };
-      } else {
-          const axis2d = (label: string) => ({
-              showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
-              gridcolor: gridC2d, zerolinecolor: zeroC,
-              tickfont: { color: tickC },
-              title: { text: label, font: { color: 'var(--foreground)' } }
-          });
-          baseLayout.xaxis = axis2d(customAxisNames.x);
-          baseLayout.yaxis = axis2d(customAxisNames.y);
-          // Each view brings its own viewport — the active one's live state, a
-          // pin's captured one — since these are data-space bounds and pins are
-          // framed on their own columns. `autorange` is set explicitly so a reset
-          // actually refits: dropping `range` alone lets Plotly keep the old window.
-          if (window2d) {
-              baseLayout.xaxis.range = [...window2d.x];
-              baseLayout.yaxis.range = [...window2d.y];
-              baseLayout.xaxis.autorange = false;
-              baseLayout.yaxis.autorange = false;
-          } else {
-              baseLayout.xaxis.autorange = true;
-              baseLayout.yaxis.autorange = true;
-          }
-      }
-
-      return baseLayout;
-  };
+  const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null, sceneCamera: { eye: { x: number, y: number, z: number } } | null = null) =>
+      buildPlotLayout({
+          dark: theme === 'terminal', title, colorBy, axisNames: customAxisNames,
+          mode, axesOn, window2d, camera: sceneCamera ?? camera,
+      });
 
   // Target by id — NOT .js-plotly-plot: Plotly.toImage spawns (and can leak) a
   // temporary clone div with that class, and grabbing the purged clone exports
@@ -1888,7 +2255,14 @@ export default function Home() {
       const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
       const gd = getActivePlotDiv();
       if (!gd || !gd.data) return 'The active plot is not ready to export yet.';
+      // Hold the camera still for the capture, as exportGIF already did: a PNG
+      // saved mid-rotation catches the camera in motion, so the saved angle is
+      // not the one on screen when the button was pressed (C13).
+      const wasRotating = isRotating;
+      setIsRotating(false);
       try {
+          // One frame for the rAF loop to observe the flag before capturing.
+          await new Promise(r => requestAnimationFrame(() => r(null)));
           await setExportDressing(Plotly, gd, true);
           await Plotly.downloadImage(gd, {
               format: 'png',
@@ -1904,6 +2278,7 @@ export default function Home() {
           return message;
       } finally {
           try { await setExportDressing(Plotly, gd, false); } catch { /* a re-render restores the live plot */ }
+          setIsRotating(wasRotating);
       }
       return null;
   };
@@ -1936,6 +2311,7 @@ export default function Home() {
           canvas.width = W; canvas.height = H;
           const ctx = canvas.getContext('2d')!;
           const gif = GIFEncoder();
+          let palette: ReturnType<typeof quantize> | undefined;
           const progressNode = gifButtonRef.current;
           for (let i = 0; i < FRAMES; i++) {
               if (progressNode) progressNode.textContent = `Rendering ${i + 1}/${FRAMES}…`;
@@ -1958,7 +2334,15 @@ export default function Home() {
               ctx.fillRect(0, 0, W, H);
               ctx.drawImage(img, 0, 0, W, H);
               const { data: rgba } = ctx.getImageData(0, 0, W, H);
-              const palette = quantize(rgba, 256);
+              // Quantize once and reuse the palette (finding F16). Building a
+              // fresh 256-colour palette per frame measured 313 ms/frame at 50k
+              // points, ~36 ms when reused — and rotation is the case where
+              // reuse is safe by construction: every frame shows the same points
+              // in the same colours, only from a different angle, so frame 0's
+              // palette already covers the sequence. (A palette built per frame
+              // can also make flat regions shimmer between frames, so this is
+              // marginally better looking as well as much faster.)
+              palette ??= quantize(rgba, 256);
               gif.writeFrame(applyPalette(rgba, palette), W, H, { palette, delay: 80 });
           }
           gif.finish();
@@ -1996,10 +2380,27 @@ export default function Home() {
           const kind = getColorFieldKind(processedData.data[colorBy] ?? []);
           const title = includeExportInfo ? `${axesStr} · colored by ${colorBy}` : `${activeDataset.name}`;
 
-          const data = buildTraces(processedData, colorBy, viewMode, axes, labels, mutedMap, false, shapeBy);
-          if (includeExportInfo && kind === "continuous" && data[0]?.marker) {
-              data[0].marker.showscale = true;
-              data[0].marker.colorbar = { title: { text: colorBy }, thickness: 14 };
+          // No decorative floor, and coordinates at 6 significant figures: no
+          // scatter plot resolves the 17th digit, and the two together took a
+          // measured 20,000-point 3D export from 3,831 KB to 2,148 KB with no
+          // visible difference (finding F3).
+          const data = buildTraces(processedData, colorBy, viewMode, axes, labels, mutedMap, false, shapeBy, false)
+              .map(trace => {
+                  const t = { ...trace } as Record<string, unknown>;
+                  for (const key of ['x', 'y', 'z'] as const) {
+                      const arr = t[key];
+                      if (Array.isArray(arr)) {
+                          t[key] = arr.map(v => (typeof v === 'number' && Number.isFinite(v)
+                              ? Number(v.toPrecision(6))
+                              : v));
+                      }
+                  }
+                  return t;
+              });
+          if (includeExportInfo && kind === "continuous" && (data[0] as { marker?: Record<string, unknown> })?.marker) {
+              const m = (data[0] as { marker: Record<string, unknown> }).marker;
+              m.showscale = true;
+              m.colorbar = { title: { text: colorBy }, thickness: 14 };
           }
 
           // Standalone layout — concrete colors only (no CSS vars, which won't
@@ -2085,17 +2486,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
   const exportDatasetCsv = (): string | null => {
       const table = freshTableRef.current ?? processedData;
       if (!activeDataset || !table) return 'No active dataset to export.';
-      const encode = (value: unknown) => {
-          const text = value == null ? '' : String(value);
-          return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-      };
       const rows = [
-          table.columns.map(encode).join(','),
+          table.columns.map(csvCell).join(','),
           ...Array.from({ length: table.nRows }, (_, row) =>
-              table.columns.map(column => encode(table.data[column]?.[row])).join(',')
+              table.columns.map(column => csvCell(table.data[column]?.[row])).join(',')
           ),
       ];
-      const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      // BOM: without it Excel reads the file as the system codepage, so any
+      // non-ASCII column name or value arrives mangled (C12).
+      const blob = new Blob([CSV_BOM + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -2121,6 +2520,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             // Freeze the 2D framing too, so a pin keeps showing the region it was
             // taken on after the live view is zoomed elsewhere or reset
             range2d: viewMode === "2D" ? get2dRange() : null,
+            // ...and the 3D angle, for the same reason. Every 3D pane used to
+            // read the single live `camera`, so pins rotated with the live view
+            // and could never hold the viewpoint they were taken from — four
+            // scene redraws a frame for a picture nobody asked to move (F11).
+            // Read from the plot itself so a camera the user dragged is caught
+            // even when state has not been told about it yet.
+            camera: viewMode === "3D"
+                ? (getActivePlotDiv()?.layout?.scene?.camera ?? cameraRef.current)
+                : null,
             muted: { ...mutedMap },
             label: `${activeDataset?.name ?? 'Pinned'} · ${colorBy}` }
       ]);
@@ -2130,11 +2538,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       setPinnedViews(pinnedViews.filter(v => v.id !== id));
   };
 
-  const handleRunPCA = (vars: string[], k: number, standardize: boolean, label = ''): string => {
+  const handleRunPCA = (vars: string[], k: number, standardize: boolean, label = '', missing: MissingStrategy = 'median'): string => {
       const t = freshTableRef.current ?? processedData;
       if (!t || !activeDataset) return 'No dataset loaded.';
       try {
-          const res = runPCA(t, vars, { k, standardize, label });
+          const res = runPCA(t, vars, { k, standardize, label, missing });
           freshTableRef.current = res.table;
           const topContributors = Object.fromEntries(
               Object.entries(res.loadings).map(([pc, rows]) => [pc, rows.slice(0, 5)])
@@ -2143,6 +2551,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const run: PcaRun = {
               label: res.label, columns: cols, variables: vars, k: res.k, standardize,
               savedAt: new Date().toISOString(), varianceExplained: res.varianceExplained,
+              missing: res.missing,
           };
           setDatasets(prev => prev.map(d => {
               if (d.id !== activeId) return d;
@@ -2167,14 +2576,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               };
           }));
           if (res.k < 3) setViewMode('2D');
-          setPcaInfo({ varianceExplained: res.varianceExplained, cumulative: res.cumulative });
+          setPcaInfo({ varianceExplained: res.varianceExplained, cumulative: res.cumulative, spectrum: res.spectrum, eigenvalues: res.eigenvalues, standardize, k: res.k, columns: res.columns });
           const pct = res.varianceExplained.map((v, i) => `${cols[i] ?? `PC${i + 1}`} ${(v * 100).toFixed(0)}%`).join(', ');
           const replacedNote = res.replaced.length
               ? ` Replaced the previous ${res.label ? `"${res.label}"` : 'unnamed'} run (${res.replaced.join(', ')}).`
               : '';
+          const impNote = missingNote(res.missing, t.nRows);
           const msg = res.k === 1
-              ? `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept the top component as composite "${cols[0]}" — ${pct} of variance.${replacedNote} It is plotted on the X axis.`
-              : `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%).${replacedNote} Scores added as ${res.label ? `${res.label}-labeled` : 'PC'} columns and plotted.`;
+              ? `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept the top component as composite "${cols[0]}" — ${pct} of variance.${replacedNote} It is plotted on the X axis.${impNote}`
+              : `PCA on ${vars.length} variables (${standardize ? 'standardized' : 'unstandardized'}): kept ${res.k} components — ${pct} (cumulative ${(res.cumulative[res.cumulative.length - 1] * 100).toFixed(0)}%).${replacedNote} Scores added as ${res.label ? `${res.label}-labeled` : 'PC'} columns and plotted.${impNote}`;
           setUploadStatus(msg);
           return msg;
       } catch (err: any) {
@@ -2197,19 +2607,52 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       if (!t) return [];
       return t.columns.map(col => {
           const vals = t.data[col] ?? [];
-          let missing = 0, isNumeric = false, min = Infinity, max = -Infinity;
+          let missing = 0, isNumeric = false;
+          const nums: number[] = [];
           const counts = new Map<string, number>();
           for (const v of vals) {
               if (v == null) { missing++; continue; }
-              if (typeof v === 'number') { isNumeric = true; if (v < min) min = v; if (v > max) max = v; }
+              const n = asNumber(v);
+              if (n !== null) { isNumeric = true; nums.push(n); }
               else counts.set(String(v), (counts.get(String(v)) ?? 0) + 1);
           }
-          if (isNumeric) return { name: col, kind: 'numeric' as const, min, max, missing };
+
+          if (isNumeric) {
+              // Shape, not just extent. min/max alone cannot tell the assistant
+              // that a variable is skewed, that its "0–100" range is really
+              // 0–10 with one outlier at 100, or that a 1–7 item is stacked at
+              // the ceiling — all things it should be warning the user about.
+              // Still strictly aggregate: no value is attributable to a row.
+              nums.sort((a, b) => a - b);
+              const n = nums.length;
+              const q = (p: number) => n ? nums[Math.min(n - 1, Math.floor(p * n))] : NaN;
+              const mean = n ? nums.reduce((s, v) => s + v, 0) / n : NaN;
+              // Population sd (÷n), matching the rest of the app.
+              const sd = n ? Math.sqrt(nums.reduce((s, v) => s + (v - mean) ** 2, 0) / n) : NaN;
+              const r = (x: number) => (Number.isFinite(x) ? Math.round(x * 1e4) / 1e4 : x);
+              return {
+                  name: col, kind: 'numeric' as const, missing,
+                  min: r(nums[0]), max: r(nums[n - 1]),
+                  mean: r(mean), sd: r(sd), q1: r(q(0.25)), median: r(q(0.5)), q3: r(q(0.75)),
+              };
+          }
+
+          // Per-value guard: a value covering many rows describes a group, one
+          // covering a single row IS that row (D8). Filtering per value rather
+          // than per column keeps an ordinary 60-level `school` variable usable
+          // while still never naming an individual.
+          const shown = Array.from(counts.entries())
+              .filter(([, c]) => !valueIsTooRare(c))
+              .sort((a, b) => b[1] - a[1]);
+          // A column explicitly named as an identifier is withheld regardless:
+          // in long-format data a participant ID legitimately repeats, and would
+          // otherwise clear the frequency bar.
+          const identifier = isIdentifierColumn(col);
+          const withheld = counts.size - shown.length;
           return {
               name: col, kind: 'categorical' as const, missing, nUnique: counts.size,
-              topCategories: Array.from(counts.entries())
-                  .sort((a, b) => b[1] - a[1]).slice(0, 8)
-                  .map(([value, count]) => ({ value, count })),
+              ...(identifier ? {} : { topCategories: shown.slice(0, 8).map(([value, count]) => ({ value, count })) }),
+              ...(identifier || withheld ? { rareValuesWithheld: identifier ? counts.size : withheld } : {}),
           };
       });
   };
@@ -2223,10 +2666,12 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       const saved = localStorage.getItem('scatterlab.assistant.dock');
       if (saved === 'right' || saved === 'bottom' || saved === 'float') setAssistantDock(saved);
   }, []);
-  const changeDock = (d: 'right' | 'bottom' | 'float') => {
+  // useCallback so memoizing AssistantPanel is not defeated by a fresh closure
+  // on every Home render (F10).
+  const changeDock = useCallback((d: 'right' | 'bottom' | 'float') => {
       setAssistantDock(d);
       localStorage.setItem('scatterlab.assistant.dock', d);
-  };
+  }, []);
   bridgeRef.current = {
       getState: () => ({
           datasets: datasets.map(d => ({ name: d.name, nRows: d.table.nRows, active: d.id === activeId })),
@@ -2242,6 +2687,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               label: r.label || '(unnamed)', columns: r.columns, variables: r.variables,
               standardize: r.standardize, savedAt: r.savedAt,
               varianceExplained: r.varianceExplained.map(v => Math.round(v * 1000) / 1000),
+              missing: r.missing && { strategy: r.missing.strategy, imputedCells: r.missing.imputedCells, rowsUsed: r.missing.rowsUsed, rowsDropped: r.missing.rowsDropped },
           })),
       }),
 
@@ -2263,7 +2709,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               } else {
                   const levels = shapeCategories(t.data[opts.shape_by] ?? []);
                   if (levels.length > MAX_SHAPE_CATEGORIES) {
-                      problems.push(`"${opts.shape_by}" has ${levels.length} distinct values — shape encodes at most ${MAX_SHAPE_CATEGORIES}, and is only readable up to about 5. Use color_by for it instead, or shape a coarser column.`);
+                      problems.push(`"${opts.shape_by}" has more than ${MAX_SHAPE_CATEGORIES} distinct values — shape encodes at most ${MAX_SHAPE_CATEGORIES}, and is only readable up to about 5. Use color_by for it instead, or shape a coarser column.`);
                   }
               }
           }
@@ -2304,7 +2750,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (ax.z) rawCols.push(t.data[ax.z]);
           const useEps = opts.eps ?? eps, useMin = opts.min_samples ?? minSamples, useK = opts.k ?? k;
           const useStd = opts.standardize ?? standardize;
+          const axNames = [ax.x, ax.y, ...(ax.z ? [ax.z] : [])];
+          const unusable = nonNumericAxes(rawCols, axNames);
+          if (unusable.length) {
+              return `${unusable.map(c => `"${c}"`).join(', ')} ${unusable.length === 1 ? 'has' : 'have'} no numeric values, so clustering on the current axes would describe nothing. Set the axes to numeric columns first (set_plot), then re-run.`;
+          }
           const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
+          const imp = countImputed(rawCols, axNames);
           const labels = method === 'DBSCAN' ? dbscan(cols, useEps, useMin) : kmeans(cols, useK);
           const newTable: DataTable = {
               columns: t.columns.includes('Cluster') ? t.columns : [...t.columns, 'Cluster'],
@@ -2326,7 +2778,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const stdNote = useStd
               ? ` Variables were z-scored first${method === 'DBSCAN' ? ' (eps is in SD units)' : ''}.`
               : ' Variables were used on their raw scales.';
-          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote} Points are now colored by cluster.`;
+          return `${method} done on ${ax.z ? '3' : '2'} axes (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')}). Sizes — ${summary}.${stdNote}${missingNote({ strategy: 'median', imputedCells: imp.cells, totalCells: imp.total, byVariable: imp.byVariable, rowsUsed: t.nRows, rowsDropped: 0 }, t.nRows)} Points are now colored by cluster.`;
       },
 
       getClusterBreakdown: (attribute) => {
@@ -2339,6 +2791,16 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               return `"${attribute}" is not a column. Categorical columns: ${cats.join(', ')}.`;
           }
           const attrVals = t.data[attribute];
+          // Same principle as the column profile, applied to the whole column:
+          // if almost no value covers enough rows to be a group, the breakdown
+          // would list individuals verbatim — and would say nothing anyway,
+          // every cell reading "value 100% (1)" (D8).
+          const attrCounts = new Map<string, number>();
+          for (const v of attrVals) if (v != null) attrCounts.set(String(v), (attrCounts.get(String(v)) ?? 0) + 1);
+          const groupable = Array.from(attrCounts.values()).filter(c => !valueIsTooRare(c)).length;
+          if (isIdentifierColumn(attribute) || groupable === 0) {
+              return `"${attribute}" has ${attrCounts.size} distinct values across ${t.nRows} rows, none of them covering enough rows to describe a group — a breakdown would just list individual values rather than say anything about the clusters. Pick a column with repeated categories.`;
+          }
           const byCluster: Record<string, { total: number, counts: Record<string, number> }> = {};
           for (let i = 0; i < t.nRows; i++) {
               const c = String(clusterCol[i] ?? 'N/A');
@@ -2349,9 +2811,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           }
           return sortCategories(Object.keys(byCluster)).map(ck => {
               const { total, counts } = byCluster[ck];
-              const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6)
-                  .map(([v, n]) => `${v} ${Math.round((n / total) * 100)}% (${n})`).join(', ');
-              return `${ck} (n=${total}): ${rows}`;
+              // Filter here too, not just at the guard above: a column can hold
+              // three common categories AND a hundred one-off values, and only
+              // the per-value test keeps the latter out of the output.
+              const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+              const shown = entries.filter(([, n]) => !valueIsTooRare(n)).slice(0, 6);
+              const hidden = entries.length - entries.filter(([, n]) => !valueIsTooRare(n)).length;
+              const rows = shown.map(([v, n]) => `${v} ${Math.round((n / total) * 100)}% (${n})`).join(', ');
+              const tail = hidden ? `${shown.length ? ', ' : ''}${hidden} rarer value${hidden === 1 ? '' : 's'} not listed` : '';
+              return `${ck} (n=${total}): ${rows}${tail}`;
           }).join('\n');
       },
 
@@ -2420,13 +2888,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       runPCA: (opts) => {
           const t = latestTable();
           if (!t) return 'No dataset loaded.';
-          const numeric = numericColumns(t).filter(c => !/^PC\d+(_|$)/.test(c) && c !== 'Cluster');
+          const numeric = numericColumns(t).filter(c => !isPCColumn(c) && c !== 'Cluster');
           const vars = (opts.variables?.length ? opts.variables : numeric.filter(c => !isIdentifierColumn(c)));
           const bad = vars.filter(v => !numeric.includes(v));
           if (bad.length) return `Not usable numeric variables: ${bad.join(', ')}. Available: ${numeric.join(', ')}.`;
           const label = sanitizeLabel(opts.label ?? '');
           if (opts.label && !label) return `"${opts.label}" is not usable as a run label — use letters, digits, _ or -.`;
-          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 1), 10), opts.standardize ?? true, label);
+          const missing: MissingStrategy =
+              opts.missing === 'complete' ? 'complete' : opts.missing === 'iterative' ? 'iterative' : 'median';
+          return handleRunPCA(vars, Math.min(Math.max(opts.n_components ?? 3, 1), 10), opts.standardize ?? true, label, missing);
       },
 
       correlate: (colA, colB) => {
@@ -2446,35 +2916,64 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (!t.columns.includes(groupCol)) return `"${groupCol}" is not a column.`;
           const res = statsCompareGroups(t.data[numericCol], t.data[groupCol]);
           if (!res.groups.length) return 'No complete observations to compare.';
-          const lines = res.groups.map(g => `${g.group}: mean=${g.mean.toFixed(2)}, sd=${g.sd.toFixed(2)}, n=${g.n}`);
-          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd.toFixed(2)}, n=${res.overall.n}):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group).`;
+
+          // A grouping with (nearly) one row per group is an identifier, not a
+          // grouping: eta-squared is 1.000 by construction and means nothing.
+          // Refusing beats reporting a number that reads as a perfect result.
+          if (res.nGroups >= res.overall.n) {
+              return `"${groupCol}" has ${res.nGroups} distinct values across ${res.overall.n} observations — one per row. That is an identifier rather than a grouping, and eta-squared would be exactly 1.000 by construction. Pick a column with repeated values (a condition, demographic, or cluster).`;
+          }
+          if (res.nGroups > res.overall.n / 2) {
+              return `"${groupCol}" has ${res.nGroups} distinct values across only ${res.overall.n} observations (smallest group n=${res.minGroupN}). Group means are not estimable at that granularity and eta-squared would be inflated to near 1 by construction. Pick a coarser grouping.`;
+          }
+
+          const lines = res.groups.map(g => `${g.group}: mean=${g.mean.toFixed(2)}, sd=${g.sd == null ? 'n/a' : g.sd.toFixed(2)}, n=${g.n}`);
+          // Caveats the number cannot carry on its own.
+          const caveats: string[] = [];
+          if (res.singletonGroups) {
+              caveats.push(`${res.singletonGroups} group${res.singletonGroups === 1 ? ' has' : 's have'} a single observation, so no standard deviation exists for ${res.singletonGroups === 1 ? 'it' : 'them'}`);
+          }
+          if (res.minGroupN < 30) {
+              caveats.push(`the smallest group has n=${res.minGroupN}, so its mean is unstable`);
+          }
+          if (res.etaSquared != null && res.omegaSquared != null && res.etaSquared - res.omegaSquared > 0.05) {
+              caveats.push(`eta-squared is inflated here by the number of groups — omega-squared is the corrected figure`);
+          }
+          return `${numericCol} by ${groupCol} (overall mean=${res.overall.mean.toFixed(2)}, sd=${res.overall.sd == null ? 'n/a' : res.overall.sd.toFixed(2)} [sample, n-1], n=${res.overall.n}, ${res.nGroups} groups):\n${lines.join('\n')}\neta-squared=${res.etaSquared?.toFixed(3) ?? 'n/a'}, omega-squared=${res.omegaSquared?.toFixed(3) ?? 'n/a'} (share of variance explained by group; descriptive effect sizes, not significance tests).${caveats.length ? ` Note: ${caveats.join('; ')}.` : ''}`;
       },
 
-      suggestK: (maxK) => {
+      suggestK: (maxK, standardizeArg) => {
           const t = latestTable();
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ax = effectiveAxes(activeDataset, viewMode);
           // Diagnostics must see the same units the clustering will use, or the
-          // suggestion answers a different question than the run
+          // suggestion answers a different question than the run. run_clustering
+          // accepts an explicit standardize override while these two only read
+          // the UI toggle, so suggest_k → run_clustering(standardize: true) gave
+          // a recommendation computed on raw scales for a run on z-scores —
+          // exactly the mismatch this comment claims to prevent (D2).
+          const useStd = standardizeArg ?? standardize;
           const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
-          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
           const rows = silhouetteByK(cols, kmeans, maxK);
           if (!rows.length) return 'Too few complete rows on the current axes to evaluate.';
           const best = rows.reduce((a, b) => (b.silhouette > a.silhouette ? b : a));
-          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ', z-scored' : ', raw scales'}:\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
+          return `Mean silhouette by k on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${useStd ? ', z-scored' : ', raw scales'} — pass standardize=${useStd} to run_clustering to match:\n${rows.map(r => `k=${r.k}: ${r.silhouette.toFixed(3)}${r.k === best.k ? '  ← best' : ''}`).join('\n')}\n(Computed on up to 1200 sampled rows. Higher = better separated; values under ~0.25 suggest weak structure.)`;
       },
 
-      suggestEps: (minSamplesArg) => {
+      suggestEps: (minSamplesArg, standardizeArg) => {
           const t = latestTable();
           if (!t || !activeDataset) return 'No dataset loaded.';
           const ms = minSamplesArg ?? minSamples;
+          const useStd = standardizeArg ?? standardize;   // see suggestK (D2)
           const ax = effectiveAxes(activeDataset, viewMode);
           const rawCols = [t.data[ax.x], t.data[ax.y], ...(ax.z ? [t.data[ax.z]] : [])];
-          const cols = standardize ? zscoreCellColumns(rawCols) : rawCols;
+          const cols = useStd ? zscoreCellColumns(rawCols) : rawCols;
+          if (ms < 2) return 'min_samples must be at least 2 for an eps suggestion — at min_samples=1 every point is its own core point, so eps stops affecting the result.';
           const res = kDistancePercentiles(cols, ms);
           if (!res) return 'Too few complete rows on the current axes.';
           const p = res.percentiles;
-          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${standardize ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}, n=${res.n}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise.`;
+          return `k-distance percentiles for min_samples=${ms} on (${[ax.x, ax.y, ax.z].filter(Boolean).join(', ')})${useStd ? ' after z-scoring (eps will be in SD units)' : ' on raw scales'}: p50=${p.p50.toFixed(3)}, p75=${p.p75.toFixed(3)}, p90=${p.p90.toFixed(3)}, p95=${p.p95.toFixed(3)}, max=${p.max.toFixed(3)}. These are distances to each point's ${res.kthNeighbor}-nearest neighbour — min_samples counts the point itself, so that is the eps at which a point becomes a core point. A good eps usually sits near the knee (~p90–p95); smaller eps → more points labeled Noise. Computed on ${res.n} rows${res.n >= 2000 ? ' (a seeded random sample, capped at 2000)' : ''}. Pass standardize=${useStd} to run_clustering so the run uses these units.`;
       },
 
       switchDataset: (name) => {
@@ -2516,16 +3015,33 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           if (mode === 'match' && (!key_column || !src.table.columns.includes(key_column) || !tgt.table.columns.includes(key_column))) {
               return `mode=match needs a key_column present in both datasets. Shared columns: ${src.table.columns.filter(c => tgt.table.columns.includes(c)).join(', ') || 'none'}.`;
           }
+          // The same alignment probe the manual panel runs (D3). Matching row
+          // counts prove nothing about whether row 7 is the same respondent in
+          // both files, and this is the one tool that turns a bad join into
+          // plausible-looking results rather than an obvious error.
+          const probe = mode === 'order' ? alignmentProbe(src.table, tgt.table) : null;
+          if (probe && probe.agree < probe.total) {
+              const pct = Math.round((probe.agree / probe.total) * 100);
+              if (pct < 90) {
+                  return `Refused: order-mode alignment looks wrong. "${probe.col}" is present in both datasets and only ${probe.agree}/${probe.total} rows (${pct}%) agree, so row order does not line up and the transfer would attach values to the wrong respondents. Use mode=match with a shared key column instead.`;
+              }
+          }
+
           const name = (new_name?.trim() || `${column}·${src.name}`);
           const nt = handleTransfer({ sourceId: src.id, sourceCol: column, mode, keyCol: key_column ?? '', name });
           if (nt) freshTableRef.current = nt;
-          const srcColArr = src.table.data[column];
-          let filled = tgt.table.nRows;
+          // The real count, not the row count: order mode fills every row only
+          // when the source is at least as long, and match mode fills only the
+          // keys that were found.
+          let filled = Math.min(src.table.nRows, tgt.table.nRows);
           if (mode === 'match' && key_column) {
               const keys = new Set(src.table.data[key_column].map(String));
               filled = tgt.table.data[key_column].filter(v => keys.has(String(v))).length;
           }
-          return `Transferred "${column}" from ${src.name} into the active dataset as "${name}" (${mode} mode, ~${filled}/${tgt.table.nRows} rows filled). Points are now colored by it.`;
+          const caveat = probe
+              ? ` Alignment check on "${probe.col}": ${probe.agree}/${probe.total} rows agree${probe.agree === probe.total ? '' : ' — verify before interpreting'}.`
+              : mode === 'order' ? ' No shared column was available to verify row alignment, so order was assumed.' : '';
+          return `Transferred "${column}" from ${src.name} into the active dataset as "${name}" (${mode} mode, ${filled}/${tgt.table.nRows} rows filled).${caveat} Points are now colored by it.`;
       },
 
       removePin: (index) => {
@@ -2649,8 +3165,41 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           freshTableRef.current = null;
       },
   };
-  // Console/testing access to the assistant bridge (local state only)
-  if (typeof window !== 'undefined') (window as any).__scatterlabBridge = bridgeRef;
+  // Console/testing access to the assistant bridge (local state only).
+  //
+  // In an effect, not during render: assigning to `window` while rendering is a
+  // side effect, which React 19 strict mode double-invokes (finding F6). The
+  // `bridgeRef.current` write above deliberately stays where it is — the bridge
+  // closes over about forty pieces of state, and a dependency list that missed
+  // one would hand the assistant a stale view of the app, which is a worse bug
+  // than the allocation. The allocation cost itself is a symptom of rendering
+  // sixty times a second, which F9 removes at the source.
+  useEffect(() => {
+      (window as unknown as { __scatterlabBridge?: unknown }).__scatterlabBridge = bridgeRef;
+  }, []);
+
+  // Stable across renders, so memoizing ViewPlot is not defeated by a fresh
+  // closure on every prop pass (F13). Reads live values from refs where it must,
+  // rather than closing over state that would force it to be rebuilt.
+  const handleRelayout = useCallback((e: any) => {
+      const gd = getActivePlotDiv();
+      if (!gd) return;
+      if (e['scene.camera']) {
+          // A drag during auto-rotation means the user took the wheel.
+          if (isRotatingRef.current) setIsRotating(false);
+          setCamera(e['scene.camera']);
+          return;
+      }
+      // Mirror the user's own box-zoom/pan into state; without this the next
+      // re-render would re-apply the old layout and snap the plot back.
+      // Double-click sends autorange instead.
+      if (e['xaxis.autorange'] || e['yaxis.autorange']) { setRange2d(null); return; }
+      const x0 = e['xaxis.range[0]'], x1 = e['xaxis.range[1]'];
+      const y0 = e['yaxis.range[0]'], y1 = e['yaxis.range[1]'];
+      if ([x0, x1, y0, y1].every(v => typeof v === 'number' && Number.isFinite(v))) {
+          setRange2d({ x: [x0, x1], y: [y0, y1] });
+      }
+  }, []);
 
   const renderView = (view: any, index: number) => {
       // view object is either the active state or a pinned state
@@ -2667,37 +3216,62 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               )}
               <ViewPlot
                   view={view}
-                  layout={getLayout(view.label ?? (isPinned ? "Pinned View" : "Active View"), view.labels, view.viewMode, view.showAxes ?? false, (isPinned ? view.range2d : range2d) ?? null)}
-                  onRelayout={(e: any) => {
-                      if (view.id !== 'active') return;
-                      if (view.viewMode === "3D") {
-                          if (e['scene.camera'] && isRotating) {
-                              setIsRotating(false);
-                              setCamera(e['scene.camera']);
-                          }
-                          return;
-                      }
-                      // Mirror the user's own box-zoom/pan into state; without this
-                      // the next re-render would re-apply the old layout and snap
-                      // the plot back. Double-click sends autorange instead.
-                      if (e['xaxis.autorange'] || e['yaxis.autorange']) { setRange2d(null); return; }
-                      const x0 = e['xaxis.range[0]'], x1 = e['xaxis.range[1]'];
-                      const y0 = e['yaxis.range[0]'], y1 = e['yaxis.range[1]'];
-                      if ([x0, x1, y0, y1].every(v => typeof v === 'number' && Number.isFinite(v))) {
-                          setRange2d({ x: [x0, x1], y: [y0, y1] });
-                      }
-                  }}
+                  title={view.label ?? (isPinned ? "Pinned View" : "Active View")}
+                  colorBy={colorBy}
+                  axesOn={view.showAxes ?? false}
+                  window2d={(isPinned ? view.range2d : range2d) ?? null}
+                  camera={isPinned ? (view.camera ?? camera) : camera}
+                  onRelayout={handleRelayout}
               />
           </div>
       );
   };
 
-  if (!mounted) return null;
+  // Memoized so the live pane's props are referentially stable between renders
+  // that do not concern it. In 3D `effectiveAxes` returns the dataset's own
+  // `axes` object, so the memo held by accident; the 2D branch builds a fresh
+  // literal, which meant every unrelated state change — a slider tick, a Notes
+  // keystroke, a streaming token — rebuilt every trace and handed Plotly new
+  // array references, in the mode where that costs most (F8).
+  const activeView = useMemo(
+      () => (processedData && activeDataset
+          ? {
+              id: 'active', data: processedData, colorBy, shapeBy,
+              axes: effectiveAxes(activeDataset, viewMode),
+              labels: effectiveLabels(activeDataset, viewMode),
+              viewMode, showAxes: showAxes[viewMode], muted: mutedMap,
+              label: `${activeDataset.name} · live`,
+          }
+          : null),
+      [processedData, activeDataset, colorBy, shapeBy, viewMode, showAxes, mutedMap],
+  );
+  const allViews = useMemo(
+      () => (activeView ? [activeView, ...pinnedViews] : []),
+      [activeView, pinnedViews],
+  );
+
+  // Theme-neutral shell until next-themes reports the client's theme.
+  //
+  // This used to `return null`, so the app rendered nothing on the server AND
+  // nothing on the first client render: a blank white page until React
+  // hydrated, then another wait for the ssr:false Plotly chunk, which has no
+  // loading fallback. The EmptyState that exists to greet a first-time user was
+  // invisible until the moment it was no longer needed (finding F2). The gate
+  // itself is legitimate — next-themes cannot know the theme server-side — so
+  // the fix is a shell that commits to no theme rather than to nothing.
+  if (!mounted) {
+      return (
+          <div className="flex w-full h-screen items-center justify-center bg-[var(--background)] text-[var(--foreground)]">
+              <div className="flex flex-col items-center gap-3 opacity-60">
+                  <UploadCloud className="w-10 h-10" aria-hidden="true" />
+                  <span className="text-sm font-bold tracking-tight">Scatter Lab</span>
+                  <span className="text-xs">Loading…</span>
+              </div>
+          </div>
+      );
+  }
 
   // We construct the views array for TmuxGrid: active view is always first, then pinned views
-  const allViews = processedData
-      ? [{ id: 'active', data: processedData, colorBy, shapeBy, axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode, showAxes: showAxes[viewMode], muted: mutedMap, label: `${activeDataset?.name} · live` }, ...pinnedViews]
-      : [];
 
   return (
     <div className={`flex w-full h-screen bg-[var(--background)] text-[var(--foreground)] ${theme === 'terminal' ? 'moving-scanlines' : ''}`}>
@@ -2716,6 +3290,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 {APP_NAME}
             </h1>
             <button
+                data-guide="about"
+                onClick={() => setShowInfo(true)}
+                title="About Scatter Lab — what it does to your data, and the methods behind it"
+                aria-label="About Scatter Lab"
+                className={`p-2 border ${theme === 'primary' ? 'bauhaus-btn bg-white text-[var(--border)]' : 'border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)] rounded'}`}
+            >
+                <Info className="w-4 h-4" />
+            </button>
+            <button
                 onClick={() => setTheme(theme === 'dark' || theme === 'terminal' ? 'primary' : 'terminal')}
                 title={theme === 'terminal' ? 'Switch to Bauhaus theme' : 'Switch to Terminal theme'}
                 className={`p-2 border ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'border-[var(--border)] hover:bg-[var(--border)] text-[var(--system-green)] rounded'}`}
@@ -2724,10 +3307,20 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             </button>
         </div>
 
-        <div className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70" title="All parsing, projection, and clustering run in your browser. Nothing is uploaded anywhere.">
+        {/* The privacy claim is the app's headline promise, so it links to the
+            page that explains its one exception (the assistant) rather than
+            relying on a `title` nobody sees on touch.
+            It claims local COMPUTATION and no dataset upload — not that nothing
+            ever leaves the tab, which the assistant makes untrue. A promise the
+            app cannot keep in every configuration is worse than a narrower one. */}
+        <button
+          onClick={() => setShowInfo(true)}
+          className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70 hover:opacity-100 cursor-pointer text-left"
+          title="All parsing, projection, and clustering run in your browser, and your dataset is never uploaded to a server. The optional assistant is the one exception — it sends summaries, never raw rows. Click to read more."
+        >
           <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-          All local — data never leaves your browser
-        </div>
+          Computed locally — your dataset is never uploaded
+        </button>
 
         <SidebarGroup theme={theme}>
 
@@ -2764,24 +3357,27 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 ))}
               </div>
             )}
-            {(datasets.length > 0 || workspaces.length > 0) && (
-              <div className="flex gap-2 text-[11px]">
-                {datasets.length > 0 && (
-                  <button onClick={exportWorkspace} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
-                    Export as file
-                  </button>
-                )}
-                <label className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
-                  Import file
-                  <input
-                    type="file"
-                    accept=".json"
-                    className="hidden"
-                    onChange={e => { const f = e.target.files?.[0]; if (f) importWorkspace(f); e.target.value = ""; }}
-                  />
-                </label>
-              </div>
-            )}
+            {/* Import is ALWAYS available. It used to share the export row's
+                condition, so someone opening the app fresh with a workspace a
+                colleague sent them had no control to open it — the one moment
+                importing is most likely (C15). Export stays gated: there is
+                nothing to write until a dataset is loaded. */}
+            <div className="flex gap-2 text-[11px]">
+              {datasets.length > 0 && (
+                <button onClick={exportWorkspace} className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
+                  Export as file
+                </button>
+              )}
+              <label className="underline-offset-2 hover:underline opacity-60 hover:opacity-100 cursor-pointer">
+                Import file
+                <input
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) importWorkspace(f); e.target.value = ""; }}
+                />
+              </label>
+            </div>
             {workspaceBusy && <p className="text-[11px] opacity-70">{workspaceBusy}</p>}
           </SidebarSection>
 
@@ -2820,6 +3416,27 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                   : <span className="text-xs font-medium opacity-50 text-center">{zone.empty}</span>}
               </div>
             ))}
+            {sheetOptions.length > 1 && (
+              // Only shown for a genuine multi-sheet workbook. The default is
+              // the parser's own choice (first sheet with data), so a Readme-
+              // then-Data file works without touching this at all.
+              <label className="flex flex-col gap-1 text-[11px]">
+                <span className="opacity-70">Sheet ({sheetOptions.length} in this workbook)</span>
+                <select
+                  data-guide="sheet-picker"
+                  value={selectedSheet}
+                  onChange={e => setSelectedSheet(e.target.value)}
+                  className={`w-full text-xs px-2 py-1 border cursor-pointer ${theme === 'primary' ? 'border-[3px] border-[var(--border)] bg-white' : 'bg-[var(--input)] border-[var(--border)]'}`}
+                >
+                  <option value="">Choose automatically</option>
+                  {sheetOptions.map(s => (
+                    <option key={s.name} value={s.name} disabled={s.rows === 0}>
+                      {s.name}{s.rows === 0 ? ' — empty' : ` — ${s.rows.toLocaleString()} row${s.rows === 1 ? '' : 's'} × ${s.columns}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button
               data-guide="components-toggle"
               onClick={() => { if (showComponents) setComponentsFile(null); setShowComponents(!showComponents); }}
@@ -2836,14 +3453,17 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               </button>
             )}
             {uploadStatus && (
-              <p className="text-[11px] leading-snug opacity-70 break-words">{uploadStatus}</p>
+              // whitespace-pre-line: parser warnings are newline-separated
+              <p className="text-[11px] leading-snug opacity-70 break-words whitespace-pre-line">{uploadStatus}</p>
             )}
-            {/^Error|failed/i.test(uploadStatus) && (
+            {/^Error|failed|⚠/i.test(uploadStatus) && (
               <button
-                onClick={() => askAssistantRef.current?.(`My upload failed with this message: "${uploadStatus}". Explain what's wrong with my file and how to fix it.`)}
+                onClick={() => askAssistantRef.current?.(/^Error|failed/i.test(uploadStatus)
+                  ? `My upload failed with this message: "${uploadStatus}". Explain what's wrong with my file and how to fix it.`
+                  : `My upload produced these warnings: "${uploadStatus}". Explain what they mean for my data and how to fix the file.`)}
                 className="text-[11px] underline-offset-2 hover:underline opacity-60 hover:opacity-100 text-left cursor-pointer"
               >
-                ✳ Ask the assistant about this error
+                ✳ Ask the assistant about {/^Error|failed/i.test(uploadStatus) ? 'this error' : 'these warnings'}
               </button>
             )}
             {datasets.length > 0 && (
@@ -2877,7 +3497,13 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 </div>
                 {activeDataset?.summary?.top_contributors && (
                   <details className="text-xs">
-                    <summary className="cursor-pointer font-bold uppercase tracking-wider opacity-60 text-[10px]">Top PC contributors</summary>
+                    <summary className="cursor-pointer font-bold uppercase tracking-wider opacity-60 text-[10px]">
+                      Top PC contributors
+                    </summary>
+                    <div className="text-[10px] opacity-60 pt-1">
+                      Unit-norm eigenvector weights (scikit-learn <code>components_</code>).
+                      <InfoTip topic="pca_loadings" />
+                    </div>
                     <div className="pt-1 space-y-1">
                       {Object.entries(activeDataset.summary.top_contributors).map(([pc, vars]: [string, any]) => (
                         <div key={pc} className="leading-snug">
@@ -2969,37 +3595,84 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               <SidebarSection title="Cluster" step={4} hasBorder theme={theme} guide="cluster" order={4}>
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
-                    <option value="DBSCAN">DBSCAN</option>
-                    <option value="KMEANS">K-Means</option>
+                    <option value="DBSCAN">DBSCAN (density-based)</option>
+                    {/* "reproducible", not "deterministic": this label is the first
+                        and sometimes only place the property is named, and
+                        "deterministic" invites the reading that the app searched for
+                        the best clustering. It did not — see kmeans_deterministic. */}
+                    <option value="KMEANS">K-Means (reproducible)</option>
                 </select>
-                
+
+                {/* B3: clustering runs on the plotted axes and nothing else. Naming
+                    them live also makes the limitation self-evident the moment
+                    someone plots two arbitrary raw columns. */}
+                {clusterMethod !== "NONE" && activeDataset && (
+                    <div className="text-[11px] leading-snug opacity-70">
+                        Clusters on the plotted {viewMode === "2D" ? 'axes' : 'axes'}:{' '}
+                        <b>{[axNow?.x, axNow?.y, axNow?.z].filter(Boolean).join(' · ')}</b>
+                        <InfoTip topic="clusters_plotted_axes" />
+                    </div>
+                )}
+
                 {clusterMethod === "DBSCAN" && (
                     <div className="space-y-2 text-sm">
-                        <label className="flex justify-between"><span className="opacity-70">EPS:</span> <span>{eps}</span></label>
-                        <input type="range" min="0.1" max="5" step="0.1" value={eps} onChange={e => setEps(parseFloat(e.target.value))} className="w-full" />
+                        <label className="flex justify-between">
+                            <span className="opacity-70">
+                                EPS <span className="opacity-70">({standardize ? 'SD units' : 'axis units'})</span>:
+                                <InfoTip topic="dbscan_parameters" />
+                            </span>
+                            <span>{eps}</span>
+                        </label>
+                        {/* The range is scaled to the data, not fixed at 5 (B5).
+                            With standardize off, eps is in raw axis units — on
+                            income-scale axes the old maximum of 5 labelled 100%
+                            of points Noise with no way to go higher from the UI,
+                            so only the assistant could reach a usable value. The
+                            number box accepts anything the slider cannot. */}
+                        <div className="flex items-center gap-2">
+                            <input type="range" min={epsSliderStep} max={epsSliderMax} step={epsSliderStep} value={Math.min(eps, epsSliderMax)} onChange={e => setEps(parseFloat(e.target.value))} className="w-full" />
+                            <input
+                                type="number" min={0} step={epsSliderStep} value={eps}
+                                onChange={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v > 0) setEps(v); }}
+                                aria-label="eps value"
+                                className="w-16 flex-shrink-0 bg-[var(--input)] border border-[var(--border)] px-1 py-0.5 text-[10px] outline-none"
+                            />
+                        </div>
                         <label className="flex justify-between"><span className="opacity-70">Min Samples:</span> <span>{minSamples}</span></label>
                         <input type="range" min="1" max="50" step="1" value={minSamples} onChange={e => setMinSamples(parseInt(e.target.value))} className="w-full" />
+                        {minSamples < 2 && (
+                            <p className="text-[10px] leading-snug text-[var(--p-red)]">
+                                At min samples = 1 every point is its own core point, so eps stops affecting the result.
+                            </p>
+                        )}
                     </div>
                 )}
                 {clusterMethod === "KMEANS" && (
                     <div className="space-y-2 text-sm">
-                        <label className="flex justify-between"><span className="opacity-70">K (Clusters):</span> <span>{k}</span></label>
+                        <label className="flex justify-between">
+                            <span className="opacity-70">K (Clusters):<InfoTip topic="kmeans_deterministic" /></span>
+                            <span>{k}</span>
+                        </label>
                         <input type="range" min="2" max="20" step="1" value={k} onChange={e => setK(parseInt(e.target.value))} className="w-full" />
                     </div>
                 )}
                 {clusterMethod !== "NONE" && (
-                    <label
-                        className="flex items-center gap-2 text-xs cursor-pointer select-none"
-                        title={"Z-score each variable before the distance math, giving all variables equal weight. Suggested ON for mixed scales (e.g. Age with survey items), OFF for PC scores (their variance ordering is the point) and for items sharing a response scale (variance differences are signal). With DBSCAN, eps is then in SD units."}
-                    >
+                    <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
                         <input type="checkbox" checked={standardize} onChange={e => setStandardize(e.target.checked)} />
                         <span className="opacity-80">Standardize variables (z-score)</span>
+                        <InfoTip topic="standardize_clustering" />
                     </label>
                 )}
                 {clusterMethod !== "NONE" && (
                     <button onClick={handleCluster} disabled={isClustering} className={`w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-red)] text-white' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-[var(--abaci)]'}`}>
                         {isClustering ? "Clustering..." : "Run Clustering"}
                     </button>
+                )}
+                {clusterMethod !== "NONE" && (
+                    <p className="text-[10px] leading-snug opacity-60">
+                        Missing values are filled with the column median before the distance maths.
+                        <InfoTip topic="median_imputation" />
+                    </p>
                 )}
                 {processedData.columns.includes('Cluster') && (
                     <ClusterBreakdown
@@ -3061,6 +3734,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
         </div>
         <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} dock={assistantDock} onDockChange={changeDock} />
       </main>
+      <InfoDialog open={showInfo} onClose={() => setShowInfo(false)} theme={theme} />
     </div>
   );
 }

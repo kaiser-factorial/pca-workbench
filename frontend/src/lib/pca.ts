@@ -1,4 +1,4 @@
-import { DataTable, median, numericValues } from './table';
+import { DataTable, asNumber, median, numericValues } from './table';
 
 // In-browser PCA: median imputation → (optional) standardization → covariance/
 // correlation matrix → Jacobi eigendecomposition → scores + loadings.
@@ -11,11 +11,60 @@ export type PCAResult = {
   replaced: string[];                     // columns of a previous same-label run this one replaced
   label: string;                          // sanitized run label ('' = the unnamed run)
   loadings: Record<string, { var: string; loading: number }[]>; // per score column, sorted by |loading|
-  varianceExplained: number[];            // fraction per kept component
+  varianceExplained: number[];            // fraction per KEPT component
+  /** Variance fraction for every component, kept or not — the full scree (B4). */
+  spectrum: number[];
+  /** Eigenvalues for every component, for the Kaiser > 1 rule (B4). */
+  eigenvalues: number[];
   cumulative: number[];
   variables: string[];
   k: number;
+  /**
+   * What happened to the incomplete rows. Reported because both strategies
+   * change the answer: median imputation shrinks variance and attenuates
+   * correlations in proportion to how much was filled in, while complete-case
+   * changes n and can bias the sample if missingness is not random.
+   * "we impute" is a disclaimer; "we imputed 47 of 1,800 cells" is a disclosure
+   * the reader can act on.
+   */
+  missing: MissingReport;
 };
+
+export type MissingStrategy = 'median' | 'complete' | 'iterative';
+
+export type MissingReport = {
+  strategy: MissingStrategy;
+  /** Cells filled in (median or iterative PCA). Always 0 under complete-case. */
+  imputedCells: number;
+  totalCells: number;
+  /** Rows missing at least one value, per variable, worst first. */
+  byVariable: { var: string; n: number }[];
+  /** Rows the decomposition actually used. */
+  rowsUsed: number;
+  /** Rows excluded for having any gap. Only non-zero under complete-case. */
+  rowsDropped: number;
+  /** Iterative imputation only: how long it ran and whether it settled. */
+  iterations?: number;
+  converged?: boolean;
+};
+
+/**
+ * Is this column a PCA score column?
+ *
+ * One predicate, because there were three and they disagreed: case-sensitive
+ * `/^PC\d+(_|$)/` in the PCA panel, case-INsensitive in `suggestStandardize`,
+ * and an exact `['PC1','PC2','PC3']` membership test in `pickDefaultAxes`. A
+ * file with lowercase `pc1`/`pc2` was therefore treated as PC scores by the
+ * clustering heuristic (standardize off) while simultaneously being offered as
+ * raw PCA input by the panel (finding E2).
+ *
+ * Case-insensitive is the right resolution: a components file written by R or
+ * SPSS may use either case, and nothing downstream cares which.
+ */
+export const isPCColumn = (name: string): boolean => /^PC\d+(_|$)/i.test(name);
+
+/** The bare PC1..PC3 a components-file projection creates, in order. */
+export const BASE_PC_COLUMNS = ['PC1', 'PC2', 'PC3'];
 
 // Run labels become column-name fragments — keep them word-shaped
 export const sanitizeLabel = (s: string): string =>
@@ -71,11 +120,22 @@ const jacobiEigen = (A: number[][]): { values: number[]; vectors: number[][] } =
   const V: number[][] = Array.from({ length: n }, (_, i) =>
     Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
 
+  // Convergence is measured RELATIVE to the matrix's own scale. The absolute
+  // `sqrt(off) < 1e-12` this replaces is unreachable for a covariance PCA on
+  // large-magnitude columns — income in dollars, reaction times in
+  // milliseconds — so those runs burned all 100 sweeps every time, which at
+  // p ≈ 200 is on the order of 10⁹ operations on the main thread for a result
+  // that had converged in a handful (finding A13). Results were correct, just
+  // paid for many times over.
+  let scale = 0;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) scale += a[i][j] * a[i][j];
+  const tolerance = Math.max(Math.sqrt(scale) * 1e-14, Number.MIN_VALUE);
+
   for (let sweep = 0; sweep < 100; sweep++) {
     let off = 0;
     for (let i = 0; i < n; i++)
       for (let j = i + 1; j < n; j++) off += a[i][j] * a[i][j];
-    if (Math.sqrt(off) < 1e-12) break;
+    if (Math.sqrt(off) <= tolerance) break;
 
     for (let p = 0; p < n - 1; p++) {
       for (let q = p + 1; q < n; q++) {
@@ -112,45 +172,206 @@ const jacobiEigen = (A: number[][]): { values: number[]; vectors: number[][] } =
   };
 };
 
+// Regularized iterative PCA imputation (Josse & Husson 2012; the method behind
+// R's missMDA::imputePCA). Where median imputation ignores the correlation
+// structure entirely — it fills every gap in a variable with the same number —
+// this reconstructs each missing cell from the low-rank structure of the other
+// variables, iterating until the fill stops moving:
+//
+//   1. start from the column mean
+//   2. PCA the completed matrix, keep `rank` components
+//   3. rebuild the matrix from those components
+//   4. overwrite ONLY the missing cells with the rebuilt values; observed data
+//      is never altered
+//   5. repeat from 2 until the imputed values stop changing
+//
+// The regularization matters and is not optional: plain iterative PCA fits the
+// noise in the observed cells and drifts, especially with many components or
+// heavy missingness. Each component's contribution is shrunk by
+// (lambda_s - sigma^2)/lambda_s, where sigma^2 is the mean of the discarded
+// eigenvalues — an estimate of residual noise. A component barely above the
+// noise floor is therefore damped towards zero rather than trusted.
+//
+// Honest limits, restated for the user in disclosures.ts: `rank` is taken from
+// the number of components being kept rather than chosen by cross-validation
+// (missMDA's estim_ncpPCA), and this is single imputation, so downstream
+// results ignore the uncertainty in the filled values and standard errors are
+// optimistic. It is a better point estimate, not a substitute for a model of
+// the missingness.
+export const imputeIterativePCA = (
+  cols: (number | null)[][],
+  opts: { rank?: number; standardize?: boolean; maxIter?: number; tol?: number } = {},
+): { columns: number[][]; iterations: number; converged: boolean; rank: number } => {
+  const p = cols.length;
+  const n = cols[0]?.length ?? 0;
+  const standardize = opts.standardize ?? true;
+  const maxIter = opts.maxIter ?? 200;
+  const tol = opts.tol ?? 1e-8;
+  // At least one discarded component is required, or sigma^2 has nothing to
+  // estimate from and the fit is unregularized.
+  const rank = Math.max(1, Math.min(opts.rank ?? 2, p - 1));
+
+  const observed: boolean[][] = cols.map(c =>
+    Array.from({ length: n }, (_, i) => typeof c[i] === 'number' && Number.isFinite(c[i] as number)));
+
+  // Start from the column mean of the observed values.
+  const X: number[][] = Array.from({ length: n }, () => new Array(p).fill(0));
+  for (let j = 0; j < p; j++) {
+    let sum = 0, cnt = 0;
+    for (let i = 0; i < n; i++) if (observed[j][i]) { sum += cols[j][i] as number; cnt++; }
+    const mean0 = cnt ? sum / cnt : 0;
+    for (let i = 0; i < n; i++) X[i][j] = observed[j][i] ? (cols[j][i] as number) : mean0;
+  }
+
+  const anyMissing = observed.some(c => c.some(o => !o));
+  if (!anyMissing || n < 3) return { columns: transpose(X, n, p), iterations: 0, converged: true, rank };
+
+  let iterations = 0, converged = false;
+  for (let it = 1; it <= maxIter; it++) {
+    iterations = it;
+    // Centre and (optionally) scale using the CURRENT completed matrix — the
+    // moments move as the fill changes, which is why this is inside the loop.
+    const mu = new Array(p).fill(0), sd = new Array(p).fill(1);
+    for (let j = 0; j < p; j++) {
+      let sum = 0;
+      for (let i = 0; i < n; i++) sum += X[i][j];
+      mu[j] = sum / n;
+      let sq = 0;
+      for (let i = 0; i < n; i++) sq += (X[i][j] - mu[j]) ** 2;
+      const s = Math.sqrt(sq / n);
+      sd[j] = standardize ? (s || 1) : 1;
+    }
+    const Z: number[][] = Array.from({ length: n }, (_, i) =>
+      Array.from({ length: p }, (_, j) => (X[i][j] - mu[j]) / sd[j]));
+
+    const C: number[][] = Array.from({ length: p }, () => new Array(p).fill(0));
+    for (let a = 0; a < p; a++) {
+      for (let b = a; b < p; b++) {
+        let acc = 0;
+        for (let i = 0; i < n; i++) acc += Z[i][a] * Z[i][b];
+        C[a][b] = C[b][a] = acc / n;
+      }
+    }
+    const { values, vectors } = jacobiEigen(C);
+
+    // sigma^2: mean of the eigenvalues we are throwing away = residual noise.
+    let tail = 0;
+    for (let s = rank; s < p; s++) tail += Math.max(values[s], 0);
+    const sigma2 = tail / (p - rank);
+
+    // Rank-`rank` reconstruction with each component shrunk toward zero in
+    // proportion to how close its eigenvalue sits to the noise floor.
+    const recon: number[][] = Array.from({ length: n }, () => new Array(p).fill(0));
+    for (let s = 0; s < rank; s++) {
+      const lam = Math.max(values[s], 0);
+      const shrink = lam > 0 ? Math.max(0, (lam - sigma2) / lam) : 0;
+      if (shrink === 0) continue;
+      const v = vectors[s];
+      for (let i = 0; i < n; i++) {
+        let score = 0;
+        for (let j = 0; j < p; j++) score += Z[i][j] * v[j];
+        const f = score * shrink;
+        for (let j = 0; j < p; j++) recon[i][j] += f * v[j];
+      }
+    }
+
+    // Replace ONLY the missing cells; observed values are never touched.
+    let delta = 0, scale = 0;
+    for (let j = 0; j < p; j++) {
+      for (let i = 0; i < n; i++) {
+        if (observed[j][i]) continue;
+        const next = recon[i][j] * sd[j] + mu[j];
+        delta += (next - X[i][j]) ** 2;
+        scale += next ** 2;
+        X[i][j] = next;
+      }
+    }
+    if (delta <= tol * Math.max(scale, 1e-12)) { converged = true; break; }
+  }
+
+  return { columns: transpose(X, n, p), iterations, converged, rank };
+};
+
+const transpose = (X: number[][], n: number, p: number): number[][] =>
+  Array.from({ length: p }, (_, j) => Array.from({ length: n }, (_, i) => X[i][j]));
+
 export const runPCA = (
   table: DataTable,
   variables: string[],
-  opts: { k?: number; standardize?: boolean; label?: string } = {},
+  opts: { k?: number; standardize?: boolean; label?: string; missing?: MissingStrategy } = {},
 ): PCAResult => {
   const standardize = opts.standardize ?? true;
+  const strategy: MissingStrategy = opts.missing ?? 'median';
   const label = sanitizeLabel(opts.label ?? '');
   const p = variables.length;
   if (p < 2) throw new Error('Pick at least two numeric variables for a PCA.');
   const n = table.nRows;
   if (n < 3) throw new Error('Too few rows for a PCA.');
   // k = 1 is legitimate: it keeps only the first component, the composite-score
-  // workflow (run per item subset, keep the top PC of each as a named score)
-  const k = Math.max(1, Math.min(opts.k ?? 3, p));
+  // workflow (run per item subset, keep the top PC of each as a named score).
+  //
+  // Clamped to the RANK, min(p, n-1), not just to p. With n = 3 and p = 5 the
+  // covariance matrix has rank 2, so components 3 to 5 have numerically-zero
+  // eigenvalues and their scores are floating-point noise — but they were
+  // produced, plotted and reported with a variance-explained figure like any
+  // other (finding A10).
+  const maxRank = Math.max(1, Math.min(p, n - 1));
+  const k = Math.max(1, Math.min(opts.k ?? 3, maxRank));
 
-  // median-impute, center, optionally scale (population sd, sklearn-style)
-  const X: number[][] = Array.from({ length: n }, () => new Array(p));
+  // Coerce every selected variable once: null marks "not observed as a number",
+  // which is what both strategies key off.
+  const cols: (number | null)[][] = variables.map(v =>
+    (table.data[v] ?? []).map(asNumber));
+  const missingByVar: { var: string; n: number }[] = [];
+  cols.forEach((col, j) => {
+    const have = numericValues(col).length;
+    if (have === 0) throw new Error(`"${variables[j]}" has no numeric values.`);
+    // Rows past the end of a short column count as missing too.
+    if (have < n) missingByVar.push({ var: variables[j], n: n - have });
+  });
+
+  // Which rows the decomposition runs on. Complete-case keeps only rows with no
+  // gap in ANY selected variable, so adding a poorly-covered variable can drop a
+  // lot of rows at once — hence rowsDropped is reported, not just inferred.
+  // Iterative imputation reconstructs the gaps from the low-rank structure
+  // before any of the decomposition below runs; it fills every row, so the row
+  // set is the same as median's.
+  const iterative = strategy === 'iterative'
+    ? imputeIterativePCA(cols, { rank: k, standardize })
+    : null;
+
+  const rows: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (strategy !== 'complete' || cols.every(c => typeof c[i] === 'number')) rows.push(i);
+  }
+  if (strategy === 'complete' && rows.length < 3) {
+    throw new Error(
+      `Complete-case analysis leaves only ${rows.length} row${rows.length === 1 ? '' : 's'} with no missing values across these ${p} variables — too few for a PCA. Use median imputation, or drop the variables with the most missing data.`
+    );
+  }
+  const m = rows.length;
+
+  // centre, optionally scale (population sd, sklearn-style)
+  const X: number[][] = Array.from({ length: m }, () => new Array(p));
   for (let j = 0; j < p; j++) {
-    const raw = (table.data[variables[j]] ?? []).map(v => {
-      if (typeof v === 'number' && Number.isFinite(v)) return v;
-      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
-      return null;
-    });
-    const nums = numericValues(raw);
-    if (nums.length === 0) throw new Error(`"${variables[j]}" has no numeric values.`);
-    const med = median(nums);
+    const col = cols[j];
+    // Under complete-case the median is never consulted; under imputation it is
+    // computed from the observed values only, which is the standard definition.
+    const med = median(numericValues(col));
+    const filled = iterative?.columns[j];
     let sum = 0;
-    for (let i = 0; i < n; i++) {
-      const v = raw[i] ?? med;
-      X[i][j] = v;
+    for (let r = 0; r < m; r++) {
+      const v = filled ? filled[rows[r]] : (col[rows[r]] ?? med);
+      X[r][j] = v;
       sum += v;
     }
-    const mean = sum / n;
+    const mean = sum / m;
     let sq = 0;
-    for (let i = 0; i < n; i++) sq += (X[i][j] - mean) ** 2;
-    const sd = Math.sqrt(sq / n);
-    if (standardize && sd === 0) throw new Error(`"${variables[j]}" is constant — drop it or turn off standardization.`);
+    for (let r = 0; r < m; r++) sq += (X[r][j] - mean) ** 2;
+    const sd = Math.sqrt(sq / m);
+    if (standardize && sd === 0) throw new Error(`"${variables[j]}" is constant${strategy === 'complete' ? ' across the complete cases' : ''} — drop it or turn off standardization.`);
     const div = standardize ? sd : 1;
-    for (let i = 0; i < n; i++) X[i][j] = (X[i][j] - mean) / div;
+    for (let r = 0; r < m; r++) X[r][j] = (X[r][j] - mean) / div;
   }
 
   // covariance (= correlation when standardized) matrix
@@ -158,8 +379,8 @@ export const runPCA = (
   for (let i = 0; i < p; i++) {
     for (let j = i; j < p; j++) {
       let s = 0;
-      for (let r = 0; r < n; r++) s += X[r][i] * X[r][j];
-      C[i][j] = C[j][i] = s / n;
+      for (let r = 0; r < m; r++) s += X[r][i] * X[r][j];
+      C[i][j] = C[j][i] = s / m;
     }
   }
 
@@ -173,13 +394,15 @@ export const runPCA = (
     return vec[maxIdx] < 0 ? vec.map(v => -v) : vec;
   });
 
-  // scores: X̃ · component
-  const scoreCols: number[][] = comps.map(vec => {
-    const col = new Array<number>(n);
-    for (let r = 0; r < n; r++) {
+  // scores: X̃ · component, written back at the ORIGINAL row positions so the
+  // columnar table keeps its shape. Rows excluded by complete-case get null
+  // rather than a fabricated score — they are genuinely unscored.
+  const scoreCols: (number | null)[][] = comps.map(vec => {
+    const col = new Array<number | null>(n).fill(null);
+    for (let r = 0; r < m; r++) {
       let s = 0;
       for (let j = 0; j < p; j++) s += X[r][j] * vec[j];
-      col[r] = s;
+      col[rows[r]] = s;
     }
     return col;
   });
@@ -208,10 +431,31 @@ export const runPCA = (
   });
 
   const varianceExplained = values.slice(0, k).map(v => Math.max(v, 0) / total);
+  // The FULL spectrum, not just the kept components (finding B4). The scree
+  // chart plotted varianceExplained, whose length is k — so keeping 3
+  // components drew 3 bars. But methods.ts teaches the Cattell scree test and
+  // the Kaiser eigenvalue > 1 rule, and both need every eigenvalue: the elbow
+  // is invisible if the plot stops at the elbow.
+  const spectrum = values.map(v => Math.max(v, 0) / total);
+  // Eigenvalues themselves, for the Kaiser criterion. On a correlation PCA each
+  // variable contributes 1, so "> 1" is the meaningful line; on a covariance
+  // PCA it is not, which is why the UI only draws it when standardized.
+  const eigenvalues = values.map(v => Math.max(v, 0));
   const cumulative = varianceExplained.reduce<number[]>((acc, v) => {
     acc.push((acc[acc.length - 1] ?? 0) + v);
     return acc;
   }, []);
 
-  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, cumulative, variables, k };
+  const byVariable = missingByVar.sort((a, b) => b.n - a.n);
+  const missing: MissingReport = {
+    strategy,
+    imputedCells: strategy === 'complete' ? 0 : byVariable.reduce((s, v) => s + v.n, 0),
+    totalCells: n * p,
+    byVariable,
+    rowsUsed: m,
+    rowsDropped: n - m,
+    ...(iterative ? { iterations: iterative.iterations, converged: iterative.converged } : {}),
+  };
+
+  return { table: newTable, columns: pcNames, replaced, label, loadings, varianceExplained, spectrum, eigenvalues, cumulative, variables, k, missing };
 };

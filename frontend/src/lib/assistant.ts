@@ -1,4 +1,20 @@
-import OpenAI from 'openai';
+import type OpenAIType from 'openai';
+
+// The OpenAI client is loaded on FIRST USE, not at module load (finding F1).
+//
+// A static import put the client — 224 KB gzipped before tree-shaking — on the
+// critical path for every visitor, including everyone who never opens the
+// assistant and everyone without an API key, for whom the panel is inert. The
+// codebase already does this correctly four times over: xlsx, hyparquet, gifenc
+// and Plotly are all behind `await import(...)`.
+//
+// The handle is cached because `describeApiError` needs the error CLASSES for
+// its instanceof checks, and it is called from a synchronous context.
+let OpenAICtor: typeof OpenAIType | null = null;
+const loadOpenAI = async (): Promise<typeof OpenAIType> => {
+  if (!OpenAICtor) OpenAICtor = (await import('openai')).default;
+  return OpenAICtor;
+};
 import { METHODS_TOPICS, searchMethods } from './methods';
 import type {
   ChatCompletionMessageParam,
@@ -19,11 +35,27 @@ export const DEFAULT_MODEL = 'anthropic/claude-sonnet-4.5';
 export type ColumnProfile = {
   name: string;
   kind: 'numeric' | 'categorical';
+  missing: number;
+  // --- numeric ---
   min?: number;
   max?: number;
-  missing: number;
+  /** Population sd (÷n), the convention used everywhere else in this app. */
+  mean?: number;
+  sd?: number;
+  q1?: number;
+  median?: number;
+  q3?: number;
+  // --- categorical ---
   nUnique?: number;
+  /**
+   * Values frequent enough to be a category rather than a person. A value
+   * occurring once IS a row, so the guard is per-value, not per-column: a
+   * 60-level `school` column where every level has 80 rows is a category set
+   * and goes; an `email` column is 200 individuals and does not (D8).
+   */
   topCategories?: { value: string; count: number }[];
+  /** Distinct values withheld for being too rare to aggregate. */
+  rareValuesWithheld?: number;
 };
 
 // The page implements this; the assistant drives the app through it.
@@ -41,6 +73,7 @@ export type AppBridge = {
     pcaRuns: {
       label: string; columns: string[]; variables: string[];
       standardize: boolean; savedAt: string; varianceExplained: number[];
+      missing?: { strategy: 'median' | 'complete' | 'iterative'; imputedCells: number; rowsUsed: number; rowsDropped: number };
     }[];
   };
   setPlot: (opts: { x?: string; y?: string; z?: string; color_by?: string; shape_by?: string; view_mode?: '2D' | '3D' }) => string;
@@ -54,11 +87,11 @@ export type AppBridge = {
   pinView: () => string;
   loadDemoData: () => Promise<string>;
   // analysis (aggregates only)
-  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string }) => string;
+  runPCA: (opts: { variables?: string[]; n_components?: number; standardize?: boolean; label?: string; missing?: 'median' | 'complete' | 'iterative' }) => string;
   correlate: (colA: string, colB: string) => string;
   compareGroups: (numericCol: string, groupCol: string) => string;
-  suggestK: (maxK: number) => string;
-  suggestEps: (minSamples: number) => string;
+  suggestK: (maxK: number, standardize?: boolean) => string;
+  suggestEps: (minSamples: number, standardize?: boolean) => string;
   // app management
   switchDataset: (name: string) => string;
   setCategoryVisibility: (categories: string[], state: 'normal' | 'muted' | 'hidden') => string;
@@ -96,7 +129,7 @@ export const MUTATING_TOOLS = new Set([
 // from, so tour answers describe the UI as it actually is.
 export const TUTORIAL: Record<string, string> = {
   overview:
-    'Scatter Lab turns tabular data into interactive 2D/3D scatter plots, entirely in the browser — nothing is uploaded anywhere. Typical flow: add a dataset → assign variables to axes and color in the Variables panel → run PCA or cluster when useful → compare views → export. The built-in Iris demo opens in a species-colored 3D flower view; during a guided tour, demonstrate the marker-shape control by adding Species as the shape encoding after it loads (the initial view intentionally leaves shape unused).',
+    'Scatter Lab turns tabular data into interactive 2D/3D scatter plots. All computation runs in the browser and the dataset is never uploaded to a server (you, the assistant, are the one exception — see the privacy topic). Typical flow: add a dataset → assign variables to axes and color in the Variables panel → run PCA or cluster when useful → compare views → export. The built-in Iris demo opens in a species-colored 3D flower view; during a guided tour, demonstrate the marker-shape control by adding Species as the shape encoding after it loads (the initial view intentionally leaves shape unused).',
   load_data:
     'Add data via the dropzone in the sidebar ("1. Data") — drag a CSV, XLSX, or Parquet file in, or click to browse, then press "Add Dataset". Datasets with PC score columns plot immediately. Optionally, "+ Project through a PCA components file" reveals a second dropzone: supply a loadings file and the app median-imputes, standardizes, and computes PC1–PC3 itself. Several datasets can be loaded at once; click one in the list to make it active.',
   variables:
@@ -104,7 +137,7 @@ export const TUTORIAL: Record<string, string> = {
   plotting:
     'The View section ("5. View") switches 2D/3D, toggles axis grids, renames axis labels for exports, and starts an auto-rotation of the 3D camera. Drag the plot to rotate manually, scroll to zoom. The legend panel on the right can mute (click once) or hide (click twice) individual categories.',
   pca:
-    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. A run on a variable subset can be given a label (auto-suggested from the item names): its columns become PC1_<label>…, or COMP_<label> when keeping just the top component — the composite-score workflow for building one named score per item group and plotting them against each other. Re-running a label replaces that run\'s columns (confirmed by a dialog); differently-labeled runs coexist. An unlabeled run adds plain PC1…PCk. The scree bars show variance explained, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
+    'The PCA section ("3. PCA") runs a principal component analysis right in the browser: tick which numeric variables to include, choose how many components to keep, and press Run. Standardize (on by default) makes it a correlation-based PCA — the right choice when variables are on different scales. "Missing values" chooses between Median impute (default; keeps every row, shrinks variance), Iterative PCA (reconstructs each gap from the low-rank structure of the other variables — roughly half the error of the median on correlated data), and Complete cases (drops any row with a gap, so those rows get no score); the panel shows how many rows survive, flags any variable over 50% missing, and every run reports what it filled or dropped. A run on a variable subset can be given a label (auto-suggested from the item names): its columns become PC1_<label>…, or COMP_<label> when keeping just the top component — the composite-score workflow for building one named score per item group and plotting them against each other. Re-running a label replaces that run\'s columns (confirmed by a dialog); differently-labeled runs coexist. An unlabeled run adds plain PC1…PCk. The scree bars show variance explained, and "Top PC contributors" lists each component\'s strongest loadings. Alternatively, a precomputed components file can be supplied at upload time.',
   clustering:
     'In "4. Cluster", pick DBSCAN (density-based; eps = neighborhood radius, min samples = density threshold; points in no cluster become gray "Noise") or K-Means (choose k). Clustering runs on the currently plotted axes and adds a Cluster column, which also becomes the point coloring. The "Standardize variables (z-score)" checkbox gives every variable equal weight in the distance — its default follows the data: on for mixed scales, off for PC scores and shared-scale items (where it is a deliberate methodological choice). Below the button, "Cluster info by" cross-tabulates clusters against any categorical variable — "% of cluster" shows composition, "% of group" normalizes away base rates. Choose Viridis, Inferno, or Greens and use "Save heatmap" to download a PNG with its 0–100% colour scale legend.',
   compare_pin:
@@ -118,7 +151,7 @@ export const TUTORIAL: Record<string, string> = {
   workspaces:
     'The Workspace section saves the entire session — datasets, pins, notes, settings — locally in the browser (IndexedDB). "Export as file" downloads a workspace as a shareable file; "Import file" loads one. Nothing syncs to any server.',
   privacy:
-    'All parsing, projection, and clustering run in the browser; data never leaves the machine. The assistant is the one opt-in exception: it sends column names and aggregate summaries (never raw rows) to the configured model API, using your own key.',
+    'All parsing, projection, and clustering run in the browser, and the dataset itself is never uploaded to a server. Do not tell the user that nothing leaves their machine — that is not true while you are connected. You are the one opt-in exception: column names and aggregate summaries (never raw rows) are sent to the configured model API, using the user\'s own key.',
 };
 
 export const TUTORIAL_TOPICS = Object.keys(TUTORIAL);
@@ -296,6 +329,11 @@ const TOOLS: ChatCompletionTool[] = [
           variables: { type: 'array', items: { type: 'string' }, description: 'Numeric columns to include (default: all numeric non-component columns)' },
           n_components: { type: 'integer', description: '1-10, default 3. 1 = keep only the top component as a COMP_<label> composite score' },
           standardize: { type: 'boolean', description: 'Default true (correlation-based PCA)' },
+          missing: {
+            type: 'string',
+            enum: ['median', 'complete', 'iterative'],
+            description: 'How to handle rows with missing values. "median" (default) fills each gap with that variable\'s median — simple, but ignores the correlation structure. "complete" drops any row with a gap in the selected variables, keeping the covariance honest but reducing n and potentially biasing the sample. "iterative" is regularized iterative PCA (the missMDA imputePCA method): it reconstructs each gap from the low-rank structure of the other variables and iterates to convergence, which recovers missing values far more accurately when variables are correlated, and is marginally worse than median when they are not. All three are single imputation, so none of them propagate uncertainty. With substantial missingness, running more than one and comparing is the recommended check — see get_methods_reference topic pca_caveats.',
+          },
           label: {
             type: 'string',
             description: 'Short semantic name for a subset run (e.g. "openness"). Letters/digits/underscore. Omit only for a full-variable-set PCA (bare PC1..PCk).',
@@ -327,7 +365,7 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'compare_groups',
       description:
-        'Compare a numeric column across the levels of a categorical column: per-group n/mean/sd, overall stats, and eta-squared (share of variance explained by group). Use for "does X differ by Y" questions.',
+        'Compare a numeric column across the levels of a categorical column: per-group n/mean/sd, overall stats, and both eta-squared and omega-squared (the bias-corrected version — prefer it when there are many groups). Standard deviations are population values. These are descriptive effect sizes, not significance tests. Use for "does X differ by Y" questions. Refuses identifier-like columns, where there is roughly one row per group and eta-squared would be 1.000 by construction.',
       parameters: {
         type: 'object',
         properties: {
@@ -349,6 +387,7 @@ const TOOLS: ChatCompletionTool[] = [
         type: 'object',
         properties: {
           max_k: { type: 'integer', description: 'Highest k to evaluate (default 8, max 12)' },
+          standardize: { type: 'boolean', description: 'Compute the diagnostic on z-scored axes. Defaults to the current UI toggle. Pass the SAME value you intend to give run_clustering — a recommendation computed on raw scales does not apply to a run performed on z-scores (D2).' },
         },
         additionalProperties: false,
       },
@@ -359,11 +398,12 @@ const TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'suggest_eps',
       description:
-        'DBSCAN diagnostics on the currently plotted axes: percentiles of the k-distance curve (distance to each point\'s min_samples-th neighbor). A good eps usually sits near the curve\'s knee, around the 90th-95th percentile. Use before run_clustering with DBSCAN.',
+        'DBSCAN diagnostics on the currently plotted axes: percentiles of the k-distance curve. Because min_samples counts the point itself, the curve is the distance to each point\'s (min_samples - 1)-th nearest neighbour — i.e. the eps at which that point becomes a core point. A good eps usually sits near the curve\'s knee, around the 90th-95th percentile. Requires min_samples >= 2. Computed on up to 2000 sampled rows, so treat it as a starting point rather than an exact answer. Use before run_clustering with DBSCAN.',
       parameters: {
         type: 'object',
         properties: {
           min_samples: { type: 'integer', description: 'min_samples the user intends to use (default: current setting)' },
+          standardize: { type: 'boolean', description: 'Compute the curve on z-scored axes. Defaults to the current UI toggle. Pass the SAME value you intend to give run_clustering: with standardize on, eps is in standard deviations, and a curve read in raw units names an eps that means something else (D2).' },
         },
         additionalProperties: false,
       },
@@ -524,9 +564,16 @@ export const buildSystemPrompt = (bridge: AppBridge): string => {
 
   return `You are the built-in assistant of Scatter Lab, a browser-based workbench where researchers explore tabular data as interactive 2D/3D scatter plots, project data through PCA components, run DBSCAN/K-Means clustering, and compare pinned views. The user is typically a survey researcher.
 
-You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, configure and save a cluster-composition heatmap, save PNG, interactive HTML, rotating GIF, or active-dataset CSV exports, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
+You can drive the app with your tools: change plot axes, coloring and marker shape, switch 2D/3D or the active dataset, run clustering, read cluster compositions, configure and save a cluster-composition heatmap, save PNG, interactive HTML, rotating GIF, or active-dataset CSV exports, mute/hide legend categories, transfer columns between datasets, pin/remove views, and save workspaces. You also have aggregate analysis tools: run_pca (in-browser principal component analysis — use it when the user wants to reduce dimensions or "see the structure" of a set of scale items; it reports how much data was imputed or dropped, which you should mention when it is not negligible), correlate (Pearson/Spearman), compare_groups (means by category + eta-squared), and clustering diagnostics (suggest_k silhouette scores, suggest_eps k-distance percentiles) — prefer running these over guessing parameters or relationships. Use tools to act, then summarize what you did in one or two sentences. When the user asks a question about their data, answer from the column profiles and aggregate tool results — never invent numbers you have not seen in this conversation.
 
-You see column metadata and aggregate statistics only; you never see raw data rows. If asked about individual rows or participants, explain that you only have access to summaries.
+You see column metadata and aggregate statistics only; you never see raw data rows. Numeric columns come as min/max/mean/sd/quartiles — use those to notice skew, ceiling effects and likely outliers rather than asking for the data. Categorical columns list only values covering at least 5 rows; rareValuesWithheld counts the distinct values held back for being rarer than that, and identifier-like columns list none at all. That is a privacy guarantee, not a gap to work around: never ask the user to paste rows, and if asked about an individual row or participant, explain that you only have access to summaries.
+
+Facts about THIS app that you cannot guess and are likely to get wrong from priors — state them when they come up, without needing to look them up:
+- K-Means here is DETERMINISTIC. It is seeded k-means++ from fixed seeds, best of 10 initialisations, up to 300 iterations, so the same data and the same k always give identical clusters. The usual answer ("no, k-means is randomly initialised") is wrong for this app. Say so, and add that reproducibility is not evidence of stable structure — to test that, vary k and re-run on subsamples.
+- Missing values in CLUSTERING are always median-imputed. In PCA the user chooses: median, regularized iterative PCA (missMDA imputePCA), or complete-case. Every run reports how many cells it filled or how many rows it dropped, and in which variables.
+- Clustering runs on the two or three columns currently on the X, Y and Z axes — nothing else. Choosing the axes IS choosing the features. Good for PC scores, weak for two arbitrary raw columns.
+- compare_groups reports SAMPLE standard deviations (n-1), the reporting convention; the PCA and projection use population (÷n) internally to match scikit-learn. eta-squared is reported alongside omega-squared, which corrects its upward bias — prefer omega-squared when there are many groups.
+- suggest_eps reads the k-distance curve at the (min_samples - 1)-th neighbour, because dbscan counts the point itself toward min_samples. eps is in the units of the plotted axes, or in standard deviations when standardize is on.
 
 Statistical guidance is welcome: help interpret PC loadings, choose sensible eps/min_samples or k, and reason about what cluster compositions suggest — while being clear about the limits of exploratory clustering (results depend on parameters; clusters are descriptive, not proof of latent groups).
 
@@ -563,8 +610,9 @@ export const summarizeArgs = (argsJson: string): string => {
   }
 };
 
-const makeClient = (apiKey: string, baseURL: string) =>
-  new OpenAI({
+const makeClient = async (apiKey: string, baseURL: string) => {
+  const OpenAI = await loadOpenAI();
+  return new OpenAI({
     apiKey,
     baseURL,
     dangerouslyAllowBrowser: true,
@@ -574,6 +622,7 @@ const makeClient = (apiKey: string, baseURL: string) =>
       'X-Title': 'Scatter Lab',
     },
   });
+};
 
 // One user turn: stream the response, execute any tool calls, loop until the
 // model stops asking for tools. Returns the updated history.
@@ -589,7 +638,7 @@ export const runAssistantTurn = async (
   bridgeRef: { current: AppBridge },
   handlers: StreamHandlers,
 ): Promise<ChatCompletionMessageParam[]> => {
-  const client = makeClient(apiKey, baseURL);
+  const client = await makeClient(apiKey, baseURL);
   const messages: ChatCompletionMessageParam[] = [...history, { role: 'user', content: userText }];
 
   const executeTool = async (name: string, argsJson: string): Promise<string> => {
@@ -638,9 +687,9 @@ export const runAssistantTurn = async (
         case 'compare_groups':
           return bridge.compareGroups(input.numeric_col, input.group_col);
         case 'suggest_k':
-          return bridge.suggestK(Math.min(input?.max_k ?? 8, 12));
+          return bridge.suggestK(Math.min(input?.max_k ?? 8, 12), input?.standardize);
         case 'suggest_eps':
-          return bridge.suggestEps(input?.min_samples);
+          return bridge.suggestEps(input?.min_samples, input?.standardize);
         case 'switch_dataset':
           return bridge.switchDataset(input.name);
         case 'set_category_visibility':
@@ -763,10 +812,21 @@ export const suggestModels = (models: ModelInfo[]): string[] => {
 
 // Friendly error strings for the panel
 export const describeApiError = (err: unknown): string => {
-  if (err instanceof OpenAI.AuthenticationError) return 'API key rejected — check it in settings.';
-  if (err instanceof OpenAI.NotFoundError) return 'Model not found — check the model ID in settings.';
-  if (err instanceof OpenAI.RateLimitError) return 'Rate limited — wait a moment and try again.';
-  if (err instanceof OpenAI.APIConnectionError) return 'Could not reach the API — check your connection.';
-  if (err instanceof OpenAI.APIError) return `API error: ${err.message}`;
-  return `Error: ${(err as any)?.message ?? err}`;
+  // Reads err.status rather than `instanceof OpenAI.AuthenticationError`, so
+  // this stays synchronous and does not force the SDK to be loaded just to
+  // describe a failure (F1). The status codes are the same contract the error
+  // classes wrap, and they survive a client that never loaded at all.
+  const e = err as { status?: number; message?: string; name?: string };
+  switch (e?.status) {
+    case 401:
+    case 403: return 'API key rejected — check it in settings.';
+    case 404: return 'Model not found — check the model ID in settings.';
+    case 429: return 'Rate limited — wait a moment and try again.';
+  }
+  // APIConnectionError carries no status: the request never reached a server.
+  if (e?.name === 'APIConnectionError' || e?.name === 'APIConnectionTimeoutError') {
+    return 'Could not reach the API — check your connection.';
+  }
+  if (typeof e?.status === 'number') return `API error: ${e.message ?? e.status}`;
+  return `Error: ${e?.message ?? err}`;
 };

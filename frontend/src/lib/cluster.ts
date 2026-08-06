@@ -1,4 +1,7 @@
-import { median, numericValues } from './table';
+import { asNumber, median, numericValues } from './table';
+// Deterministic PRNG so repeated runs give identical clusters (random_state analog)
+import { mulberry32 } from './random';
+import { isPCColumn } from './pca';
 
 // DBSCAN + KMeans over plot coordinates, replacing the sklearn endpoints.
 // Sizes here are survey-scale (hundreds to low thousands of points), so the
@@ -10,16 +13,23 @@ import { median, numericValues } from './table';
 // units the clustering will actually use. An sd-0 column becomes all zeros: a
 // variable that does not vary contributes nothing to distance, which is the
 // honest reading.
-export const zscoreCellColumns = (cols: (number | null)[][]): (number | null)[][] =>
+//
+// Takes raw table cells and coerces on the way in. It must, because every call
+// site passes them straight from the DataTable: if this only recognised typeof
+// number, a text-formatted value would pass through UNSCALED and then be
+// coerced downstream by imputeColumns, mixing raw units with z-scores in the
+// same distance computation (C6).
+export const zscoreCellColumns = (cols: (number | string | null)[][]): (number | null)[][] =>
   cols.map(col => {
+    const vals = col.map(asNumber);
     let n = 0, sum = 0;
-    for (const v of col) if (typeof v === 'number') { n++; sum += v; }
-    if (!n) return col;
+    for (const v of vals) if (v !== null) { n++; sum += v; }
+    if (!n) return vals;
     const mean = sum / n;
     let ss = 0;
-    for (const v of col) if (typeof v === 'number') ss += (v - mean) ** 2;
+    for (const v of vals) if (v !== null) ss += (v - mean) ** 2;
     const sd = Math.sqrt(ss / n);
-    return col.map(v => (typeof v === 'number' ? (sd ? (v - mean) / sd : 0) : v));
+    return vals.map(v => (v !== null ? (sd ? (v - mean) / sd : 0) : null));
   });
 
 // Smart default for the standardize toggle, by data regime:
@@ -30,16 +40,19 @@ export const zscoreCellColumns = (cols: (number | null)[][]): (number | null)[][
 //   near-constant items by dividing by a tiny sd.
 // - heterogeneous scales → on: otherwise Euclidean distance is effectively
 //   just the widest column.
-export const suggestStandardize = (cols: (number | null)[][], names: string[]): boolean => {
+export const suggestStandardize = (cols: (number | string | null)[][], names: string[]): boolean => {
   // Bare or labeled component sets (PC1, PC2_openness) both count as PC scores.
   // COMP_ composites deliberately do NOT: each comes from a different
   // decomposition, so across-composite scale differences are back to the
   // ordinary range heuristic below.
-  if (names.length > 0 && names.every(nm => /^PC\d+(_|$)/i.test(nm))) return false;
+  if (names.length > 0 && names.every(isPCColumn)) return false;
   const ranges: number[] = [];
   for (const col of cols) {
     let min = Infinity, max = -Infinity;
-    for (const v of col) if (typeof v === 'number') { if (v < min) min = v; if (v > max) max = v; }
+    for (const raw of col) {
+      const v = asNumber(raw);
+      if (v !== null) { if (v < min) min = v; if (v > max) max = v; }
+    }
     if (max > min) ranges.push(max - min);
   }
   if (ranges.length < 2) return false;
@@ -48,14 +61,55 @@ export const suggestStandardize = (cols: (number | null)[][], names: string[]): 
   return hi / lo > 3;
 };
 
-// Column-wise median imputation so missing axis values don't break distance math
-const imputeColumns = (cols: (number | null)[][]): number[][] => {
-  const meds = cols.map(c => median(numericValues(c)));
+// What imputeColumns below will have to fill in, per column and in total.
+// Exported so the call sites can report it: clustering silently substitutes the
+// median for every missing coordinate, which pulls those rows toward the centre
+// of the cloud and can decide which cluster they land in.
+export const countImputed = (
+  // Deliberately wider than (number | null)[]: call sites pass raw DataTable
+  // columns, whose cells are number | string | null. Anything not a finite
+  // number is what imputeColumns will replace, so that is what gets counted.
+  cols: (number | string | null)[][], names: string[],
+): { cells: number; total: number; byVariable: { var: string; n: number }[] } => {
   const n = cols[0]?.length ?? 0;
-  return Array.from({ length: n }, (_, i) => cols.map((c, j) => (typeof c[i] === 'number' ? (c[i] as number) : meds[j])));
+  const byVariable: { var: string; n: number }[] = [];
+  cols.forEach((col, j) => {
+    let have = 0;
+    for (const v of col) if (asNumber(v) !== null) have++;
+    if (have < n) byVariable.push({ var: names[j] ?? `column ${j + 1}`, n: n - have });
+  });
+  return {
+    cells: byVariable.reduce((s, m) => s + m.n, 0),
+    total: n * cols.length,
+    byVariable: byVariable.sort((a, b) => b.n - a.n),
+  };
 };
 
-export const dbscan = (colData: (number | null)[][], eps: number, minSamples: number): string[] => {
+/**
+ * Refuse to cluster on an axis that holds no numbers at all.
+ *
+ * `median([])` is 0, so `imputeColumns` filled such a column entirely with
+ * zeros: it contributed nothing to any distance, and the run still reported
+ * success with a full set of cluster sizes. A text axis produced six confident
+ * labels and not one word of warning (finding A11). Returns the offending
+ * column names, or [] when everything is usable.
+ */
+export const nonNumericAxes = (cols: (number | string | null)[][], names: string[]): string[] =>
+  names.filter((_, j) => !(cols[j] ?? []).some(v => asNumber(v) !== null));
+
+// Column-wise median imputation so missing axis values don't break distance math.
+//
+// asNumber rather than a typeof check: this used to treat a text-formatted
+// numeric column as entirely missing and replace every row with the median, so
+// clustering ran on a constant and said nothing about that variable (C6).
+const imputeColumns = (cols: (number | string | null)[][]): number[][] => {
+  const numeric = cols.map(c => c.map(asNumber));
+  const meds = numeric.map(c => median(numericValues(c)));
+  const n = cols[0]?.length ?? 0;
+  return Array.from({ length: n }, (_, i) => numeric.map((c, j) => c[i] ?? meds[j]));
+};
+
+export const dbscan = (colData: (number | string | null)[][], eps: number, minSamples: number): string[] => {
   const X = imputeColumns(colData);
   const n = X.length;
   const eps2 = eps * eps;
@@ -91,15 +145,7 @@ export const dbscan = (colData: (number | null)[][], eps: number, minSamples: nu
   return labels.map(l => (l === -1 ? 'Noise' : `Cluster ${l}`));
 };
 
-// Deterministic PRNG so repeated runs give identical clusters (random_state analog)
-const mulberry32 = (seed: number) => () => {
-  seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-};
-
-export const kmeans = (colData: (number | null)[][], k: number): string[] => {
+export const kmeans = (colData: (number | string | null)[][], k: number): string[] => {
   const X = imputeColumns(colData);
   const n = X.length;
   const dim = X[0]?.length ?? 0;
@@ -150,8 +196,23 @@ export const kmeans = (colData: (number | null)[][], k: number): string[] => {
         for (let d = 0; d < dim; d++) sums[labels[i]][d] += X[i][d];
       }
       for (let c = 0; c < k; c++) {
-        if (!counts[c]) continue; // empty cluster keeps its center
-        for (let d = 0; d < dim; d++) centers[c][d] = sums[c][d] / counts[c];
+        if (counts[c]) {
+          for (let d = 0; d < dim; d++) centers[c][d] = sums[c][d] / counts[c];
+          continue;
+        }
+        // Empty cluster: relocate to the point furthest from its own centre,
+        // as sklearn does. Keeping the centre instead meant a k = 8 run could
+        // return six labels with gaps in the numbering, and a size list quietly
+        // shorter than k (finding A12). Relocating keeps the promise that k
+        // clusters means k clusters.
+        let worst = 0, worstD = -1;
+        for (let i = 0; i < n; i++) {
+          const d = dist2(X[i], centers[labels[i]]);
+          if (d > worstD) { worstD = d; worst = i; }
+        }
+        centers[c] = X[worst].slice();
+        labels[worst] = c;
+        moved = true;   // the assignment changed, so another pass is owed
       }
       if (!moved) break;
     }
