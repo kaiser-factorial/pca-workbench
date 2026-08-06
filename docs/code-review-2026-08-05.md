@@ -372,9 +372,12 @@ here: facts *about the method* (k-means determinism, what eps does, correlation 
 that 40% of a column was imputed, so putting run-specific facts behind hover would have reproduced the exact
 failure this section describes.
 
-- **B1** — the method dropdown reads "K-Means (deterministic)" and "DBSCAN (density-based)", with the full
+- **B1** — the method dropdown reads "K-Means (reproducible)" and "DBSCAN (density-based)", with the full
   seeding/initialisation detail behind the (i) next to k, including the corollary that determinism is
-  reproducibility rather than evidence of stable structure.
+  reproducibility rather than evidence of stable structure. The label first shipped as
+  "K-Means (deterministic)"; it was changed because a bare "deterministic" in the picker implies the app
+  searched for a best clustering, which best-of-10-fixed-starts does not do — the disclosure had to walk
+  that back, so the label stopped making the claim instead.
 - **B2** — a line under both Run buttons states that missing values are filled with the column median, with the
   variance/attenuation caveat behind the (i). Per-run imputed counts remain open as A9.
 - **B3** — a live line above Run Clustering: *"Clusters on the plotted axes: PetalLengthCm · PetalWidthCm ·

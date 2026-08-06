@@ -3596,7 +3596,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 <select className="w-full bg-[var(--input)] border border-[var(--border)] p-2 text-sm outline-none" value={clusterMethod} onChange={(e) => setClusterMethod(e.target.value)}>
                     <option value="NONE">None</option>
                     <option value="DBSCAN">DBSCAN (density-based)</option>
-                    <option value="KMEANS">K-Means (deterministic)</option>
+                    {/* "reproducible", not "deterministic": this label is the first
+                        and sometimes only place the property is named, and
+                        "deterministic" invites the reading that the app searched for
+                        the best clustering. It did not — see kmeans_deterministic. */}
+                    <option value="KMEANS">K-Means (reproducible)</option>
                 </select>
 
                 {/* B3: clustering runs on the plotted axes and nothing else. Naming
