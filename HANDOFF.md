@@ -1,7 +1,7 @@
 # Scatter Lab — Handoff
 
 **Date:** 2026-08-05 (code-review remediation; build sprint was Aug 1–2, 2026)
-**Live:** https://scatter-lab.vercel.app · **Repo:** https://github.com/kaiser-factorial/pca-workbench (public)
+**Live:** https://scatter-lab.vercel.app · **Repo:** https://github.com/kaiser-factorial/scatter-lab (public)
 **Deploy:** push to `main` → Vercel auto-builds (project `scatter-lab`, team `factorial-ai`, Root Directory `frontend`, ~35s builds)
 
 ## What this is
