@@ -580,6 +580,60 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
     return traces;
 };
 
+// An orbit derived FROM a camera rather than replacing it. Both the live
+// rotation loop and the GIF export used to hard-code radius 2.2 / elevation 0.6,
+// so each of them silently threw away whatever the user had dragged to — and the
+// GIF then disagreed with the screen it was exported from.
+const orbitFrom = (cam: SceneCamera | null | undefined) => {
+  const e = cam?.eye ?? DEFAULT_CAMERA.eye;
+  const fallback = Math.hypot(DEFAULT_CAMERA.eye.x, DEFAULT_CAMERA.eye.y);
+  const radius = Math.hypot(e.x, e.y) || fallback;
+  const elevation = e.z;
+  const rest: Partial<SceneCamera> = {};
+  if (cam?.center) rest.center = { ...cam.center };
+  if (cam?.up) rest.up = { ...cam.up };
+  if (cam?.projection) rest.projection = { ...cam.projection };
+  return {
+    /** Azimuth the camera is currently at, so an orbit starts where the eye is. */
+    start: Math.atan2(e.y, e.x),
+    /** center / up / projection, preserved verbatim. */
+    rest,
+    eyeAt: (angle: number) => ({
+      x: radius * Math.cos(angle),
+      y: radius * Math.sin(angle),
+      z: elevation,
+    }),
+  };
+};
+
+// The starting 3-D viewpoint, and what "Reset view" returns to. Was written out
+// as a literal in three places, which is one more than can be kept in step.
+//
+// (1.8, 1.2, 0.5) sat at 13 degrees elevation — nearly edge-on. A cube seen from
+// there projects wide and flat: it overran the canvas left and right while
+// leaving 191px of unused space above it, which is the "plot sits too low, and
+// long plots clip off the bottom" complaint. Raising the eye to ~30 degrees and
+// pulling back slightly (|eye| 2.22 -> 2.44) makes the cube present squarer, so
+// it fits the width and uses the height.
+type Vec3 = { x: number; y: number; z: number };
+type SceneCamera = {
+  eye: Vec3;
+  /** Look-at point. Shifting it moves the scene on screen without resizing it. */
+  center?: Vec3;
+  up?: Vec3;
+  projection?: { type?: string };
+};
+
+const DEFAULT_CAMERA: SceneCamera = {
+  eye: { x: 1.5, y: 1.5, z: 1.2 },
+  // gl-plot3d leaves the box low in its viewport once the tick labels and axis
+  // titles below it are accounted for — measured 155px of dead space above the
+  // scene against 9px below. Looking slightly beneath the box centre lifts the
+  // whole scene instead of shrinking it, which is what reducing the plot's
+  // height or its domain would have done.
+  center: { x: 0, y: 0, z: -0.12 },
+};
+
 const CHART_COLORS = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#38A6A5', '#0F8554', '#73AF48', '#EDAD08', '#E17C05'];
 
 // Inline distribution sparkline for a numeric column
@@ -1529,7 +1583,7 @@ type PlotLayoutOpts = {
     mode: "3D" | "2D";
     axesOn: boolean;
     window2d: { x: [number, number], y: [number, number] } | null;
-    camera: { eye: { x: number, y: number, z: number } };
+    camera: SceneCamera;
 };
 
 const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window2d, camera }: PlotLayoutOpts) => {
@@ -1546,14 +1600,27 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
     };
 
     if (mode === "3D") {
+        // The title is gated on axesOn like everything else. It used not to be,
+        // which made "Axes: Off" mean "no box, no grid, no ticks — but keep three
+        // labels floating in space". During rotation they swung between box edges
+        // with nothing to anchor them, which read as the axes misbehaving.
         const axis3d = (label: string) => ({
             showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
             gridcolor: c.grid3d, zerolinecolor: c.zero,
             tickfont: { size: 10, color: c.tick },
-            title: { text: label, font: { color: c.fg } },
+            title: { text: axesOn ? label : '', font: { color: c.fg } },
         });
         baseLayout.scene = {
             camera,
+            // Without this Plotly picks 'auto', which sizes the box in proportion
+            // to each axis's data span — on the iris demo that is 1.55 : 0.63 :
+            // 1.02, a box 2.5x longer in x than y. Orbiting an elongated box at a
+            // fixed eye distance swings its projected size with the azimuth and
+            // pushes it off the canvas. A cube orbits uniformly and fits.
+            // The cost is that relative data scales are no longer implied by the
+            // box shape — which is the honest default anyway when the three axes
+            // carry different units.
+            aspectmode: 'cube',
             xaxis: axis3d(axisNames.x),
             yaxis: axis3d(axisNames.y),
             zaxis: axis3d(axisNames.z),
@@ -1564,7 +1631,7 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
             showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
             gridcolor: c.grid2d, zerolinecolor: c.zero,
             tickfont: { color: c.tick },
-            title: { text: label, font: { color: c.fg } },
+            title: { text: axesOn ? label : '', font: { color: c.fg } },
         });
         baseLayout.xaxis = axis2d(axisNames.x);
         baseLayout.yaxis = axis2d(axisNames.y);
@@ -1593,7 +1660,7 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
 const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelayout }: {
     view: any, title: string, colorBy: string, axesOn: boolean,
     window2d: { x: [number, number], y: [number, number] } | null,
-    camera: { eye: { x: number, y: number, z: number } },
+    camera: SceneCamera,
     onRelayout: (e: any) => void,
 }) => {
     const { theme } = useTheme();
@@ -1651,8 +1718,8 @@ export default function Home() {
   
   // Plot state
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
-  const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": false, "2D": true });
-  const [camera, setCamera] = useState({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+  const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": true, "2D": true });
+  const [camera, setCamera] = useState(DEFAULT_CAMERA);
   // The live camera, readable without a re-render. During rotation the angle
   // changes 60 times a second and React never hears about it (F9) — but pinning,
   // exporting and saving a workspace all need the angle currently on screen, so
@@ -1782,17 +1849,33 @@ export default function Home() {
     }
     let cancelled = false;
     let stopped = false;
+
+    // Orbit from wherever the camera already is, read synchronously before the
+    // first frame. The previous version recomputed the eye from scratch every
+    // frame at a hard-coded radius 2.2 and elevation 0.6, and never seeded its
+    // angle counter — so pressing Start Rotation teleported the view, discarding
+    // whatever zoom, tilt and angle the user had dragged to.
+    const liveCam = (() => {
+        try {
+            const gd = getActivePlotDiv();
+            return gd?._fullLayout?.scene?._scene?.getCamera?.()
+                ?? gd?._fullLayout?.scene?.camera
+                ?? null;
+        } catch { return null; }
+    })();
+    // `up`, `center` and `projection` are carried through untouched. Rebuilding
+    // the camera as `{ eye }` alone dropped them, so a panned view silently
+    // re-centred itself the first time it was rotated.
+    const orbit = orbitFrom(liveCam ?? cameraRef.current ?? DEFAULT_CAMERA);
+    cntRef.current = orbit.start;
+
     (async () => {
         const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
         if (cancelled) return;
         const rotate = () => {
             cntRef.current += 0.005;
-            const eye = {
-                x: 2.2 * Math.cos(cntRef.current),
-                y: 2.2 * Math.sin(cntRef.current),
-                z: 0.6,
-            };
-            cameraRef.current = { eye };
+            const eye = orbit.eyeAt(cntRef.current);
+            cameraRef.current = { ...orbit.rest, eye };
             const gd = getActivePlotDiv();
             // `_fullLayout` marks a plot Plotly has actually initialised;
             // relayout on a div mid-mount throws.
@@ -2017,8 +2100,11 @@ export default function Home() {
           setColorBy(ws.colorBy ?? "");
           setShapeBy(ws.shapeBy ?? "");
           setViewMode(ws.viewMode ?? "3D");
-          setShowAxes(ws.showAxes ?? { "3D": false, "2D": true });
-          setCamera(ws.camera ?? { eye: { x: 1.8, y: 1.2, z: 0.5 } });
+          setShowAxes(ws.showAxes ?? { "3D": true, "2D": true });
+          // Merged, not replaced: workspaces saved before the camera grew a `center`
+          // carry only an eye, and would otherwise reload sitting low in the frame.
+          // Anything the file does specify still wins.
+          setCamera({ ...DEFAULT_CAMERA, ...ws.camera });
           // Restored deliberately — suppress the refit that the axis change would trigger
           skipRangeReset.current = true;
           setRange2d(ws.range2d ?? null);
@@ -2293,7 +2379,10 @@ export default function Home() {
       if (isExporting) return 'Another export is already in progress.';
       const wasRotating = isRotating;
       setIsRotating(false);
-      const prevEye = { ...camera.eye };
+      // The whole camera, not just the eye: restoring `{ eye }` alone dropped
+      // `center`, which would undo the vertical centring on every GIF export.
+      const prevCam: SceneCamera = { ...camera, eye: { ...camera.eye } };
+      const gifOrbit = orbitFrom(camera);
       const FRAMES = 36;
       // Cap size — GIF bytes grow fast with dimensions
       const W = Math.min(gd.offsetWidth || 700, 720);
@@ -2319,7 +2408,7 @@ export default function Home() {
               const frameGd = getActivePlotDiv();
               if (!frameGd || !frameGd.data) throw new Error("Plot div disappeared mid-export");
               await withTimeout(Plotly.relayout(frameGd, {
-                  'scene.camera.eye': { x: 2.2 * Math.cos(t), y: 2.2 * Math.sin(t), z: 0.6 }
+                  'scene.camera.eye': gifOrbit.eyeAt(gifOrbit.start + t)
               }), 10000, "camera move");
               const url: string = await withTimeout(
                   Plotly.toImage(frameGd, { format: 'png', width: W, height: H, scale: 1 }) as Promise<string>,
@@ -2363,7 +2452,7 @@ export default function Home() {
               const finalGd = getActivePlotDiv();
               if (finalGd && finalGd.data) await setExportDressing(Plotly, finalGd, false);
           } catch { /* a re-render restores the props-driven layout anyway */ }
-          setCamera({ eye: prevEye });
+          setCamera(prevCam);
           setIsRotating(wasRotating);
           setIsExporting("");
       }
@@ -3108,7 +3197,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const acts: string[] = [];
           if (reset_camera) {
               setIsRotating(false);
-              setCamera({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+              setCamera(DEFAULT_CAMERA);
               acts.push('camera reset');
           }
           if (zoom != null) {
