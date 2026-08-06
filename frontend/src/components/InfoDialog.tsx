@@ -135,8 +135,9 @@ export const InfoDialog = ({
             analysis, or a purpose-built statistical package — before treating it as a result.
           </p>
           <p className="opacity-80">
-            <strong>Everything happens in this browser tab.</strong> Your file is never uploaded, there is no
-            server to send it to, and closing the tab discards it — save a workspace if you want it back.
+            <strong>All computation happens in this browser tab.</strong> Parsing, PCA, clustering and
+            statistics run on your own machine, your dataset is never uploaded to a server — there is no backend
+            to send it to — and closing the tab discards it, so save a workspace if you want it back.
           </p>
           {/* Spaces at a tag or comment seam must be written as {' '}: a text node
               that opens with whitespace and then wraps loses that leading space.

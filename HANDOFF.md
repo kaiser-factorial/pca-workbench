@@ -8,8 +8,11 @@
 
 Scatter Lab (formerly "PCA Workbench") is a fully client-side workbench for exploring
 tabular research data as interactive 2D/3D scatter plots — built for survey research,
-general-purpose in practice. **All compute runs in the browser; data never leaves the
-machine.** There is no backend; the deployed app is a static site.
+general-purpose in practice. **All computation runs in the browser; the dataset is never
+uploaded to a server.** There is no backend; the deployed app is a static site. The
+optional assistant is the sole exception, and it sends aggregates only — never raw rows.
+Do not restore the older "data never leaves the machine" phrasing anywhere: it is a
+promise the app cannot keep once an API key is connected.
 
 ## Architecture
 

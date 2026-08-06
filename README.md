@@ -6,9 +6,15 @@ survey and questionnaire research, useful for any table of numbers.
 
 **Live:** [scatter-lab.vercel.app](https://scatter-lab.vercel.app)
 
-**Everything runs in the browser.** Parsing, PCA, clustering, statistics, and
-persistence all happen locally — your data never leaves your machine. There is
-no backend; the app deploys as a static site.
+**All computation runs locally in the browser.** Parsing, PCA, clustering,
+statistics, and persistence all happen in the tab, and your dataset is never
+uploaded to a server. There is no backend; the app deploys as a static site.
+
+The one exception is the optional AI assistant. If you connect an API key,
+column names and aggregate summaries — never raw rows — are sent to whichever
+provider that key belongs to. See
+[The assistant](#the-assistant-optional-bring-your-own-key) below; leave it
+disconnected and nothing leaves the tab at all.
 
 ## Demo data
 

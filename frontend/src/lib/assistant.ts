@@ -129,7 +129,7 @@ export const MUTATING_TOOLS = new Set([
 // from, so tour answers describe the UI as it actually is.
 export const TUTORIAL: Record<string, string> = {
   overview:
-    'Scatter Lab turns tabular data into interactive 2D/3D scatter plots, entirely in the browser — nothing is uploaded anywhere. Typical flow: add a dataset → assign variables to axes and color in the Variables panel → run PCA or cluster when useful → compare views → export. The built-in Iris demo opens in a species-colored 3D flower view; during a guided tour, demonstrate the marker-shape control by adding Species as the shape encoding after it loads (the initial view intentionally leaves shape unused).',
+    'Scatter Lab turns tabular data into interactive 2D/3D scatter plots. All computation runs in the browser and the dataset is never uploaded to a server (you, the assistant, are the one exception — see the privacy topic). Typical flow: add a dataset → assign variables to axes and color in the Variables panel → run PCA or cluster when useful → compare views → export. The built-in Iris demo opens in a species-colored 3D flower view; during a guided tour, demonstrate the marker-shape control by adding Species as the shape encoding after it loads (the initial view intentionally leaves shape unused).',
   load_data:
     'Add data via the dropzone in the sidebar ("1. Data") — drag a CSV, XLSX, or Parquet file in, or click to browse, then press "Add Dataset". Datasets with PC score columns plot immediately. Optionally, "+ Project through a PCA components file" reveals a second dropzone: supply a loadings file and the app median-imputes, standardizes, and computes PC1–PC3 itself. Several datasets can be loaded at once; click one in the list to make it active.',
   variables:
@@ -151,7 +151,7 @@ export const TUTORIAL: Record<string, string> = {
   workspaces:
     'The Workspace section saves the entire session — datasets, pins, notes, settings — locally in the browser (IndexedDB). "Export as file" downloads a workspace as a shareable file; "Import file" loads one. Nothing syncs to any server.',
   privacy:
-    'All parsing, projection, and clustering run in the browser; data never leaves the machine. The assistant is the one opt-in exception: it sends column names and aggregate summaries (never raw rows) to the configured model API, using your own key.',
+    'All parsing, projection, and clustering run in the browser, and the dataset itself is never uploaded to a server. Do not tell the user that nothing leaves their machine — that is not true while you are connected. You are the one opt-in exception: column names and aggregate summaries (never raw rows) are sent to the configured model API, using the user\'s own key.',
 };
 
 export const TUTORIAL_TOPICS = Object.keys(TUTORIAL);

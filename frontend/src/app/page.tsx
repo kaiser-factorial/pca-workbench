@@ -1824,7 +1824,7 @@ export default function Home() {
   }, [datasetFile]);
 
   // Everything happens in the browser: parse → (optionally) project → plot.
-  // No network round-trip, no server, data never leaves the machine.
+  // No network round-trip, no server, no dataset upload.
   const uploadFiles = async (
     dsFile: File,
     compFile: File | null,
@@ -3309,14 +3309,17 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
 
         {/* The privacy claim is the app's headline promise, so it links to the
             page that explains its one exception (the assistant) rather than
-            relying on a `title` nobody sees on touch. */}
+            relying on a `title` nobody sees on touch.
+            It claims local COMPUTATION and no dataset upload — not that nothing
+            ever leaves the tab, which the assistant makes untrue. A promise the
+            app cannot keep in every configuration is worse than a narrower one. */}
         <button
           onClick={() => setShowInfo(true)}
           className="flex items-center gap-1.5 mb-6 text-[10px] uppercase tracking-wider opacity-70 hover:opacity-100 cursor-pointer text-left"
-          title="All parsing, projection, and clustering run in your browser. Nothing is uploaded anywhere."
+          title="All parsing, projection, and clustering run in your browser, and your dataset is never uploaded to a server. The optional assistant is the one exception — it sends summaries, never raw rows. Click to read more."
         >
           <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-          All local — data never leaves your browser
+          Computed locally — your dataset is never uploaded
         </button>
 
         <SidebarGroup theme={theme}>
