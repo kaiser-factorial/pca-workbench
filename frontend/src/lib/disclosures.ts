@@ -191,6 +191,20 @@ export const DISCLOSURES = {
     methodsTopic: 'how_many_components',
   },
 
+  aspect_mode: {
+    title: 'Cube Or True Scale',
+    text: [
+      'Cube (the default) draws the 3-D box with equal-length axes, so each axis is stretched by whatever factor its own data span needs. One unit along X is not the same length as one unit along Y, and the tick spacing is not comparable between axes.',
+      'True scale makes each axis length proportional to its own span, so a unit is the same length everywhere.',
+    ],
+    more: [
+      'Cube is the default because it always fits the canvas and orbits evenly. A box proportional to the data can be long and thin, which swings its apparent size as it rotates and can run off the edge.',
+      'Neither changes the data, the clustering or any number reported — only the shape of the box the points are drawn in. Distances judged by eye are only comparable across axes on True scale.',
+      'Pins remember the setting they were taken under, and exports match whatever is on screen.',
+    ],
+    methodsTopic: 'pca_interpretation',
+  },
+
   diagnostics_sampled: {
     title: 'Diagnostics Are Sampled',
     text: [
@@ -217,4 +231,5 @@ export const DISCLOSURE_SECTIONS: { heading: string; keys: DisclosureKey[] }[] =
     keys: ['clusters_plotted_axes', 'kmeans_deterministic', 'dbscan_parameters', 'standardize_clustering', 'diagnostics_sampled'],
   },
   { heading: 'Statistics', keys: ['group_stats'] },
+  { heading: 'The Plot Itself', keys: ['aspect_mode'] },
 ];

@@ -615,6 +615,14 @@ const orbitFrom = (cam: SceneCamera | null | undefined) => {
 // long plots clip off the bottom" complaint. Raising the eye to ~30 degrees and
 // pulling back slightly (|eye| 2.22 -> 2.44) makes the cube present squarer, so
 // it fits the width and uses the height.
+/**
+ * Shape of the 3-D box. 'cube' forces equal-length axes; 'data' makes each axis
+ * length proportional to its own span, so a unit on one axis is the same length
+ * as a unit on another.
+ */
+type AspectMode = 'cube' | 'data';
+const DEFAULT_ASPECT: AspectMode = 'cube';
+
 type Vec3 = { x: number; y: number; z: number };
 type SceneCamera = {
   eye: Vec3;
@@ -1582,11 +1590,13 @@ type PlotLayoutOpts = {
     axisNames: AxisLabels;
     mode: "3D" | "2D";
     axesOn: boolean;
+    /** 'cube' = equal-length axes; 'data' = axis lengths proportional to their spans. */
+    aspect: AspectMode;
     window2d: { x: [number, number], y: [number, number] } | null;
     camera: SceneCamera;
 };
 
-const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window2d, camera }: PlotLayoutOpts) => {
+const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, aspect, window2d, camera }: PlotLayoutOpts) => {
     const c = dark ? PLOT_CHROME.dark : PLOT_CHROME.light;
     const baseLayout: any = {
         autosize: true,
@@ -1612,15 +1622,13 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
         });
         baseLayout.scene = {
             camera,
-            // Without this Plotly picks 'auto', which sizes the box in proportion
-            // to each axis's data span — on the iris demo that is 1.55 : 0.63 :
-            // 1.02, a box 2.5x longer in x than y. Orbiting an elongated box at a
-            // fixed eye distance swings its projected size with the azimuth and
-            // pushes it off the canvas. A cube orbits uniformly and fits.
-            // The cost is that relative data scales are no longer implied by the
-            // box shape — which is the honest default anyway when the three axes
-            // carry different units.
-            aspectmode: 'cube',
+            // 'cube' orbits uniformly and always fits, but stretches each axis by
+            // a different factor, so the tick spacing is not comparable between
+            // them. 'data' keeps the axes proportional to their spans — faithful,
+            // but an elongated box swings its projected size with the azimuth and
+            // can run off the canvas. The user picks; the disclosure says which
+            // trade they are looking at.
+            aspectmode: aspect,
             xaxis: axis3d(axisNames.x),
             yaxis: axis3d(axisNames.y),
             zaxis: axis3d(axisNames.z),
@@ -1657,8 +1665,8 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
 // keystroke, a streaming assistant token — re-rendered every pane and, because
 // the layout object was rebuilt inline, made react-plotly.js re-plot all four
 // (F13). None of those values affect the plot.
-const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelayout }: {
-    view: any, title: string, colorBy: string, axesOn: boolean,
+const ViewPlot = memo(({ view, title, colorBy, axesOn, aspect, window2d, camera, onRelayout }: {
+    view: any, title: string, colorBy: string, axesOn: boolean, aspect: AspectMode,
     window2d: { x: [number, number], y: [number, number] } | null,
     camera: SceneCamera,
     onRelayout: (e: any) => void,
@@ -1674,19 +1682,50 @@ const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelay
     const layout = useMemo(
         () => buildPlotLayout({
             dark: theme === 'terminal', title, colorBy,
-            axisNames: view.labels, mode: view.viewMode, axesOn, window2d, camera,
+            axisNames: view.labels, mode: view.viewMode, axesOn, aspect, window2d, camera,
         }),
-        [theme, title, colorBy, view.labels, view.viewMode, axesOn, window2d, camera],
+        [theme, title, colorBy, view.labels, view.viewMode, axesOn, aspect, window2d, camera],
     );
+    const divId = view.id === 'active' ? 'active-plot' : `pin-plot-${view.id}`;
+
+    // `useResizeHandler` only listens to WINDOW resize. Pinning or closing a view
+    // re-splits the CSS grid, which changes this pane's box without any window
+    // event — so Plotly kept its old pixel size: a new pin overlapped its
+    // neighbour, and closing one left the survivor stranded in whitespace at its
+    // former size. A ResizeObserver on the pane is the event Plotly was missing.
+    const wrap = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const el = wrap.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let raf = 0;
+        let dead = false;
+        const ro = new ResizeObserver(() => {
+            // Coalesce: a grid re-split fires this for every pane in the same
+            // frame, and Plots.resize is not free.
+            cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(async () => {
+                const gd = document.getElementById(divId) as any;
+                if (dead || !gd?._fullLayout) return;
+                const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
+                if (dead || !gd._fullLayout) return;   // unmounted while importing
+                try { Plotly.Plots.resize(gd); } catch { /* purged mid-flight */ }
+            });
+        });
+        ro.observe(el);
+        return () => { dead = true; cancelAnimationFrame(raf); ro.disconnect(); };
+    }, [divId]);
+
     return (
-        <Plot
-            divId={view.id === 'active' ? 'active-plot' : `pin-plot-${view.id}`}
-            data={traces}
-            layout={layout}
-            useResizeHandler={true}
-            style={{ width: "100%", height: "100%" }}
-            onRelayout={onRelayout}
-        />
+        <div ref={wrap} className="w-full h-full">
+            <Plot
+                divId={divId}
+                data={traces}
+                layout={layout}
+                useResizeHandler={true}
+                style={{ width: "100%", height: "100%" }}
+                onRelayout={onRelayout}
+            />
+        </div>
     );
 });
 ViewPlot.displayName = 'ViewPlot';
@@ -1719,6 +1758,8 @@ export default function Home() {
   // Plot state
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
   const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": true, "2D": true });
+  // Box shape for 3-D. Cube by default: it orbits uniformly and always fits.
+  const [aspect, setAspect] = useState<AspectMode>(DEFAULT_ASPECT);
   const [camera, setCamera] = useState(DEFAULT_CAMERA);
   // The live camera, readable without a re-render. During rotation the angle
   // changes 60 times a second and React never hears about it (F9) — but pinning,
@@ -2032,7 +2073,7 @@ export default function Home() {
       return {
           version: wsStore.WORKSPACE_VERSION,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
-          activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
+          activeId, colorBy, shapeBy, viewMode, showAxes, aspect, camera, range2d,
           notes, mutedMap,
           clusterMethod, eps, minSamples, k, standardize, breakdownBy, breakdownDirection, heatmapPalette, includeExportInfo,
       };
@@ -2101,6 +2142,7 @@ export default function Home() {
           setShapeBy(ws.shapeBy ?? "");
           setViewMode(ws.viewMode ?? "3D");
           setShowAxes(ws.showAxes ?? { "3D": true, "2D": true });
+          setAspect(ws.aspect === 'data' ? 'data' : DEFAULT_ASPECT);
           // Merged, not replaced: workspaces saved before the camera grew a `center`
           // carry only an eye, and would otherwise reload sitting low in the frame.
           // Anything the file does specify still wins.
@@ -2278,7 +2320,7 @@ export default function Home() {
   const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null, sceneCamera: { eye: { x: number, y: number, z: number } } | null = null) =>
       buildPlotLayout({
           dark: theme === 'terminal', title, colorBy, axisNames: customAxisNames,
-          mode, axesOn, window2d, camera: sceneCamera ?? camera,
+          mode, axesOn, aspect, window2d, camera: sceneCamera ?? camera,
       });
 
   // Target by id — NOT .js-plotly-plot: Plotly.toImage spawns (and can leak) a
@@ -2497,6 +2539,7 @@ export default function Home() {
           const gd = getActivePlotDiv();
           const startCam = gd?.layout?.scene?.camera ?? camera;
           const axesOn = showAxes[viewMode];
+          const exportAspect = aspect;
           const layout: any = {
               autosize: true,
               margin: viewMode === "2D" ? { l: 50, r: 20, b: 50, t: 60 } : { l: 0, r: 0, b: 0, t: 60 },
@@ -2511,7 +2554,8 @@ export default function Home() {
               title: { text: label, font: { color: '#111111' } },
           });
           if (viewMode === "3D") {
-              layout.scene = { camera: startCam, bgcolor: 'white',
+              // Exports must match the screen, including the box shape.
+              layout.scene = { camera: startCam, bgcolor: 'white', aspectmode: exportAspect,
                   xaxis: axisCfg(labels.x, '#bbbbbb'), yaxis: axisCfg(labels.y, '#bbbbbb'), zaxis: axisCfg(labels.z, '#bbbbbb') };
           } else {
               layout.xaxis = axisCfg(labels.x, '#cccccc');
@@ -2606,6 +2650,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           { id: Date.now(), data: processedData, colorBy, shapeBy,
             axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode,
             showAxes: showAxes[viewMode],
+            aspect,
             // Freeze the 2D framing too, so a pin keeps showing the region it was
             // taken on after the live view is zoomed elsewhere or reset
             range2d: viewMode === "2D" ? get2dRange() : null,
@@ -3227,7 +3272,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       },
 
       snapshot: () => ({
-          datasets, activeId, colorBy, shapeBy, viewMode, showAxes, pinnedViews,
+          datasets, activeId, colorBy, shapeBy, viewMode, showAxes, aspect, pinnedViews,
           clusterMethod, eps, minSamples, k, standardize, breakdownBy, breakdownDirection, heatmapPalette, mutedMap,
       }),
 
@@ -3240,6 +3285,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           setShapeBy(snap.shapeBy ?? "");
           setViewMode(snap.viewMode);
           setShowAxes(snap.showAxes);
+          if (snap.aspect) setAspect(snap.aspect);
           setPinnedViews(snap.pinnedViews);
           setClusterMethod(snap.clusterMethod);
           setEps(snap.eps);
@@ -3308,6 +3354,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                   title={view.label ?? (isPinned ? "Pinned View" : "Active View")}
                   colorBy={colorBy}
                   axesOn={view.showAxes ?? false}
+                  aspect={view.aspect ?? DEFAULT_ASPECT}
                   window2d={(isPinned ? view.range2d : range2d) ?? null}
                   camera={isPinned ? (view.camera ?? camera) : camera}
                   onRelayout={handleRelayout}
@@ -3328,11 +3375,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               id: 'active', data: processedData, colorBy, shapeBy,
               axes: effectiveAxes(activeDataset, viewMode),
               labels: effectiveLabels(activeDataset, viewMode),
-              viewMode, showAxes: showAxes[viewMode], muted: mutedMap,
+              viewMode, showAxes: showAxes[viewMode], aspect, muted: mutedMap,
               label: `${activeDataset.name} · live`,
           }
           : null),
-      [processedData, activeDataset, colorBy, shapeBy, viewMode, showAxes, mutedMap],
+      [processedData, activeDataset, colorBy, shapeBy, viewMode, showAxes, aspect, mutedMap],
   );
   const allViews = useMemo(
       () => (activeView ? [activeView, ...pinnedViews] : []),
@@ -3644,6 +3691,29 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 >
                     {showAxes[viewMode] ? "Axes: On" : "Axes: Off"}
                 </button>
+
+                {/* Box shape. Cube always fits and orbits evenly but stretches each
+                    axis by its own factor, so tick spacing is not comparable across
+                    them; True scale keeps a unit the same length on every axis. */}
+                {viewMode === "3D" && (
+                    <div className="flex gap-1 mb-2">
+                        {(['cube', 'data'] as const).map(m => (
+                            <button
+                                key={m}
+                                onClick={() => setAspect(m)}
+                                title={m === 'cube'
+                                    ? 'Equal-length axes. Always fits and orbits evenly, but each axis is stretched by a different factor, so tick spacing is not comparable between them.'
+                                    : 'Axis lengths proportional to their data spans, so one unit is the same length on every axis. Faithful, but a long, thin box can run off the canvas as it rotates.'}
+                                className={`scatterlab-action-button flex-1 py-1 text-xs font-bold border ${aspect === m
+                                    ? (theme === 'primary' ? 'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]' : 'bg-[var(--system-green)] border-[var(--system-green)] text-black')
+                                    : (theme === 'primary' ? 'border-[var(--border)] bg-[var(--input)] opacity-60' : 'border-[var(--system-green)]/40 bg-[var(--input)] text-[var(--system-green)]/70')}`}
+                            >
+                                {m === 'cube' ? 'Cube' : 'True scale'}
+                            </button>
+                        ))}
+                        <InfoTip topic="aspect_mode" />
+                    </div>
+                )}
 
                 <div className="space-y-1">
                     <label className="text-xs font-medium opacity-70">Axis labels</label>
