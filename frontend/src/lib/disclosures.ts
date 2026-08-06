@@ -29,7 +29,7 @@ export const DISCLOSURES = {
   kmeans_deterministic: {
     title: 'K-Means is deterministic here',
     text:
-      'This app seeds K-Means with k-means++ from fixed seeds and keeps the best of 10 initialisations (up to 300 iterations), so the same data and the same k always give byte-identical clusters. That is reproducibility, not evidence of stable structure — to test whether the clusters are real, vary k and re-run on subsamples rather than re-running unchanged.',
+      'This app seeds K-Means with k-means++ from fixed seeds and keeps the lowest-inertia of 10 fixed starts (up to 300 iterations each), which guards against one unlucky initialisation but does not search for the global optimum. The same data and the same k therefore always give byte-identical clusters in this app — another tool, or another set of starts, may well land somewhere else. That is reproducibility, not evidence of stable structure: to test whether the clusters are real, vary k and re-run on subsamples rather than re-running unchanged.',
     methodsTopic: 'kmeans_interpretation',
   },
 
