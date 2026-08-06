@@ -12,6 +12,7 @@
 // should have to show its work.
 
 import { DataTable, asNumber } from './table';
+import { detectSentinels } from './sentinels';
 
 export type RecodePlan = {
   /** Column name -> the exact values to blank in it. */
@@ -143,4 +144,65 @@ export const describeRecode = (result: RecodeResult): string[] => {
     lines.push(`INTERNAL ERROR: values outside the recode changed in ${broken.join(', ')}. Do not trust this result.`);
   }
   return lines;
+};
+
+export type ColumnCodes = {
+  column: string;
+  /** Codes present in this column, ascending. */
+  values: number[];
+  /** How many rows carry each. */
+  counts: Record<number, number>;
+  /** Codes the detector found on its own, as opposed to ones the user declared. */
+  detected: number[];
+};
+
+/**
+ * Which columns contain which codes — the detector's own findings, plus any the
+ * user declares.
+ *
+ * Declared codes are searched for LITERALLY, with no gap or plausibility test:
+ * the user saying "9 means Don't Know in my survey" is knowledge the detector
+ * does not have and must not second-guess. That is also why the result is
+ * per-column rather than global — declaring 9 will find it in a Likert item and
+ * in a child's age alike, and only the user can say which is which.
+ */
+export const scanForCodes = (table: DataTable, declared: number[] = []): ColumnCodes[] => {
+  const decl = new Set(declared.filter(v => Number.isFinite(v)));
+  const out: ColumnCodes[] = [];
+
+  for (const column of table.columns) {
+    const nums = (table.data[column] ?? []).map(asNumber);
+    if (!nums.some(v => v !== null)) continue;   // nothing numeric to look at
+
+    const detected = detectSentinels(nums).map(f => f.value);
+    const wanted = new Set<number>([...detected, ...decl]);
+    if (!wanted.size) continue;
+
+    const counts: Record<number, number> = {};
+    for (const v of nums) if (v !== null && wanted.has(v)) counts[v] = (counts[v] ?? 0) + 1;
+
+    const values = Object.keys(counts).map(Number).sort((a, b) => a - b);
+    if (values.length) out.push({ column, values, counts, detected });
+  }
+
+  return out;
+};
+
+/**
+ * Parse a user-typed list of codes: "9, 99, -99".
+ *
+ * Empty entries are dropped BEFORE Number() sees them, because `Number('')` is 0
+ * — so the naive version turns an empty box into a declaration that 0 is a
+ * missing-value code, and offers to blank every zero in the file. That shipped
+ * for exactly one browser run before the test caught it.
+ */
+export const parseDeclaredCodes = (text: string): number[] => {
+  const out: number[] = [];
+  for (const piece of text.split(/[,\s]+/)) {
+    const t = piece.trim();
+    if (t === '') continue;
+    const n = Number(t);
+    if (Number.isFinite(n)) out.push(n);
+  }
+  return [...new Set(out)];
 };

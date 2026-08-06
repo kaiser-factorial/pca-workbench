@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyRecode, describeRecode } from '../recode';
+import { applyRecode, describeRecode, scanForCodes, parseDeclaredCodes } from '../recode';
 import type { DataTable } from '../table';
 
 // This module CHANGES DATA, which nothing else in the app does on the user's
@@ -199,5 +199,84 @@ describe('edge cases, and edges of the edges', () => {
     const twice = applyRecode(once.table, { byColumn: { x: [9] } });
     expect(twice.table.data.x).toEqual(once.table.data.x);
     expect(twice.totalReplaced).toBe(0);
+  });
+});
+
+describe('scanForCodes — which columns hold which codes', () => {
+  it('finds a declared code in every column that has it', () => {
+    const table = t({ likert_1: [1, 9, 3], child_age: [9, 4, 5], name: ['a', 'b', 'c'] });
+    const hits = scanForCodes(table, [9]);
+    expect(hits.map(h => h.column)).toEqual(['likert_1', 'child_age']);
+    expect(hits[0].counts[9]).toBe(1);
+  });
+
+  it('takes a declared code LITERALLY, with no plausibility test', () => {
+    // 9 on a 0-10 rating is real data and the detector rightly ignores it —
+    // but if the user says 9 is a code, that is their knowledge, not ours.
+    const table = t({ rating: Array.from({ length: 33 }, (_, i) => i % 11) });
+    expect(scanForCodes(table, []).length).toBe(0);
+    const hits = scanForCodes(table, [9]);
+    expect(hits.length).toBe(1);
+    expect(hits[0].values).toEqual([9]);
+    expect(hits[0].detected).toEqual([]);
+  });
+
+  it('reports detector findings without any declaration', () => {
+    const table = t({ x: [...Array(20).fill(3), ...Array(20).fill(5), ...Array(5).fill(-99)] });
+    const hits = scanForCodes(table, []);
+    expect(hits[0].detected).toContain(-99);
+  });
+
+  it('skips columns with nothing numeric in them', () => {
+    const table = t({ notes: ['x', 'y', 'z'] });
+    expect(scanForCodes(table, [9])).toEqual([]);
+  });
+
+  it('merges declared and detected codes in one column', () => {
+    const table = t({ x: [...Array(20).fill(2), ...Array(20).fill(4), ...Array(4).fill(-99), 9, 9] });
+    const hits = scanForCodes(table, [9]);
+    expect(hits[0].values).toEqual([-99, 9]);
+  });
+});
+
+describe('parseDeclaredCodes — an empty box must declare nothing', () => {
+  it('returns nothing for an empty string, NOT [0]', () => {
+    // Number('') is 0, so the naive version declared 0 a missing-value code and
+    // offered to blank every zero in the file. Found in a browser run.
+    expect(parseDeclaredCodes('')).toEqual([]);
+  });
+
+  it('returns nothing for whitespace or stray separators', () => {
+    expect(parseDeclaredCodes('   ')).toEqual([]);
+    expect(parseDeclaredCodes(',')).toEqual([]);
+    expect(parseDeclaredCodes(', ,  ,')).toEqual([]);
+  });
+
+  it('parses a comma list', () => {
+    expect(parseDeclaredCodes('9, 99, -99')).toEqual([9, 99, -99]);
+  });
+
+  it('parses whitespace and mixed separators, and trailing commas', () => {
+    expect(parseDeclaredCodes('9 99')).toEqual([9, 99]);
+    expect(parseDeclaredCodes('9,99,')).toEqual([9, 99]);
+    expect(parseDeclaredCodes(' 9 , 99 ')).toEqual([9, 99]);
+  });
+
+  it('keeps a genuinely typed 0', () => {
+    expect(parseDeclaredCodes('0')).toEqual([0]);
+    expect(parseDeclaredCodes('0, 9')).toEqual([0, 9]);
+  });
+
+  it('drops non-numbers instead of turning them into NaN codes', () => {
+    expect(parseDeclaredCodes('9, abc, 99')).toEqual([9, 99]);
+    expect(parseDeclaredCodes('abc')).toEqual([]);
+  });
+
+  it('de-duplicates', () => {
+    expect(parseDeclaredCodes('9, 9, 9')).toEqual([9]);
+  });
+
+  it('handles negatives and decimals', () => {
+    expect(parseDeclaredCodes('-99, 9.5')).toEqual([-99, 9.5]);
   });
 });
