@@ -22,8 +22,11 @@ export const InfoTip = ({
   topic,
   label,
 }: {
-  /** Literal text, or omit and pass `topic` to read from the disclosure registry. */
-  text?: string;
+  /**
+   * Literal text — one string, or one string per line — or omit and pass
+   * `topic` to read from the disclosure registry.
+   */
+  text?: string | string[];
   topic?: DisclosureKey;
   /** Accessible name; defaults to the disclosure title. */
   label?: string;
@@ -33,8 +36,14 @@ export const InfoTip = ({
   const btn = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
 
-  const body = text ?? (topic ? DISCLOSURES[topic].text : '');
+  // A tooltip shows only what the app DID — `text`. The `more` half of a
+  // disclosure (why it matters, what it costs) is About-page-only, because
+  // carrying it here is what made these too long to read at a glance.
+  const raw = text ?? (topic ? DISCLOSURES[topic].text : []);
+  const lines: string[] = (Array.isArray(raw) ? raw : [raw]).filter(Boolean);
   const name = label ?? (topic ? DISCLOSURES[topic].title : 'More information');
+  // The native `title` has no bullets to work with, so it gets one flat string.
+  const flat = lines.join(' ');
 
   const place = useCallback(() => {
     const r = btn.current?.getBoundingClientRect();
@@ -73,7 +82,7 @@ export const InfoTip = ({
     };
   }, [open, place]);
 
-  if (!body) return null;
+  if (!lines.length) return null;
 
   return (
     <>
@@ -83,7 +92,7 @@ export const InfoTip = ({
         onClick={e => { e.stopPropagation(); e.preventDefault(); setOpen(o => !o); }}
         aria-expanded={open}
         aria-label={name}
-        title={body}
+        title={flat}
         className="inline-flex align-middle ml-1 opacity-50 hover:opacity-100 focus-visible:opacity-100 cursor-help"
       >
         <Info className="w-3 h-3" aria-hidden="true" />
@@ -98,7 +107,13 @@ export const InfoTip = ({
             bg-[var(--card)] text-[var(--foreground)] border"
         >
           <span className="block font-bold mb-1">{name}</span>
-          {body}
+          {lines.length === 1
+            ? lines[0]
+            : (
+              <ul className="list-disc pl-4 space-y-1">
+                {lines.map((l, i) => <li key={i}>{l}</li>)}
+              </ul>
+            )}
         </div>,
         document.body,
       )}
