@@ -2,7 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { scanForCodes, parseDeclaredCodes, type RecodePlan } from '@/lib/recode';
+import {
+  codeTierLabel, describeCodeEntry, parseDeclaredCodes, scanForCodes,
+  type CodeEntry, type RecodePlan,
+} from '@/lib/recode';
 import type { DataTable } from '@/lib/table';
 import { InfoTip } from '@/components/InfoTip';
 
@@ -57,14 +60,24 @@ export const RecodeDialog = ({
     [stage, table, declared],
   );
 
-  // Every found value defaults to checked — the user opened this to act on them —
-  // but that is DERIVED, not seeded into state by an effect. `checked` holds only
-  // the boxes the user has explicitly toggled, and absent means on.
-  const isOn = (key: string) => checked[key] ?? true;
+  // Each value's default comes from the EVIDENCE for it (`entry.suggested`), so
+  // a code the detector is confident about starts ticked and a bare possibility
+  // does not. That is DERIVED, not seeded into state by an effect: `checked`
+  // holds only the boxes the user has explicitly toggled, and absent means
+  // "whatever the evidence suggested".
+  const keyOf = (column: string, value: number) => `${column} ${value}`;
+  const isOn = (column: string, e: CodeEntry) => checked[keyOf(column, e.value)] ?? e.suggested;
+  const setAll = (v: boolean | null) => setChecked(
+    v === null ? {} : Object.fromEntries(hits.flatMap(h => h.entries.map(e => [keyOf(h.column, e.value), v]))),
+  );
 
-  // Closing discards the report, so re-opening never shows a stale account of an
-  // earlier run. An event handler, not an effect keyed on `open`.
-  const close = () => { setReport(null); onClose(); };
+  // Closing ends the transaction: the report, the declared codes and every
+  // hand-toggled box go with it. Found in a browser run — the declaration box
+  // kept "9" after the dataset was cleared and a DIFFERENT file loaded, so a
+  // stale declaration silently pre-selected columns in a table the user had never
+  // declared anything about. Same for `checked`, whose keys are column names and
+  // so collide across files. An event handler, not an effect keyed on `open`.
+  const close = () => { setReport(null); setDeclaredText(''); setChecked({}); onClose(); };
 
   useEffect(() => {
     if (!open) return;
@@ -83,13 +96,21 @@ export const RecodeDialog = ({
   const rule = bauhaus ? 'var(--border)' : 'color-mix(in srgb, var(--system-green) 40%, transparent)';
 
   const plan: RecodePlan = { byColumn: {} };
+  let totalCells = 0;
   for (const h of hits) {
-    const vals = h.values.filter(v => isOn(`${h.column} ${v}`));
-    if (vals.length) plan.byColumn[h.column] = vals;
+    const on = h.entries.filter(e => isOn(h.column, e));
+    if (!on.length) continue;
+    plan.byColumn[h.column] = on.map(e => e.value);
+    for (const e of on) totalCells += e.count;
   }
-  const totalCells = hits.reduce((a, h) =>
-    a + h.values.filter(v => isOn(`${h.column} ${v}`)).reduce((b, v) => b + (h.counts[v] ?? 0), 0), 0);
   const nCols = Object.keys(plan.byColumn).length;
+
+  // Tier styling stays inside the theme's own palette: the accent for a code the
+  // detector stands behind, plain dimmed text for one it is merely raising.
+  const tierStyle = (e: CodeEntry) =>
+    e.confidence === 'certain' ? { color: accent, opacity: 1 }
+    : e.confidence === 'likely' ? { color: accent, opacity: 0.75 }
+    : { opacity: 0.55 };
 
   const btn = (kind: 'go' | 'quiet') =>
     `px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide cursor-pointer border disabled:opacity-40 ${
@@ -147,7 +168,8 @@ export const RecodeDialog = ({
           <div className="px-4 py-4 space-y-4 text-[12px] leading-relaxed">
             <p className="opacity-80">
               <strong>Choose per column</strong>{' '}
-              — the same code can be real data in one variable and a code in another.
+              — the same code can be real data in one variable and a code in another. Boxes start
+              ticked only where the evidence is strong.
               <InfoTip topic="missing_value_codes" />
             </p>
 
@@ -172,32 +194,49 @@ export const RecodeDialog = ({
                 here.
               </p>
             ) : (
-              <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
-                {hits.map(h => (
-                  <div key={h.column} className="border-b pb-2" style={{ borderColor: rule }}>
-                    <div className="font-bold" style={{ color: accent }}>{h.column}</div>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-                      {h.values.map(v => {
-                        const k = `${h.column} ${v}`;
-                        return (
-                          <label key={v} className="flex items-center gap-1.5 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={isOn(k)}
-                              onChange={e => setChecked(c => ({ ...c, [k]: e.target.checked }))}
-                            />
-                            <span>
-                              <b>{v}</b>
-                              <span className="opacity-60"> · {h.counts[v]} row{h.counts[v] === 1 ? '' : 's'}</span>
-                              {!h.detected.includes(v) && <span className="opacity-50"> · declared</span>}
-                            </span>
-                          </label>
-                        );
-                      })}
+              <>
+                <div className="flex items-center gap-2 text-[11px] opacity-70">
+                  <span>Tick:</span>
+                  <button className="underline cursor-pointer hover:opacity-100" onClick={() => setAll(true)}>all</button>
+                  <button className="underline cursor-pointer hover:opacity-100" onClick={() => setAll(false)}>none</button>
+                  <button className="underline cursor-pointer hover:opacity-100" onClick={() => setAll(null)}>suggested</button>
+                </div>
+                <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
+                  {hits.map(h => (
+                    <div key={h.column} className="border-b pb-2" style={{ borderColor: rule }}>
+                      <div className="font-bold" style={{ color: accent }}>{h.column}</div>
+                      <div className="mt-1 space-y-1">
+                        {h.entries.map(e => {
+                          const k = keyOf(h.column, e.value);
+                          const why = describeCodeEntry(e);
+                          return (
+                            <label key={e.value} className="flex items-start gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                className="mt-[3px] shrink-0"
+                                checked={isOn(h.column, e)}
+                                onChange={ev => setChecked(c => ({ ...c, [k]: ev.target.checked }))}
+                              />
+                              <span className="min-w-0">
+                                <b>{e.value}</b>
+                                <span className="opacity-60">
+                                  {` · ${e.count} row${e.count === 1 ? '' : 's'} · `}
+                                </span>
+                                <span className="uppercase tracking-wide text-[10px]" style={tierStyle(e)}>
+                                  {codeTierLabel(e)}
+                                </span>
+                                {why !== '' && (
+                                  <span className="block opacity-55 text-[11px] leading-snug">{why}</span>
+                                )}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              </>
             )}
 
             {report && (

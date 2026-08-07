@@ -85,7 +85,7 @@ describe('describeSentinels', () => {
   it('names the values, the counts and what to do', () => {
     const msg = describeSentinels('q1', detectSentinels([...seq(1, 7, 40), ...rep(-99, 5)]))!;
     expect(msg).toMatch(/"q1"/);
-    expect(msg).toMatch(/-99 \(5 rows\)/);
+    expect(msg).toMatch(/-99 \(5 rows, certain\)/);
     expect(msg).toMatch(/missing-value code/);
     expect(msg).toMatch(/replace them with blanks/);
     // Names the consequence, not just the observation.

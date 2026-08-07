@@ -12,7 +12,14 @@
 // should have to show its work.
 
 import { DataTable, asNumber } from './table';
-import { scanColumnForCodes } from './sentinels';
+import {
+  REASON_TEXT,
+  scanTableForCodes,
+  type CooccurrenceEvidence,
+  type SentinelConfidence,
+  type SentinelFinding,
+  type SentinelReason,
+} from './sentinels';
 
 export type RecodePlan = {
   /** Column name -> the exact values to blank in it. */
@@ -146,15 +153,47 @@ export const describeRecode = (result: RecodeResult): string[] => {
   return lines;
 };
 
+export type CodeEntry = {
+  value: number;
+  /** How many rows carry it. */
+  count: number;
+  /**
+   * How sure the detector is — or null when it never flagged this value and the
+   * entry exists only because the user declared the code.
+   */
+  confidence: SentinelConfidence | null;
+  reasons: SentinelReason[];
+  /** What the other columns holding this value say about it, if any do. */
+  cooccurrence: CooccurrenceEvidence | null;
+  /** Whether this box starts ticked. See `suggest` below for the reasoning. */
+  suggested: boolean;
+};
+
 export type ColumnCodes = {
   column: string;
-  /** Codes present in this column, ascending. */
-  values: number[];
-  /** How many rows carry each. */
-  counts: Record<number, number>;
-  /** Codes the detector found on its own, as opposed to ones the user declared. */
-  detected: number[];
+  /** Codes present in this column, ascending by value. */
+  entries: CodeEntry[];
 };
+
+/**
+ * Which boxes start ticked.
+ *
+ * The default is the whole safety argument of this dialog. Ticking everything
+ * makes the destructive choice the lazy one: declaring 9 finds it in a Likert
+ * item AND in a child's age, and a user who clicks straight through blanks a
+ * nine-year-old. Ticking nothing is safe but makes the common case — a Don't
+ * Know code across a battery of items — a click per column.
+ *
+ * So the default follows the evidence. Anything the detector is confident about
+ * starts ticked; a bare possibility does not. A declared code the detector never
+ * flagged starts UNTICKED unless the co-occurrence test found its rows lining up
+ * with the same code elsewhere, which is the one piece of evidence available for
+ * a value sitting inside its column's range.
+ */
+const suggest = (confidence: SentinelConfidence | null, co: CooccurrenceEvidence | null): boolean =>
+  confidence === 'certain' || confidence === 'likely' ? true
+  : confidence === 'possible' ? false
+  : co?.supports === true;
 
 /**
  * Which columns contain which codes — the detector's own findings, plus any the
@@ -168,31 +207,91 @@ export type ColumnCodes = {
  */
 export const scanForCodes = (table: DataTable, declared: number[] = []): ColumnCodes[] => {
   const decl = new Set(declared.filter(v => Number.isFinite(v)));
+  // One pass per column, then a cross-column pass over the values that turned
+  // up in more than one. The per-column work used to map the column through
+  // asNumber into a fresh array, run the multi-pass detector over it, then count
+  // in yet another pass.
+  const { byColumn, cooccurrence } = scanTableForCodes(
+    table.columns, table.data, table.nRows, decl.size ? decl : undefined,
+  );
   const out: ColumnCodes[] = [];
 
   for (const column of table.columns) {
-    // One pass per column — coercion, detection and counting together. The
-    // previous version mapped the column through asNumber into a fresh array,
-    // ran the multi-pass detector over it, then counted in yet another pass.
-    const scan = scanColumnForCodes(table.data[column] ?? [], decl.size ? decl : undefined);
-    if (!scan.numericCount) continue;   // nothing numeric to look at
+    const scan = byColumn.get(column);
+    if (!scan || !scan.numericCount) continue;   // nothing numeric to look at
+    const co = cooccurrence.get(column);
 
-    const wanted = new Map<number, number>();
-    for (const f of scan.findings) wanted.set(f.value, f.count);
+    const entries = new Map<number, CodeEntry>();
+    const add = (value: number, count: number, f?: SentinelFinding) => {
+      const evidence = co?.get(value) ?? null;
+      const confidence = f?.confidence ?? null;
+      entries.set(value, {
+        value, count, confidence,
+        reasons: f?.reasons ?? [],
+        cooccurrence: evidence,
+        suggested: suggest(confidence, evidence),
+      });
+    };
+
+    for (const f of scan.findings) add(f.value, f.count, f);
     for (const d of decl) {
-      if (wanted.has(d)) continue;
+      if (entries.has(d)) continue;
       const c = scan.candidateCounts.get(d) ?? scan.declaredOnlyCounts.get(d) ?? 0;
-      if (c > 0) wanted.set(d, c);
+      if (c > 0) add(d, c);
     }
-    if (!wanted.size) continue;
+    if (!entries.size) continue;
 
-    const values = [...wanted.keys()].sort((a, b) => a - b);
-    const counts: Record<number, number> = {};
-    for (const [v, c] of wanted) counts[v] = c;
-    out.push({ column, values, counts, detected: scan.findings.map(f => f.value) });
+    out.push({
+      column,
+      entries: [...entries.values()].sort((a, b) => a.value - b.value),
+    });
   }
 
-  return out;
+  // Strongest evidence first, and within a tier the table's own column order.
+  // Declaring 9 in a survey turns up an incidental 9 in the id column, and file
+  // order put that above the battery of items the user is actually here for.
+  const rank = (h: ColumnCodes) => Math.min(...h.entries.map(e =>
+    e.confidence === 'certain' ? 0 : e.confidence === 'likely' ? 1 : e.confidence === 'possible' ? 2 : 3));
+  return out.map((h, i) => ({ h, i })).sort((a, b) => rank(a.h) - rank(b.h) || a.i - b.i).map(x => x.h);
+};
+
+/** Lift is a ratio against chance, so precision past a couple of figures is noise. */
+const fmtLift = (lift: number) =>
+  !Number.isFinite(lift) || lift > 99 ? '>99' : lift >= 10 ? lift.toFixed(0) : lift.toFixed(1);
+
+/** The one-word tier shown beside a code. */
+export const codeTierLabel = (e: CodeEntry): string => e.confidence ?? 'declared';
+
+/**
+ * Why this code is listed, in one line, for the surface that shows it.
+ *
+ * Written for a reader deciding whether to blank a column, so it reports the
+ * EVIDENCE rather than the verdict. The co-occurrence line is quantified because
+ * that is the only claim here a researcher can check against their own survey:
+ * "the same rows, six other columns, twelve times chance" is either recognisably
+ * their Don't Know block or it is not.
+ */
+export const describeCodeEntry = (e: CodeEntry): string => {
+  const parts: string[] = [];
+  for (const r of e.reasons) if (r !== 'co-occurs') parts.push(REASON_TEXT[r]);
+
+  const co = e.cooccurrence;
+  const others = (n: number) => `${n} other column${n === 1 ? '' : 's'}`;
+  if (co?.supports) {
+    // Deliberately does NOT say "in N other columns": `peers` counts every column
+    // holding the value, which is not the same as the columns whose ROWS line up
+    // with this one — an id column containing a single 9 is a peer and shares
+    // nothing. The lift is the claim being made, so the lift is what is quoted.
+    parts.push(`same rows as ${e.value} in other columns (${fmtLift(co.lift)}× chance)`);
+  } else if (e.confidence === null) {
+    // A declared code the detector never flagged. The user asked us to look for
+    // it, so it is listed either way — but this is the column where a real value
+    // gets blanked by accident, and the line has to say so.
+    parts.push(co && co.peers > 0
+      ? `declared; also in ${others(co.peers)}, but on unrelated rows`
+      : 'declared; the detector did not flag this column');
+  }
+  return parts.join('; ');
 };
 
 /**

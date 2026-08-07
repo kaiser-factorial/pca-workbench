@@ -91,6 +91,59 @@ describe('the known false positive, recorded deliberately', () => {
   });
 });
 
+// The tier attached to each finding. Nothing is dropped at any tier — it decides
+// the wording, and whether the recode dialog pre-ticks the box. So this is where
+// the false positive above is paid for: it is still reported, but as a
+// possibility, and a user who clicks straight through does not blank it.
+describe('how sure the detector claims to be', () => {
+  const tier = (vals: number[], v: number) => detectSentinels(vals).find(f => f.value === v)?.confidence;
+
+  it('is certain about a wrong SIGN, whatever the spread', () => {
+    const col = [...rep(0, 20), ...rep(50, 20), ...rep(100, 20), ...rep(-99, 4)];
+    expect(tier(col, -99)).toBe('certain');
+  });
+
+  it('is certain when the gap is an order of magnitude past the spread', () => {
+    // 99 against a 1-7 item: the rest spans 6, the gap is 92.
+    expect(tier([...rep(1, 10), ...rep(4, 30), ...rep(7, 10), ...rep(99, 5)], 99)).toBe('certain');
+  });
+
+  it('says only LIKELY for a Don\'t Know code on a short scale', () => {
+    // The commonest real case, and the one the gap ratio cannot see. Evidence is
+    // a hole in the scale plus the share of respondents choosing it — good, but
+    // not the same thing as a negative age.
+    const col = [...rep(1, 12), ...rep(3, 20), ...rep(5, 25), ...rep(7, 15), ...rep(9, 8)];
+    expect(tier(col, 9)).toBe('likely');
+  });
+
+  it('says only POSSIBLE for the known false positive', () => {
+    const col = [...rep(0, 20), ...rep(1, 30), ...rep(2, 20), ...rep(3, 10), ...rep(5, 6), ...rep(9, 3)];
+    expect(tier(col, 9)).toBe('possible');
+  });
+
+  it('says only POSSIBLE for a single stray value in a count', () => {
+    const col = [...rep(0, 30), ...rep(1, 25), ...rep(2, 15), ...rep(3, 8), ...rep(4, 4), 9];
+    expect(tier(col, 9)).toBe('possible');
+  });
+
+  it('records which rules fired, not just the verdict', () => {
+    const col = [...rep(1, 12), ...rep(3, 20), ...rep(5, 25), ...rep(7, 15), ...rep(9, 8)];
+    expect(detectSentinels(col)[0].reasons).toEqual(['scale-hole']);
+    // A non-integer core, so the scale-hole rule cannot apply and the two that
+    // did are the whole story. (On an all-integer core all three fire, which is
+    // correct and not what this test is pinning.)
+    const neg = [...rep(0.5, 20), ...rep(50.25, 20), ...rep(-99, 4)];
+    expect(detectSentinels(neg)[0].reasons).toEqual(['impossible-sign', 'far-outside']);
+  });
+
+  it('never claims co-occurrence from a single column', () => {
+    // That evidence does not exist at this level — only scanTableForCodes can
+    // see it — and a per-column scan must not imply it.
+    const col = [...rep(1, 12), ...rep(3, 20), ...rep(9, 8)];
+    expect(detectSentinels(col).flatMap(f => f.reasons)).not.toContain('co-occurs');
+  });
+});
+
 describe('multiple codes and mixed cases', () => {
   it('catches 9 and 99 together in one column', () => {
     const col = [...rep(1, 20), ...rep(4, 30), ...rep(7, 20), ...rep(9, 5), ...rep(99, 4)];
