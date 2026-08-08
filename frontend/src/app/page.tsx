@@ -28,7 +28,9 @@ import { correlation, compareGroups as statsCompareGroups, silhouetteByK, kDista
 import { runPCA, deriveRunLabel, sanitizeLabel, pcaColumnNames, isPCColumn, type MissingReport, type MissingStrategy } from "@/lib/pca";
 import { isIdentifierColumn, valueIsTooRare, pickDefaultAxes, pickDefaultColorBy } from "@/lib/defaults";
 import { InfoTip } from "@/components/InfoTip";
+import { applyRecode, describeRecode } from "@/lib/recode";
 import { InfoDialog } from "@/components/InfoDialog";
+import { RecodeDialog } from "@/components/RecodeDialog";
 import { buildClusterCrosstab, buildClusterHeatmap, downloadClusterHeatmapPng, HEATMAP_PALETTES, sortClusterLabels, type BreakdownDirection, type HeatmapPalette } from "@/lib/clusterBreakdown";
 
 
@@ -578,6 +580,68 @@ const buildTraces = (table: DataTable | null, colorField: string, mode: "3D" | "
     }
 
     return traces;
+};
+
+// An orbit derived FROM a camera rather than replacing it. Both the live
+// rotation loop and the GIF export used to hard-code radius 2.2 / elevation 0.6,
+// so each of them silently threw away whatever the user had dragged to — and the
+// GIF then disagreed with the screen it was exported from.
+const orbitFrom = (cam: SceneCamera | null | undefined) => {
+  const e = cam?.eye ?? DEFAULT_CAMERA.eye;
+  const fallback = Math.hypot(DEFAULT_CAMERA.eye.x, DEFAULT_CAMERA.eye.y);
+  const radius = Math.hypot(e.x, e.y) || fallback;
+  const elevation = e.z;
+  const rest: Partial<SceneCamera> = {};
+  if (cam?.center) rest.center = { ...cam.center };
+  if (cam?.up) rest.up = { ...cam.up };
+  if (cam?.projection) rest.projection = { ...cam.projection };
+  return {
+    /** Azimuth the camera is currently at, so an orbit starts where the eye is. */
+    start: Math.atan2(e.y, e.x),
+    /** center / up / projection, preserved verbatim. */
+    rest,
+    eyeAt: (angle: number) => ({
+      x: radius * Math.cos(angle),
+      y: radius * Math.sin(angle),
+      z: elevation,
+    }),
+  };
+};
+
+// The starting 3-D viewpoint, and what "Reset view" returns to. Was written out
+// as a literal in three places, which is one more than can be kept in step.
+//
+// (1.8, 1.2, 0.5) sat at 13 degrees elevation — nearly edge-on. A cube seen from
+// there projects wide and flat: it overran the canvas left and right while
+// leaving 191px of unused space above it, which is the "plot sits too low, and
+// long plots clip off the bottom" complaint. Raising the eye to ~30 degrees and
+// pulling back slightly (|eye| 2.22 -> 2.44) makes the cube present squarer, so
+// it fits the width and uses the height.
+/**
+ * Shape of the 3-D box. 'cube' forces equal-length axes; 'data' makes each axis
+ * length proportional to its own span, so a unit on one axis is the same length
+ * as a unit on another.
+ */
+type AspectMode = 'cube' | 'data';
+const DEFAULT_ASPECT: AspectMode = 'cube';
+
+type Vec3 = { x: number; y: number; z: number };
+type SceneCamera = {
+  eye: Vec3;
+  /** Look-at point. Shifting it moves the scene on screen without resizing it. */
+  center?: Vec3;
+  up?: Vec3;
+  projection?: { type?: string };
+};
+
+const DEFAULT_CAMERA: SceneCamera = {
+  eye: { x: 1.5, y: 1.5, z: 1.2 },
+  // gl-plot3d leaves the box low in its viewport once the tick labels and axis
+  // titles below it are accounted for — measured 155px of dead space above the
+  // scene against 9px below. Looking slightly beneath the box centre lifts the
+  // whole scene instead of shrinking it, which is what reducing the plot's
+  // height or its domain would have done.
+  center: { x: 0, y: 0, z: -0.12 },
 };
 
 const CHART_COLORS = ['#4195DE', '#D23B72', '#FFD600', '#5F4690', '#1D6996', '#38A6A5', '#0F8554', '#73AF48', '#EDAD08', '#E17C05'];
@@ -1528,11 +1592,13 @@ type PlotLayoutOpts = {
     axisNames: AxisLabels;
     mode: "3D" | "2D";
     axesOn: boolean;
+    /** 'cube' = equal-length axes; 'data' = axis lengths proportional to their spans. */
+    aspect: AspectMode;
     window2d: { x: [number, number], y: [number, number] } | null;
-    camera: { eye: { x: number, y: number, z: number } };
+    camera: SceneCamera;
 };
 
-const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window2d, camera }: PlotLayoutOpts) => {
+const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, aspect, window2d, camera }: PlotLayoutOpts) => {
     const c = dark ? PLOT_CHROME.dark : PLOT_CHROME.light;
     const baseLayout: any = {
         autosize: true,
@@ -1546,14 +1612,25 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
     };
 
     if (mode === "3D") {
+        // The title is gated on axesOn like everything else. It used not to be,
+        // which made "Axes: Off" mean "no box, no grid, no ticks — but keep three
+        // labels floating in space". During rotation they swung between box edges
+        // with nothing to anchor them, which read as the axes misbehaving.
         const axis3d = (label: string) => ({
             showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
             gridcolor: c.grid3d, zerolinecolor: c.zero,
             tickfont: { size: 10, color: c.tick },
-            title: { text: label, font: { color: c.fg } },
+            title: { text: axesOn ? label : '', font: { color: c.fg } },
         });
         baseLayout.scene = {
             camera,
+            // 'cube' orbits uniformly and always fits, but stretches each axis by
+            // a different factor, so the tick spacing is not comparable between
+            // them. 'data' keeps the axes proportional to their spans — faithful,
+            // but an elongated box swings its projected size with the azimuth and
+            // can run off the canvas. The user picks; the disclosure says which
+            // trade they are looking at.
+            aspectmode: aspect,
             xaxis: axis3d(axisNames.x),
             yaxis: axis3d(axisNames.y),
             zaxis: axis3d(axisNames.z),
@@ -1564,7 +1641,7 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
             showgrid: axesOn, zeroline: axesOn, showticklabels: axesOn,
             gridcolor: c.grid2d, zerolinecolor: c.zero,
             tickfont: { color: c.tick },
-            title: { text: label, font: { color: c.fg } },
+            title: { text: axesOn ? label : '', font: { color: c.fg } },
         });
         baseLayout.xaxis = axis2d(axisNames.x);
         baseLayout.yaxis = axis2d(axisNames.y);
@@ -1590,10 +1667,10 @@ const buildPlotLayout = ({ dark, title, colorBy, axisNames, mode, axesOn, window
 // keystroke, a streaming assistant token — re-rendered every pane and, because
 // the layout object was rebuilt inline, made react-plotly.js re-plot all four
 // (F13). None of those values affect the plot.
-const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelayout }: {
-    view: any, title: string, colorBy: string, axesOn: boolean,
+const ViewPlot = memo(({ view, title, colorBy, axesOn, aspect, window2d, camera, onRelayout }: {
+    view: any, title: string, colorBy: string, axesOn: boolean, aspect: AspectMode,
     window2d: { x: [number, number], y: [number, number] } | null,
-    camera: { eye: { x: number, y: number, z: number } },
+    camera: SceneCamera,
     onRelayout: (e: any) => void,
 }) => {
     const { theme } = useTheme();
@@ -1607,19 +1684,50 @@ const ViewPlot = memo(({ view, title, colorBy, axesOn, window2d, camera, onRelay
     const layout = useMemo(
         () => buildPlotLayout({
             dark: theme === 'terminal', title, colorBy,
-            axisNames: view.labels, mode: view.viewMode, axesOn, window2d, camera,
+            axisNames: view.labels, mode: view.viewMode, axesOn, aspect, window2d, camera,
         }),
-        [theme, title, colorBy, view.labels, view.viewMode, axesOn, window2d, camera],
+        [theme, title, colorBy, view.labels, view.viewMode, axesOn, aspect, window2d, camera],
     );
+    const divId = view.id === 'active' ? 'active-plot' : `pin-plot-${view.id}`;
+
+    // `useResizeHandler` only listens to WINDOW resize. Pinning or closing a view
+    // re-splits the CSS grid, which changes this pane's box without any window
+    // event — so Plotly kept its old pixel size: a new pin overlapped its
+    // neighbour, and closing one left the survivor stranded in whitespace at its
+    // former size. A ResizeObserver on the pane is the event Plotly was missing.
+    const wrap = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const el = wrap.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let raf = 0;
+        let dead = false;
+        const ro = new ResizeObserver(() => {
+            // Coalesce: a grid re-split fires this for every pane in the same
+            // frame, and Plots.resize is not free.
+            cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(async () => {
+                const gd = document.getElementById(divId) as (HTMLElement & { _fullLayout?: unknown }) | null;
+                if (dead || !gd?._fullLayout) return;
+                const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
+                if (dead || !gd._fullLayout) return;   // unmounted while importing
+                try { Plotly.Plots.resize(gd); } catch { /* purged mid-flight */ }
+            });
+        });
+        ro.observe(el);
+        return () => { dead = true; cancelAnimationFrame(raf); ro.disconnect(); };
+    }, [divId]);
+
     return (
-        <Plot
-            divId={view.id === 'active' ? 'active-plot' : `pin-plot-${view.id}`}
-            data={traces}
-            layout={layout}
-            useResizeHandler={true}
-            style={{ width: "100%", height: "100%" }}
-            onRelayout={onRelayout}
-        />
+        <div ref={wrap} className="w-full h-full">
+            <Plot
+                divId={divId}
+                data={traces}
+                layout={layout}
+                useResizeHandler={true}
+                style={{ width: "100%", height: "100%" }}
+                onRelayout={onRelayout}
+            />
+        </div>
     );
 });
 ViewPlot.displayName = 'ViewPlot';
@@ -1651,8 +1759,12 @@ export default function Home() {
   
   // Plot state
   const [viewMode, setViewMode] = useState<"3D" | "2D">("3D");
-  const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": false, "2D": true });
-  const [camera, setCamera] = useState({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+  const [showAxes, setShowAxes] = useState<{ "3D": boolean, "2D": boolean }>({ "3D": true, "2D": true });
+  // 'ask' is the free post-upload question; 'configure' runs the scan.
+  const [showRecode, setShowRecode] = useState<null | 'ask' | 'configure'>(null);
+  // Box shape for 3-D. Cube by default: it orbits uniformly and always fits.
+  const [aspect, setAspect] = useState<AspectMode>(DEFAULT_ASPECT);
+  const [camera, setCamera] = useState(DEFAULT_CAMERA);
   // The live camera, readable without a re-render. During rotation the angle
   // changes 60 times a second and React never hears about it (F9) — but pinning,
   // exporting and saving a workspace all need the angle currently on screen, so
@@ -1782,17 +1894,33 @@ export default function Home() {
     }
     let cancelled = false;
     let stopped = false;
+
+    // Orbit from wherever the camera already is, read synchronously before the
+    // first frame. The previous version recomputed the eye from scratch every
+    // frame at a hard-coded radius 2.2 and elevation 0.6, and never seeded its
+    // angle counter — so pressing Start Rotation teleported the view, discarding
+    // whatever zoom, tilt and angle the user had dragged to.
+    const liveCam = (() => {
+        try {
+            const gd = getActivePlotDiv();
+            return gd?._fullLayout?.scene?._scene?.getCamera?.()
+                ?? gd?._fullLayout?.scene?.camera
+                ?? null;
+        } catch { return null; }
+    })();
+    // `up`, `center` and `projection` are carried through untouched. Rebuilding
+    // the camera as `{ eye }` alone dropped them, so a panned view silently
+    // re-centred itself the first time it was rotated.
+    const orbit = orbitFrom(liveCam ?? cameraRef.current ?? DEFAULT_CAMERA);
+    cntRef.current = orbit.start;
+
     (async () => {
         const Plotly = (await import('plotly.js-gl3d-dist-min')).default;
         if (cancelled) return;
         const rotate = () => {
             cntRef.current += 0.005;
-            const eye = {
-                x: 2.2 * Math.cos(cntRef.current),
-                y: 2.2 * Math.sin(cntRef.current),
-                z: 0.6,
-            };
-            cameraRef.current = { eye };
+            const eye = orbit.eyeAt(cntRef.current);
+            cameraRef.current = { ...orbit.rest, eye };
             const gd = getActivePlotDiv();
             // `_fullLayout` marks a plot Plotly has actually initialised;
             // relayout on a div mid-mount throws.
@@ -1870,6 +1998,11 @@ export default function Home() {
       };
       setDatasets(prev => [...prev, dataset]);
       setActiveId(id);
+      // Ask, don't scan: the question costs nothing, and the detector runs only
+      // if the user says yes. (Import used to scan every column here, which was
+      // measurable latency on wide survey tables.) The demo is curated and known
+      // clean — it arrives with an initialView, and is not worth interrupting.
+      if (!initialView) setShowRecode('ask');
       setColorBy(initialView?.colorBy ?? pickDefaultColorBy(table, colorBy));
       // Ordinary uploads preserve a compatible shape channel; the demo supplies
       // an initial view specifically so it can start with shape unassigned.
@@ -1949,7 +2082,7 @@ export default function Home() {
       return {
           version: wsStore.WORKSPACE_VERSION,
           tables, datasets: datasetsOut, pinnedViews: pinsOut,
-          activeId, colorBy, shapeBy, viewMode, showAxes, camera, range2d,
+          activeId, colorBy, shapeBy, viewMode, showAxes, aspect, camera, range2d,
           notes, mutedMap,
           clusterMethod, eps, minSamples, k, standardize, breakdownBy, breakdownDirection, heatmapPalette, includeExportInfo,
       };
@@ -2017,8 +2150,12 @@ export default function Home() {
           setColorBy(ws.colorBy ?? "");
           setShapeBy(ws.shapeBy ?? "");
           setViewMode(ws.viewMode ?? "3D");
-          setShowAxes(ws.showAxes ?? { "3D": false, "2D": true });
-          setCamera(ws.camera ?? { eye: { x: 1.8, y: 1.2, z: 0.5 } });
+          setShowAxes(ws.showAxes ?? { "3D": true, "2D": true });
+          setAspect(ws.aspect === 'data' ? 'data' : DEFAULT_ASPECT);
+          // Merged, not replaced: workspaces saved before the camera grew a `center`
+          // carry only an eye, and would otherwise reload sitting low in the frame.
+          // Anything the file does specify still wins.
+          setCamera({ ...DEFAULT_CAMERA, ...ws.camera });
           // Restored deliberately — suppress the refit that the axis change would trigger
           skipRangeReset.current = true;
           setRange2d(ws.range2d ?? null);
@@ -2192,7 +2329,7 @@ export default function Home() {
   const getLayout = (title: string, customAxisNames: AxisLabels, mode = viewMode, axesOn = false, window2d: { x: [number, number], y: [number, number] } | null = null, sceneCamera: { eye: { x: number, y: number, z: number } } | null = null) =>
       buildPlotLayout({
           dark: theme === 'terminal', title, colorBy, axisNames: customAxisNames,
-          mode, axesOn, window2d, camera: sceneCamera ?? camera,
+          mode, axesOn, aspect, window2d, camera: sceneCamera ?? camera,
       });
 
   // Target by id — NOT .js-plotly-plot: Plotly.toImage spawns (and can leak) a
@@ -2293,7 +2430,10 @@ export default function Home() {
       if (isExporting) return 'Another export is already in progress.';
       const wasRotating = isRotating;
       setIsRotating(false);
-      const prevEye = { ...camera.eye };
+      // The whole camera, not just the eye: restoring `{ eye }` alone dropped
+      // `center`, which would undo the vertical centring on every GIF export.
+      const prevCam: SceneCamera = { ...camera, eye: { ...camera.eye } };
+      const gifOrbit = orbitFrom(camera);
       const FRAMES = 36;
       // Cap size — GIF bytes grow fast with dimensions
       const W = Math.min(gd.offsetWidth || 700, 720);
@@ -2319,7 +2459,7 @@ export default function Home() {
               const frameGd = getActivePlotDiv();
               if (!frameGd || !frameGd.data) throw new Error("Plot div disappeared mid-export");
               await withTimeout(Plotly.relayout(frameGd, {
-                  'scene.camera.eye': { x: 2.2 * Math.cos(t), y: 2.2 * Math.sin(t), z: 0.6 }
+                  'scene.camera.eye': gifOrbit.eyeAt(gifOrbit.start + t)
               }), 10000, "camera move");
               const url: string = await withTimeout(
                   Plotly.toImage(frameGd, { format: 'png', width: W, height: H, scale: 1 }) as Promise<string>,
@@ -2363,7 +2503,7 @@ export default function Home() {
               const finalGd = getActivePlotDiv();
               if (finalGd && finalGd.data) await setExportDressing(Plotly, finalGd, false);
           } catch { /* a re-render restores the props-driven layout anyway */ }
-          setCamera({ eye: prevEye });
+          setCamera(prevCam);
           setIsRotating(wasRotating);
           setIsExporting("");
       }
@@ -2408,6 +2548,7 @@ export default function Home() {
           const gd = getActivePlotDiv();
           const startCam = gd?.layout?.scene?.camera ?? camera;
           const axesOn = showAxes[viewMode];
+          const exportAspect = aspect;
           const layout: any = {
               autosize: true,
               margin: viewMode === "2D" ? { l: 50, r: 20, b: 50, t: 60 } : { l: 0, r: 0, b: 0, t: 60 },
@@ -2422,7 +2563,8 @@ export default function Home() {
               title: { text: label, font: { color: '#111111' } },
           });
           if (viewMode === "3D") {
-              layout.scene = { camera: startCam, bgcolor: 'white',
+              // Exports must match the screen, including the box shape.
+              layout.scene = { camera: startCam, bgcolor: 'white', aspectmode: exportAspect,
                   xaxis: axisCfg(labels.x, '#bbbbbb'), yaxis: axisCfg(labels.y, '#bbbbbb'), zaxis: axisCfg(labels.z, '#bbbbbb') };
           } else {
               layout.xaxis = axisCfg(labels.x, '#cccccc');
@@ -2517,6 +2659,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           { id: Date.now(), data: processedData, colorBy, shapeBy,
             axes: effectiveAxes(activeDataset!, viewMode), labels: effectiveLabels(activeDataset!, viewMode), viewMode,
             showAxes: showAxes[viewMode],
+            aspect,
             // Freeze the 2D framing too, so a pin keeps showing the region it was
             // taken on after the live view is zoomed elsewhere or reset
             range2d: viewMode === "2D" ? get2dRange() : null,
@@ -3108,7 +3251,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           const acts: string[] = [];
           if (reset_camera) {
               setIsRotating(false);
-              setCamera({ eye: { x: 1.8, y: 1.2, z: 0.5 } });
+              setCamera(DEFAULT_CAMERA);
               acts.push('camera reset');
           }
           if (zoom != null) {
@@ -3138,7 +3281,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
       },
 
       snapshot: () => ({
-          datasets, activeId, colorBy, shapeBy, viewMode, showAxes, pinnedViews,
+          datasets, activeId, colorBy, shapeBy, viewMode, showAxes, aspect, pinnedViews,
           clusterMethod, eps, minSamples, k, standardize, breakdownBy, breakdownDirection, heatmapPalette, mutedMap,
       }),
 
@@ -3151,6 +3294,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
           setShapeBy(snap.shapeBy ?? "");
           setViewMode(snap.viewMode);
           setShowAxes(snap.showAxes);
+          if (snap.aspect) setAspect(snap.aspect);
           setPinnedViews(snap.pinnedViews);
           setClusterMethod(snap.clusterMethod);
           setEps(snap.eps);
@@ -3219,6 +3363,7 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                   title={view.label ?? (isPinned ? "Pinned View" : "Active View")}
                   colorBy={colorBy}
                   axesOn={view.showAxes ?? false}
+                  aspect={view.aspect ?? DEFAULT_ASPECT}
                   window2d={(isPinned ? view.range2d : range2d) ?? null}
                   camera={isPinned ? (view.camera ?? camera) : camera}
                   onRelayout={handleRelayout}
@@ -3239,11 +3384,11 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
               id: 'active', data: processedData, colorBy, shapeBy,
               axes: effectiveAxes(activeDataset, viewMode),
               labels: effectiveLabels(activeDataset, viewMode),
-              viewMode, showAxes: showAxes[viewMode], muted: mutedMap,
+              viewMode, showAxes: showAxes[viewMode], aspect, muted: mutedMap,
               label: `${activeDataset.name} · live`,
           }
           : null),
-      [processedData, activeDataset, colorBy, shapeBy, viewMode, showAxes, mutedMap],
+      [processedData, activeDataset, colorBy, shapeBy, viewMode, showAxes, aspect, mutedMap],
   );
   const allViews = useMemo(
       () => (activeView ? [activeView, ...pinnedViews] : []),
@@ -3447,6 +3592,15 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
             <button data-guide="add-dataset" onClick={handleUpload} disabled={!datasetFile || isUploading} className={`scatterlab-action-button w-full text-sm font-bold py-2 disabled:opacity-50 ${theme === 'primary' ? 'bauhaus-btn bg-[var(--p-blue)] text-white' : 'bg-[var(--input)] border border-[var(--system-green)]/55 hover:bg-[var(--system-green)]/10 text-[var(--system-green)] cursor-pointer'}`}>
               {isUploading ? "Processing..." : "Add Dataset"}
             </button>
+            {processedData && (
+              <button
+                onClick={() => setShowRecode('configure')}
+                title="Declare missing-value codes (9, -99, 999...) and blank them, choosing per column."
+                className={`scatterlab-action-button w-full text-xs font-bold py-1.5 border ${theme === 'primary' ? 'border-[var(--border)] bg-[var(--input)] hover:bg-[var(--p-yellow)]' : 'border-[var(--system-green)]/40 bg-[var(--input)] text-[var(--system-green)]/80 hover:bg-[var(--system-green)]/10'} cursor-pointer`}
+              >
+                Missing value codes…
+              </button>
+            )}
             {(datasetFile || componentsFile || processedData) && (
               <button onClick={handleClearData} className={`scatterlab-action-button w-full flex items-center justify-center gap-2 text-sm font-bold py-2 ${theme === 'primary' ? 'bauhaus-btn bg-white text-[var(--p-red)]' : 'bg-[var(--input)] border border-[var(--border)] hover:bg-[var(--border)] text-red-400'}`}>
                 <Trash2 className="w-4 h-4" /> Clear All Data
@@ -3555,6 +3709,29 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
                 >
                     {showAxes[viewMode] ? "Axes: On" : "Axes: Off"}
                 </button>
+
+                {/* Box shape. Cube always fits and orbits evenly but stretches each
+                    axis by its own factor, so tick spacing is not comparable across
+                    them; True scale keeps a unit the same length on every axis. */}
+                {viewMode === "3D" && (
+                    <div className="flex gap-1 mb-2">
+                        {(['cube', 'data'] as const).map(m => (
+                            <button
+                                key={m}
+                                onClick={() => setAspect(m)}
+                                title={m === 'cube'
+                                    ? 'Equal-length axes. Always fits and orbits evenly, but each axis is stretched by a different factor, so tick spacing is not comparable between them.'
+                                    : 'Axis lengths proportional to their data spans, so one unit is the same length on every axis. Faithful, but a long, thin box can run off the canvas as it rotates.'}
+                                className={`scatterlab-action-button flex-1 py-1 text-xs font-bold border ${aspect === m
+                                    ? (theme === 'primary' ? 'bg-[var(--p-yellow)] border-[var(--p-black)] border-[3px]' : 'bg-[var(--system-green)] border-[var(--system-green)] text-black')
+                                    : (theme === 'primary' ? 'border-[var(--border)] bg-[var(--input)] opacity-60' : 'border-[var(--system-green)]/40 bg-[var(--input)] text-[var(--system-green)]/70')}`}
+                            >
+                                {m === 'cube' ? 'Cube' : 'True scale'}
+                            </button>
+                        ))}
+                        <InfoTip topic="aspect_mode" />
+                    </div>
+                )}
 
                 <div className="space-y-1">
                     <label className="text-xs font-medium opacity-70">Axis labels</label>
@@ -3735,6 +3912,30 @@ ${rotate ? `  var rotating=true,t=Math.atan2(layout.scene.camera.eye.y,layout.sc
         <AssistantPanel bridgeRef={bridgeRef} theme={theme} askRef={askAssistantRef} dock={assistantDock} onDockChange={changeDock} />
       </main>
       <InfoDialog open={showInfo} onClose={() => setShowInfo(false)} theme={theme} />
+
+      {/* Blanking declared missing-value codes. Replaces the active dataset's
+          table, which every derived view reads from, and hands the dialog the
+          account of what changed so the user sees the effect rather than a
+          silent success. */}
+      <RecodeDialog
+        stage={showRecode}
+        table={processedData}
+        theme={theme}
+        onProceed={() => setShowRecode('configure')}
+        onClose={() => setShowRecode(null)}
+        onApply={(plan) => {
+          if (!activeDataset) return ['No dataset loaded.'];
+          const result = applyRecode(activeDataset.table, plan);
+          setDatasets(prev => prev.map(d => d.id === activeDataset.id ? { ...d, table: result.table } : d));
+          const lines = describeRecode(result);
+          setUploadStatus([
+            `Blanked ${result.totalReplaced} cell${result.totalReplaced === 1 ? '' : 's'} in ${result.effects.filter(e => e.replaced).length} column(s).`,
+            ...lines,
+            'Re-run PCA or clustering to use the updated values.',
+          ].join('\n'));
+          return lines;
+        }}
+      />
     </div>
   );
 }

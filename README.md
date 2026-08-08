@@ -40,10 +40,21 @@ are in
   skipped rather than reported as empty.
 - **It tells you what it did to your file** — ragged rows, unterminated quotes,
   duplicate or blank headers, numbers written with decimal commas or thousands
-  separators, dates read as text, and values that look like SPSS/Qualtrics
-  missing-value codes (`-99`, `-999`, `9999`) are all reported rather than
-  silently absorbed. Nothing is auto-corrected: which code means what is the
-  researcher's knowledge, not the app's.
+  separators, and dates read as text are all reported rather than silently
+  absorbed. Nothing is auto-corrected.
+- **It finds missing-value codes, and says how sure it is** — SPSS and Qualtrics
+  write "don't know" and "refused" as ordinary numbers (`-99`, `-999`, `9999`,
+  or a 9 on a 1–7 item), and a CSV carries no sign of it. Three rules look for a
+  wrong sign, a value far outside its column, and a hole in a short scale; each
+  finding is labelled certain, likely or possible. A cross-column check reports
+  whether the *same respondents* carry the code across a battery of items — the
+  signature of a Don't Know block — and says how much more often than chance.
+  You can also declare the codes your survey used, which is matched literally.
+- **Blanking them is per column, and it shows its work** — the same 9 can be a
+  code in a Likert item and a real age in the next column, so the choice is
+  yours per column, with boxes pre-ticked only where the evidence is strong.
+  Every recode reports cells blanked, n before and after, and the shift in mean
+  and sd, and asserts that everything it did not target is unchanged.
 - **In-app PCA** — pick variables, pick components, run: a browser-side
   eigensolver produces scores, loadings, and a scree chart (correlation- or
   covariance-based). Missing values can be median-imputed, reconstructed by

@@ -202,6 +202,80 @@ colours to its own default `#444`. The theme-aware plot chrome had never once ap
   then caught in the browser — the same mistake in `Home`, where React threw error #310.
   The unit suite is green on that bug; only loading the page finds it.
 
+## Missing-value codes: detection, tiers, and the recode
+
+A14 closed the reporting half — codes like `-99` are detected and named instead of
+entering the correlation matrix. The rest of this is the acting half, and it is the only
+code in the app that changes a user's data on their behalf, so read this before touching
+`lib/sentinels.ts`, `lib/recode.ts` or `components/RecodeDialog.tsx`.
+
+**There is no library for this.** Checked, not assumed: R's naniar ships a *list* of common
+codes (`common_na_numbers`) and a counter, but no test of whether a given column's 9 is a
+code or a rating. FAHES (QCRI, VLDB 2018) is a research prototype in C. Everything else in
+the ecosystem solves the problem upstream, by reading **declared** missing values out of
+`.sav`/`.dta` metadata — which a CSV export throws away. So the rules are ours.
+
+**Three per-column rules**, each stating what it costs (`sentinels.ts`):
+
+| rule | fires when | why the others miss it |
+|---|---|---|
+| impossible sign | candidate < 0 and the column is otherwise never negative | `-99` against incomes spanning 200,000 is a gap of 99 and vanishes under a ratio test |
+| far outside | gap > half the core's spread | the original rule; tuned for `-99` against wide continuous data |
+| scale hole | all-integer core, ≤20 levels, candidate clears it by ≥2 | **a 1–7 Likert with 9 = Don't Know has a spread of 6 and a gap of 2** — the commonest case of all, and the ratio rejected it |
+
+**Three confidence tiers.** Wrong sign, or a gap ≥3× the spread, is `certain`. Everything
+else falls to the share of the column the value accounts for: ≥5% is `likely`, below is
+`possible`. That boundary is a heuristic tuned on the shapes in the test suites, not a law
+— a Don't Know option is a response people actually *pick* (6–33% of rows in our cases)
+where a real 9 in the tail of a skewed count is rare (1–3%) — and it is the honest answer
+to the one distinction a single column cannot make. It is pinned per shape in
+`sentinel-sweep.test.ts`, including the deliberately-recorded false positive.
+
+**Cross-column co-occurrence** is the second, independent kind of evidence, and the one a
+human actually reasons with: if respondents 4, 17 and 92 carry 9 in eleven Jealousy items,
+that is one person choosing Don't Know eleven times, not eleven coincidences. For value
+*v*, take every column holding it with counts *nᵢ* summing to *S* over *N* rows; count how
+many of those columns carry *v* in each row (*k*); this column's observed pairs are
+Σ(*k*−1) over its own rows, against *nᵢ*(*S*−*nᵢ*)/*N* predicted by independence. Their
+ratio is the lift.
+
+Three properties that are load-bearing, all mutation-tested:
+
+- **Per column, never for the group.** Otherwise a real 9 in `child_age` is promoted by a
+  Don't Know block running through twenty Likert items — the exact discrimination this
+  exists to make.
+- **It only ever raises confidence.** A survey may use a code in exactly one item, so
+  absence of a pattern is not evidence against a code, and nothing is demoted.
+- **It never creates a finding.** Six real 9s in a 0–10 rating landing on the block's rows
+  is a coincidence the detector must not be talked into by its neighbours.
+
+`peers` counts columns that *hold* the value, which is **not** the number sharing rows — an
+id column with a single incidental 9 is a peer and overlaps with nothing. Never phrase an
+agreement claim with it; that is what the lift is for. (Written after the browser caught
+"same rows as 9 in 7 other columns" for a battery of six.)
+
+**Defaults are the safety argument.** Ticking everything makes the destructive choice the
+lazy one; ticking nothing makes a Don't Know block a click per column. So `certain` and
+`likely` arrive ticked, `possible` does not, and a declared code the detector never flagged
+arrives **unticked unless co-occurrence supports it** — which is precisely the reported
+workflow: declare 9, see the battery ticked and `child_age` not, click Apply.
+
+**Every recode reports its effect** — cells blanked, n before/after, the shift in mean and
+sd — and asserts that values outside the recode are byte-identical afterwards. Modelled on
+the check in the author's MATLAB script, which verified a recode by correlating original
+against rebuilt on untouched rows expecting ~1.00, got 0.9365, and thereby revealed the
+item set was wrong rather than the recode.
+
+**Cost.** The scan runs only when the user says yes, never at import (that double scan was
+the reported upload latency). On a survey-shaped table — 3,105 × 1,156 with 452 columns
+sharing the code — the per-column pass is ~243 ms and the cross-column pass takes it to
+~286 ms.
+
+**Next, in order.** (1) `.sav`/`.dta` import reading declared missing values from the
+codebook, which beats every heuristic here and is its own feature ticket; browser-capable
+readers exist on npm (`sav-reader`, `datareader-spss`). (2) The Hua & Pei (KDD 2007)
+unbiased-sample check, held in reserve.
+
 ## Data hygiene (repo is PUBLIC)
 
 - `LS_pca_workbench_views copy/` holds real participant-derived data — **gitignored,

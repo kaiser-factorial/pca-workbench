@@ -277,13 +277,16 @@ const AssistantPanelInner = ({ bridgeRef, theme, askRef, dock, onDockChange }: {
     : 'bg-[var(--input)] border border-[var(--border)] text-[var(--foreground)]';
 
   if (!open) {
+    // Filled red on both themes. Terminal's --primary is its red; the
+    // outlined-green version this replaces read as one more piece of panel
+    // chrome rather than the way in to the assistant.
     return (
       <button
         onClick={() => setOpen(true)}
         title="Open the assistant"
-        className={`absolute bottom-4 z-40 flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider cursor-pointer ${primary
+        className={`absolute bottom-4 z-40 flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase tracking-wider cursor-pointer transition-all duration-150 ${primary
           ? 'bauhaus-btn bg-[var(--p-red)] text-white'
-          : 'bg-black/80 border border-[var(--system-green)]/60 text-[var(--system-green)] hover:bg-[var(--system-green)]/10'}`}
+          : 'bg-[var(--primary)] border border-[var(--primary)] text-white hover:brightness-110'}`}
         style={{ right: layout.right }}
       >
         <Sparkles className="w-4 h-4" /> Assistant

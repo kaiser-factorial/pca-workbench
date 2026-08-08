@@ -65,14 +65,13 @@ export const InfoDialog = ({
     : 'color-mix(in srgb, var(--system-green) 22%, transparent)';
 
   const tabCls = (t: Tab) =>
-    `px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide cursor-pointer border transition-colors duration-150 ${
-      tab === t
-        ? (bauhaus
-            ? 'bg-[var(--p-yellow)] text-[#111111] border-[var(--border)]'
-            : 'bg-[var(--system-green)] text-black border-[var(--system-green)]')
-        : (bauhaus
-            ? 'border-[var(--border)] opacity-60 hover:opacity-100'
-            : 'border-[var(--system-green)]/40 text-[var(--system-green)]/70 hover:text-[var(--system-green)] hover:border-[var(--system-green)] hover:bg-[var(--system-green)]/10')
+    `px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide cursor-pointer border transition-colors duration-150 ${tab === t
+      ? (bauhaus
+        ? 'bg-[var(--p-yellow)] text-[#111111] border-[var(--border)]'
+        : 'bg-[var(--system-green)] text-black border-[var(--system-green)]')
+      : (bauhaus
+        ? 'border-[var(--border)] opacity-60 hover:opacity-100'
+        : 'border-[var(--system-green)]/40 text-[var(--system-green)]/70 hover:text-[var(--system-green)] hover:border-[var(--system-green)] hover:bg-[var(--system-green)]/10')
     }`;
 
   // One heading style, both themes: blue on primary, green on terminal, and a
@@ -96,17 +95,15 @@ export const InfoDialog = ({
     >
       <div
         ref={panel}
-        className={`w-full max-w-3xl my-auto border bg-[var(--card)] text-[var(--foreground)] ${
-          bauhaus ? 'border-[3px] border-[var(--border)]' : 'border-[var(--border)]'
-        }`}
+        className={`w-full max-w-3xl my-auto border bg-[var(--card)] text-[var(--foreground)] ${bauhaus ? 'border-[3px] border-[var(--border)]' : 'border-[var(--border)]'
+          }`}
       >
         {/* On terminal the header borrows the "> upload data" button's own
             language — tinted green fill, solid green edge, green text. */}
-        <header className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${
-          bauhaus
-            ? 'bg-[var(--p-blue)] text-white border-[var(--border)]'
-            : 'bg-[var(--system-green)]/15 border-[var(--system-green)] text-[var(--system-green)]'
-        }`}>
+        <header className={`flex items-center justify-between gap-3 px-4 py-3 border-b ${bauhaus
+          ? 'bg-[var(--p-blue)] text-white border-[var(--border)]'
+          : 'bg-[var(--system-green)]/15 border-[var(--system-green)] text-[var(--system-green)]'
+          }`}>
           <h2 className="text-sm font-bold uppercase tracking-wide">About Scatter Lab</h2>
           {/* Primary had no hover feedback at all here. A filled chip carries the
               red→yellow change legibly against the blue header; plain red glyph
@@ -115,11 +112,10 @@ export const InfoDialog = ({
             ref={closeBtn}
             onClick={onClose}
             aria-label="Close"
-            className={`cursor-pointer transition-all duration-150 ${
-              bauhaus
-                ? 'flex items-center justify-center w-6 h-6 border-2 border-[var(--border)] bg-[var(--p-red)] text-white hover:bg-[var(--p-yellow)] hover:text-[#111111] hover:-translate-y-px active:translate-y-0'
-                : 'text-[var(--system-green)]/70 hover:text-[var(--system-green)] hover:scale-125'
-            }`}
+            className={`cursor-pointer transition-all duration-150 ${bauhaus
+              ? 'flex items-center justify-center w-6 h-6 border-2 border-[var(--border)] bg-[var(--p-red)] text-white hover:bg-[var(--p-yellow)] hover:text-[#111111] hover:-translate-y-px active:translate-y-0'
+              : 'text-[var(--system-green)]/70 hover:text-[var(--system-green)] hover:scale-125'
+              }`}
           >
             <X className="w-4 h-4" />
           </button>
@@ -128,8 +124,7 @@ export const InfoDialog = ({
         <div className="px-4 py-4 space-y-5 text-[12px] leading-relaxed">
           <p className="opacity-80">
             Scatter Lab is an <strong>exploratory data analysis</strong> tool. It plots high-dimensional data in
-            two or three dimensions and runs PCA and clustering over it, so you can see what structure is there
-            and decide what is worth pursuing. It is built for looking, not for confirming: components and
+            two or three dimensions and runs PCA and clustering over it, so you can see what structure is there. It is built for looking, not for confirming: components and
             clusters found here are descriptions of this particular sample, not tested hypotheses.{' '}
             <strong>Validate anything you intend to report</strong> — against held-out data, a preregistered
             analysis, or a purpose-built statistical package — before treating it as a result.
@@ -137,7 +132,7 @@ export const InfoDialog = ({
           <p className="opacity-80">
             <strong>All computation happens in this browser tab.</strong> Parsing, PCA, clustering and
             statistics run on your own machine, your dataset is never uploaded to a server — there is no backend
-            to send it to — and closing the tab discards it, so save a workspace if you want it back.
+            to send it to — and closing the tab discards it, so <strong>save a workspace</strong> if you want it back.
           </p>
           {/* Spaces at a tag or comment seam must be written as {' '}: a text node
               that opens with whitespace and then wraps loses that leading space.
@@ -148,13 +143,24 @@ export const InfoDialog = ({
             The one exception is the assistant. If you connect an API key, your questions and a{' '}
             <em>summary</em>{' '}
             of the data do leave the browser, going to whichever provider the key belongs to.
-            What it can see is column names, each numeric column&apos;s range, mean, standard deviation and
-            quartiles, the common values of categorical columns, and the results of the analyses it runs —
-            <strong> never individual rows</strong>. A categorical value is only named if it covers at least five
-            rows: that keeps ordinary variables useful even with many levels, while an email address, a name or a
-            free-text answer — where each value belongs to one person — is never sent, only counted. If even that
-            is more than your data allows, leave the assistant disconnected; everything else here works without it.
+            The assistant can see:
           </p>
+          <ul className="list-disc pl-5 space-y-1 opacity-80">
+            <li>column names</li>
+            <li>each numeric column&apos;s range, mean, standard deviation and quartiles</li>
+            <li>the common values of categorical columns</li>
+            <li>the results of the analyses it runs</li>
+          </ul>
+          <p className="opacity-80">
+            <strong>It never sees individual rows.</strong> A categorical value is only named if it covers at
+            least five rows: this keeps ordinary variables useful even with many levels, while an email address,
+            a name or a free-text answer — where each value belongs to one person — is never sent, only counted.
+          </p>
+          <p className="opacity-80">
+            If this is more than you are comfortable with, leave the assistant disconnected; everything else
+            here works without it.
+          </p>
+
 
           <div className="flex justify-center gap-2 pt-1">
             <button className={tabCls('app')} onClick={() => setTab('app')}>Defaults &amp; trade-offs</button>
@@ -165,17 +171,30 @@ export const InfoDialog = ({
             <div className="space-y-5">
               <p className="opacity-70 text-[11px] text-center">
                 The choices this app makes on your behalf, and what each one costs.{' '}
-                <em>These are the same notes behind the <span className="font-bold">(i)</span> icons in the sidebar.</em>
+                <em>This page is an extension of the notes behind the <span className="font-bold">(i)</span> icons in the sidebar.</em>
               </p>
               {DISCLOSURE_SECTIONS.map(section => (
                 <section key={section.heading} className="space-y-3">
                   {sectionTitle(section.heading)}
-                  {section.keys.map(key => (
-                    <div key={key}>
-                      <h4 className="font-bold">{DISCLOSURES[key].title}</h4>
-                      <p className="opacity-80">{DISCLOSURES[key].text}</p>
-                    </div>
-                  ))}
+                  {section.keys.map(key => {
+                    const d = DISCLOSURES[key];
+                    // One list, two tiers: `text` is also what the tooltip shows,
+                    // `more` is the detail that only belongs here. Dimming the
+                    // second tier keeps the split legible without a subheading.
+                    return (
+                      <div key={key} className="space-y-1">
+                        <h4 className="font-bold">{d.title}</h4>
+                        <ul className="list-disc pl-5 space-y-1">
+                          {d.text.map((line, i) => (
+                            <li key={`t${i}`} className="opacity-80">{line}</li>
+                          ))}
+                          {(d as { more?: readonly string[] }).more?.map((line, i) => (
+                            <li key={`m${i}`} className="opacity-60">{line}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
                 </section>
               ))}
             </div>
@@ -184,7 +203,7 @@ export const InfoDialog = ({
               <p className="opacity-70 text-[11px] text-center">
                 Background on the methods themselves, with citations.{' '}
                 <em>
-                  This is the same reference the assistant quotes from when you ask it to help interpret a
+                  This is the same reference the assistant pulls from when you ask it to help interpret a
                   result, so its answers and this page cannot disagree.
                 </em>
               </p>
